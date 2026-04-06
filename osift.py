@@ -1,0 +1,19526 @@
+#!/usr/bin/env python3
+"""
+OSift.py - Comprehensive OSINT & Reconnaissance Framework
+==========================================================
+Supports: Linux, macOS, Windows
+Requires: Elevated privileges (root / Administrator)
+
+Usage:
+  Linux/macOS:  sudo python3 OSift.py -c "Company Name" -d example.com
+  Windows:      Run as Administrator: python OSift.py -c "Company Name" -d example.com
+
+⚠️  WARNING: Only use this tool against targets you own or have
+    explicit written authorization to test. Unauthorized use may
+    violate computer fraud and abuse laws.
+"""
+
+# ─── Platform bootstrap — must happen before anything else ────────────────────
+import os
+import sys
+import platform
+
+# ── Detect OS ─────────────────────────────────────────────────────────────────
+SYSTEM = platform.system()          # 'Linux', 'Darwin', 'Windows'
+IS_WINDOWS = SYSTEM == "Windows"
+IS_MACOS   = SYSTEM == "Darwin"
+IS_LINUX   = SYSTEM == "Linux"
+_VANTAGE_MANAGED = os.environ.get("VANTAGE_MANAGED", "") == "1"
+
+# ── Require elevated privileges ───────────────────────────────────────────────
+def _check_privileges() -> None:
+    """
+    Exit early if the process is not running with elevated privileges.
+    Linux/macOS → effective UID == 0 (root / sudo)
+    Windows     → ctypes SID check for Administrator membership
+    """
+    if IS_WINDOWS:
+        try:
+            import ctypes
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            is_admin = False
+        if not is_admin:
+            print(
+                "\n[!] OSift requires Administrator privileges on Windows.\n"
+                "    Right-click your terminal and choose 'Run as administrator',\n"
+                "    then re-run:\n\n"
+                "      python OSift.py -c \"Company Name\" -d example.com\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        if os.geteuid() != 0:
+            print(
+                "\n[!] OSift requires root privileges on Linux/macOS.\n"
+                "    Re-run with sudo:\n\n"
+                "      sudo python3 OSift.py -c \"Company Name\" -d example.com\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+_check_privileges()
+
+# ─── Standard library imports ─────────────────────────────────────────────────
+import argparse
+import concurrent.futures
+import csv
+import datetime
+import hashlib
+import ipaddress
+import json
+import logging
+import queue
+import re
+import shutil
+import signal
+import socket
+import ssl
+import subprocess
+import threading
+import time
+import traceback
+import urllib.parse
+import warnings
+import uuid as _uuid
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+# ── Windows-specific: enable ANSI colour codes in cmd/PowerShell ──────────────
+if IS_WINDOWS:
+    try:
+        import ctypes as _ctypes
+        kernel32 = _ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
+
+# ─── Third-party imports (gracefully handled) ─────────────────────────────────
+try:
+    # requests — Kenneth Reitz / Python Software Foundation (https://github.com/psf/requests)
+    import requests
+    from requests.adapters import HTTPAdapter
+    # urllib3 — Andrey Petrov / urllib3 contributors (https://github.com/urllib3/urllib3)
+    from urllib3.util.retry import Retry
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+try:
+    # beautifulsoup4 — Leonard Richardson (https://www.crummy.com/software/BeautifulSoup/)
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+
+try:
+    # dnspython — Bob Halley / dnspython contributors (https://github.com/rthalley/dnspython)
+    # Used for DNS resolution, zone transfers, record type parsing across all DNS phases.
+    import dns.resolver
+    import dns.zone
+    import dns.query
+    import dns.rdatatype
+    import dns.rdata
+    import dns.exception
+    DNS_AVAILABLE = True
+except ImportError:
+    DNS_AVAILABLE = False
+
+try:
+    # cryptography — Python Cryptographic Authority PyCA (https://github.com/pyca/cryptography)
+    # Used for X.509 certificate parsing: SAN, CN, expiry, CT log analysis.
+    import cryptography.x509 as x509
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.x509.oid import ExtensionOID, NameOID
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
+
+try:
+    # pyOpenSSL — Jean-Paul Calderone / PyCA (https://github.com/pyca/pyopenssl)
+    import OpenSSL.SSL as openssl_ssl          # noqa: F401
+    import OpenSSL.crypto as openssl_crypto    # noqa: F401
+    OPENSSL_AVAILABLE = True
+except ImportError:
+    OPENSSL_AVAILABLE = False
+
+try:
+    # python-whois — drtey / Jochen Kupperschmidt (https://github.com/DannyCork/python-whois)
+    import whois
+    WHOIS_AVAILABLE = True
+except ImportError:
+    WHOIS_AVAILABLE = False
+
+try:
+    # edgartools — Dwight Gunning / dgunning (https://github.com/dgunning/edgartools)
+    # Phase 6: SEC EDGAR company intelligence — filings, subsidiaries, executives.
+    import edgar as _edgar_mod                          # edgartools package
+    from edgar import Company      as EdgarCompany      # noqa: F401
+    from edgar import find         as _edgar_find       # name/ticker search
+    from edgar import set_identity as _edgar_set_identity  # SEC user-agent
+    EDGAR_AVAILABLE = True
+except ImportError:
+    EDGAR_AVAILABLE = False
+    _edgar_find         = None  # type: ignore[assignment]
+    _edgar_set_identity = None  # type: ignore[assignment]
+
+try:
+    # openpyxl — Eric Gazoni / Charlie Clark (https://github.com/theorchard/openpyxl)
+    # Used for Excel-format report generation.
+    import openpyxl as _openpyxl
+    from openpyxl.styles import Font as _XlFont, PatternFill as _XlFill, Alignment as _XlAlign
+    _OPENPYXL_AVAILABLE = True
+except ImportError:
+    _OPENPYXL_AVAILABLE = False
+
+# ─── Vantage protocol tokens & dual-mode console ─────────────────────────────
+
+_VP_LOG    = "__VANTAGE_LOG__:"
+_VP_ERR    = "__VANTAGE_ERR__:"
+_VP_PROMPT = "__VANTAGE_PROMPT__:"
+_VP_STATUS = "__VANTAGE_STATUS__:"
+
+
+class VantageConsole:
+    """Dual-mode console output.
+
+    When VANTAGE_MANAGED=1: emits protocol tokens that Vantage intercepts for
+    structured logs, errors, prompts, and phase-status updates.
+    When running in a real terminal: falls back to plain text (OSift has its
+    own ReconLogger and BannerManager for ANSI output).
+    """
+
+    def __init__(self) -> None:
+        self._managed = _VANTAGE_MANAGED
+        self._lock    = threading.Lock()
+
+    @property
+    def managed(self) -> bool:
+        return self._managed
+
+    def log(self, message: str, level: str = "INFO") -> None:
+        if not self._managed:
+            return  # ReconLogger handles TTY output
+        with self._lock:
+            entry = {
+                "ts":      datetime.datetime.now().isoformat(),
+                "level":   level,
+                "message": message,
+            }
+            sys.stdout.write(_VP_LOG + json.dumps(entry) + "\n")
+            sys.stdout.flush()
+
+    def error(self, message: str, source: str = "osift",
+              detail: str = "", category: str = "") -> None:
+        with self._lock:
+            if self._managed:
+                entry = {
+                    "ts":       datetime.datetime.now().isoformat(),
+                    "source":   source,
+                    "message":  message,
+                    "detail":   detail,
+                    "category": category or self._categorise(message),
+                }
+                sys.stderr.write(_VP_ERR + json.dumps(entry) + "\n")
+                sys.stderr.flush()
+            else:
+                sys.stderr.write(f"[!] {message}\n")
+
+    def status(self, phase: str, label: str = "", status: str = "running",
+               step: str = "", progress: int = 0, total: int = 0,
+               tools: "dict | None" = None,
+               active_tool: str = "",
+               active_tools: "list | None" = None) -> None:
+        if not self._managed:
+            return
+        with self._lock:
+            entry = {
+                "phase":    phase,
+                "label":    label or phase,
+                "status":   status,
+                "step":     step,
+                "progress": progress,
+                "total":    total,
+                "ts":       datetime.datetime.now().isoformat(),
+            }
+            if tools is not None:
+                entry["tools"] = tools
+            # Per-tool activity signals: tell the frontend which tool dirs are
+            # currently running so tool-level status pills update without a
+            # file-presence re-fetch.
+            if active_tools is not None:
+                entry["active_tools"] = active_tools
+            elif active_tool:
+                entry["active_tool"] = active_tool
+            sys.stdout.write(_VP_STATUS + json.dumps(entry) + "\n")
+            sys.stdout.flush()
+
+    def prompt(self, question: str, prompt_type: str = "text",
+               options: list = None, skippable: bool = False) -> str:
+        """Request user input. Blocks until an answer is received."""
+        if self._managed:
+            payload = {
+                "id":        str(_uuid.uuid4()),
+                "question":  question,
+                "type":      prompt_type,
+                "options":   options or [],
+                "skippable": skippable,
+            }
+            with self._lock:
+                sys.stdout.write(_VP_PROMPT + json.dumps(payload) + "\n")
+                sys.stdout.flush()
+            try:
+                return sys.stdin.readline().rstrip("\n")
+            except Exception:
+                return ""
+        else:
+            if prompt_type == "password":
+                import getpass as _gp
+                return _gp.getpass(f"  {question}: ")
+            elif options:
+                print(f"\n[?] {question}")
+                for i, opt in enumerate(options, 1):
+                    print(f"    [{i}] {opt}")
+                raw = input("    Select: ").strip()
+                if raw.isdigit():
+                    idx = int(raw) - 1
+                    if 0 <= idx < len(options):
+                        return options[idx]
+                return raw
+            else:
+                return input(f"  [?] {question}: ").strip()
+
+    @staticmethod
+    def _categorise(msg: str) -> str:
+        m = msg.lower()
+        if any(k in m for k in ("connection", "socket", "timeout",
+                                  "refused", "network", "unreachable")):
+            return "Network"
+        if any(k in m for k in ("tool", "binary", "not found",
+                                  "command", "executable", "stderr")):
+            return "Tool"
+        return "Scan"
+
+
+class ProgressManager:
+    """Thread-safe checkpoint manager for scan recovery.
+
+    Persists phase state to a JSON file atomically so that a scan can be
+    resumed from the last completed phase after an interruption.
+    """
+
+    def __init__(self, checkpoint_file: "str | Path") -> None:
+        self._file  = Path(checkpoint_file)
+        self._lock  = threading.Lock()
+        self._state = self._load()
+
+    def _load(self) -> dict:
+        if self._file.exists():
+            try:
+                data = json.loads(self._file.read_text(encoding="utf-8"))
+                data.setdefault("version", 1)
+                data.setdefault("started", datetime.datetime.now().isoformat())
+                data.setdefault("completed_phases", [])
+                data.setdefault("phase_status", {})
+                return data
+            except Exception:
+                pass
+        return {
+            "version":          1,
+            "started":          datetime.datetime.now().isoformat(),
+            "completed_phases": [],
+            "phase_status":     {},
+        }
+
+    def _save(self) -> None:
+        import tempfile as _tf
+        self._file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = _tf.mkstemp(dir=str(self._file.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._state, f, indent=2)
+            os.replace(tmp, str(self._file))
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+    def is_phase_complete(self, phase: str) -> bool:
+        with self._lock:
+            return phase in self._state.get("completed_phases", [])
+
+    def set_phase_status(self, phase: str, status: str,
+                         label: str = "", detail: str = "") -> None:
+        with self._lock:
+            self._state.setdefault("phase_status", {})[phase] = {
+                "status":     status,
+                "label":      label or phase,
+                "detail":     detail,
+                "updated_at": datetime.datetime.now().isoformat(),
+            }
+            if status == "complete":
+                lst = self._state.setdefault("completed_phases", [])
+                if phase not in lst:
+                    lst.append(phase)
+            self._save()
+
+    def get_state(self) -> dict:
+        with self._lock:
+            return dict(self._state)
+
+
+# Module-level singleton console; ProgressManager is created in main()
+_vc: VantageConsole = VantageConsole()
+_pm: "ProgressManager | None" = None
+# Optional Vantage project root; when set, evidence output_file paths are stored
+# relative to this directory instead of output_dir (so Vantage can serve them).
+_project_dir: Optional[Path] = None
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+VERSION = "2.1.0"
+
+
+# ─── Banner & Terminal UI ─────────────────────────────────────────────────────
+
+# Full multi-line ASCII art for OSift.
+# Each string in _BANNER_ART is one variant, from tallest/widest to most compact.
+# BannerManager selects the best fit automatically.
+_BANNER_ART_FULL = r"""
+ ██████╗ ███████╗██╗███████╗████████╗
+██╔═══██╗██╔════╝██║██╔════╝╚══██╔══╝
+██║   ██║███████╗██║█████╗     ██║
+██║   ██║╚════██║██║██╔══╝     ██║
+╚██████╔╝███████║██║██║        ██║
+ ╚═════╝ ╚══════╝╚═╝╚═╝        ╚═╝
+""".rstrip("\n")
+
+_BANNER_ART_MEDIUM = r"""
+  ___  ____  _  __ _
+ / _ \/ ___|(_)/ _| |_
+| | | \___ \| | |_| __|
+| |_| |___) | |  _| |_
+ \___/|____/|_|_|  \__|
+""".rstrip("\n")
+
+_BANNER_ART_SMALL = r"""
+ _____   ___  _  __ _
+|  _  | / __|| |/ _| |_
+| | | | \__ \| | |_| __|
+| |_| | / __/| |  _| |_
+|_____||____||_|_|  \__|
+""".rstrip("\n")
+
+# Compact divider used when the full art won't fit (> 40% of terminal height)
+_COMPACT_DIVIDER = "╔══════════════════════════════════════════════════════╗"
+_COMPACT_CLOSE   = "╚══════════════════════════════════════════════════════╝"
+_COMPACT_SIDE    = "║"
+
+
+class BannerManager:
+    """
+    Persistent sticky banner at the top of the terminal.
+
+    Behaviour
+    ---------
+    1. Detects the terminal dimensions (cols × rows) on startup and on
+       every SIGWINCH (terminal resize) event.
+    2. Chooses between three rendering modes:
+         FULL     — block-style ASCII art + info bar when terminal is tall enough
+                    and wide enough to fit the art.
+         COMPACT  — "OSift" text + fancy box border when art > 40% of height.
+         MINIMAL  — one-line status bar when terminal is extremely small.
+    3. Reserves the banner rows at the top of the screen by setting the
+       terminal's scroll region to [banner_height+1 … terminal_rows].
+       All subsequent output scrolls within that region; the banner is
+       redrawn above it and stays fixed.
+    4. Restores the full scroll region and cursor position on exit
+       (registered via atexit and signal handlers).
+    5. Thread-safe: a lock protects all writes to the terminal so that
+       concurrent tool output lines don't corrupt the banner.
+    6. Works on any VT100-compatible terminal (xterm, iTerm2, GNOME Terminal,
+       Windows Terminal, etc.).  Falls back gracefully to a plain one-shot
+       print when stdout is not a TTY (e.g. redirected to a file).
+
+    Banner height limits
+    --------------------
+    The full ASCII art block is never allowed to occupy more than 40% of the
+    terminal height.  If it would, the compact bordered fallback is used instead.
+    The compact fallback is capped to 4 rows (title + separator + divider + close).
+    """
+
+    # ANSI escape helpers
+    _ESC         = "\x1b["
+    _HIDE_CURSOR = "\x1b[?25l"
+    _SHOW_CURSOR = "\x1b[?25h"
+    _RESET       = "\x1b[0m"
+    _BOLD        = "\x1b[1m"
+    _DIM         = "\x1b[2m"
+    # Colour palette (256-colour)
+    _C_TITLE     = "\x1b[38;5;39m"    # bright cyan-blue  — OSift name
+    _C_ACCENT    = "\x1b[38;5;208m"   # orange            — version/border accents
+    _C_INFO      = "\x1b[38;5;245m"   # grey              — info bar text
+    _C_WARN      = "\x1b[38;5;220m"   # yellow            — warning line
+    _C_BORDER    = "\x1b[38;5;33m"    # steel blue        — box borders
+    _C_RESET     = "\x1b[0m"
+
+    # The maximum fraction of terminal height the banner may occupy
+    _MAX_BANNER_FRACTION = 0.40
+
+    def __init__(self, version: str, platform_str: str, pyver: str) -> None:
+        self._version  = version
+        self._platform = platform_str
+        self._pyver    = pyver
+        self._lock     = threading.Lock()
+        self._active   = False
+        self._banner_rows = 0   # how many rows the current banner occupies
+        self._term_rows   = 0
+        self._term_cols   = 0
+        self._mode        = "none"   # "full" | "compact" | "minimal" | "notty"
+        self._installed   = False
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def install(self) -> None:
+        """
+        Detect the terminal, render the banner, set the scroll region.
+        Must be called once before any other output is produced.
+        """
+        if not sys.stdout.isatty():
+            # Not a real terminal — just print the one-shot static banner
+            self._mode = "notty"
+            self._print_static_banner()
+            return
+
+        self._term_cols, self._term_rows = self._get_terminal_size()
+        self._choose_mode()
+        self._render()
+        self._set_scroll_region()
+        self._active    = True
+        self._installed = True
+
+        # Register cleanup handlers
+        import atexit
+        atexit.register(self.restore)
+
+        # Handle terminal resize (SIGWINCH — Unix only)
+        if not IS_WINDOWS:
+            try:
+                signal.signal(signal.SIGWINCH, self._on_resize)
+            except (OSError, ValueError):
+                pass  # not in main thread — skip
+
+    def restore(self) -> None:
+        """Remove the scroll region and show the cursor again."""
+        if not self._installed or self._mode == "notty":
+            return
+        with self._lock:
+            if not self._active:
+                return
+            self._active = False
+            # Reset scroll region to full screen
+            sys.stdout.write(
+                f"{self._ESC}r"              # reset scroll region (full screen)
+                f"{self._ESC}{self._term_rows};1H"  # move to bottom
+                "\n"
+                f"{self._SHOW_CURSOR}"
+                f"{self._C_RESET}"
+            )
+            sys.stdout.flush()
+
+    def redraw(self) -> None:
+        """Force a full banner redraw (e.g. after resize)."""
+        if not self._installed or self._mode == "notty":
+            return
+        with self._lock:
+            new_cols, new_rows = self._get_terminal_size()
+            if new_cols != self._term_cols or new_rows != self._term_rows:
+                self._term_cols = new_cols
+                self._term_rows = new_rows
+                self._choose_mode()
+            self._render()
+            self._set_scroll_region()
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _on_resize(self, signum, frame) -> None:
+        """SIGWINCH handler — schedule a banner redraw."""
+        self.redraw()
+
+    @staticmethod
+    def _get_terminal_size() -> Tuple[int, int]:
+        """Return (columns, rows) with a safe fallback."""
+        try:
+            sz = shutil.get_terminal_size(fallback=(80, 24))
+            return sz.columns, sz.lines
+        except Exception:
+            return 80, 24
+
+    def _choose_mode(self) -> None:
+        """Decide which rendering mode to use given current terminal dimensions."""
+        cols, rows = self._term_cols, self._term_rows
+
+        # How many rows does each art variant need?
+        art_full_lines   = _BANNER_ART_FULL.split("\n")
+        art_medium_lines = _BANNER_ART_MEDIUM.split("\n")
+        art_small_lines  = _BANNER_ART_SMALL.split("\n")
+        info_rows        = 3   # info bar + warning + separator
+
+        full_height   = len(art_full_lines)   + info_rows
+        medium_height = len(art_medium_lines) + info_rows
+        small_height  = len(art_small_lines)  + info_rows
+        compact_height = 5    # border title block
+
+        max_allowed = max(3, int(rows * self._MAX_BANNER_FRACTION))
+
+        # Width checks: widest line in each art
+        full_width   = max(len(self._strip_ansi(l)) for l in art_full_lines)
+        medium_width = max(len(l) for l in art_medium_lines)
+        small_width  = max(len(l) for l in art_small_lines)
+
+        if full_height <= max_allowed and full_width <= cols:
+            self._mode       = "full"
+            self._art_lines  = art_full_lines
+            self._banner_rows = full_height
+        elif medium_height <= max_allowed and medium_width <= cols:
+            self._mode       = "medium"
+            self._art_lines  = art_medium_lines
+            self._banner_rows = medium_height
+        elif small_height <= max_allowed and small_width <= cols:
+            self._mode       = "small"
+            self._art_lines  = art_small_lines
+            self._banner_rows = small_height
+        elif compact_height <= max_allowed:
+            self._mode       = "compact"
+            self._banner_rows = compact_height
+        else:
+            # Extremely tiny terminal — one-line minimal bar
+            self._mode        = "minimal"
+            self._banner_rows = 1
+
+    def _render(self) -> None:
+        """Write the banner to the terminal, preserving cursor position."""
+        cols = self._term_cols
+
+        # Save cursor, move to top-left, clear banner area
+        buf = [
+            self._HIDE_CURSOR,
+            "\x1b[s",               # save cursor (DEC private mode)
+            "\x1b[1;1H",            # move to row 1 col 1
+        ]
+        # Clear the banner rows
+        for _ in range(self._banner_rows):
+            buf.append("\x1b[2K\n")  # erase line + newline
+        buf.append("\x1b[1;1H")      # back to row 1
+
+        if self._mode in ("full", "medium", "small"):
+            buf.extend(self._render_art_banner(cols))
+        elif self._mode == "compact":
+            buf.extend(self._render_compact_banner(cols))
+        else:
+            buf.extend(self._render_minimal_banner(cols))
+
+        buf.append("\x1b[u")        # restore cursor
+        buf.append(self._SHOW_CURSOR)
+
+        sys.stdout.write("".join(buf))
+        sys.stdout.flush()
+
+    def _render_art_banner(self, cols: int) -> List[str]:
+        """Render the ASCII art block + info bar."""
+        out = []
+        for line in self._art_lines:
+            # Truncate if line is wider than terminal
+            visible = self._strip_ansi(line)
+            if len(visible) > cols:
+                line = visible[:cols]
+            out.append(
+                f"{self._C_TITLE}{self._BOLD}{line}{self._C_RESET}\n"
+            )
+
+        # Separator line
+        sep = "─" * min(cols, 56)
+        out.append(f"{self._C_BORDER}{sep}{self._C_RESET}\n")
+
+        # Info bar
+        info = (
+            f"{self._C_ACCENT}v{self._version}{self._C_RESET}  "
+            f"{self._C_INFO}{self._platform} · Python {self._pyver}{self._C_RESET}"
+        )
+        out.append(f"  {info}\n")
+
+        # Warning
+        warn = f"{self._C_WARN}⚠  Only use on targets you are authorized to test.{self._C_RESET}"
+        if len("⚠  Only use on targets you are authorized to test.") <= cols:
+            out.append(f"  {warn}\n")
+
+        return out
+
+    def _render_compact_banner(self, cols: int) -> List[str]:
+        """Render the compact box-bordered fallback."""
+        # Target inner width; cap to terminal width - 2 for the side borders
+        inner  = min(54, cols - 2)
+        border = "═" * inner
+        top    = f"╔{border}╗"
+        bot    = f"╚{border}╝"
+
+        title_text = f"OSift  v{self._version}"
+        sub_text   = f"{self._platform} · Python {self._pyver}"
+        warn_text  = "⚠  Authorized use only"
+
+        def _centre(text: str) -> str:
+            visible_len = len(self._strip_ansi(text))
+            pad = max(0, inner - visible_len)
+            left = pad // 2
+            right = pad - left
+            return (f"{self._C_BORDER}║{self._C_RESET}"
+                    f"{' ' * left}{text}{' ' * right}"
+                    f"{self._C_BORDER}║{self._C_RESET}")
+
+        out = [
+            f"{self._C_BORDER}{top}{self._C_RESET}\n",
+            _centre(f"{self._C_TITLE}{self._BOLD}{title_text}{self._C_RESET}") + "\n",
+            _centre(f"{self._C_INFO}{sub_text}{self._C_RESET}")               + "\n",
+            _centre(f"{self._C_WARN}{warn_text}{self._C_RESET}")              + "\n",
+            f"{self._C_BORDER}{bot}{self._C_RESET}\n",
+        ]
+        return out
+
+    def _render_minimal_banner(self, cols: int) -> List[str]:
+        """One-line banner for very small terminals."""
+        text  = f"OSift v{self._version}  ⚠ Authorized use only"
+        trunc = text[:cols]
+        return [f"{self._C_TITLE}{self._BOLD}{trunc}{self._C_RESET}\n"]
+
+    def _set_scroll_region(self) -> None:
+        """
+        Constrain terminal scrolling to rows [banner_rows+1 … term_rows].
+        Move the cursor to the first scrolling row so subsequent writes appear
+        below the banner.
+        """
+        top = self._banner_rows + 1
+        bot = self._term_rows
+        if top >= bot:
+            top = bot  # pathological case — single-row scroll region
+        sys.stdout.write(
+            f"{self._ESC}{top};{bot}r"   # set scroll region
+            f"{self._ESC}{top};1H"       # move cursor to top of scroll region
+        )
+        sys.stdout.flush()
+
+    def _print_static_banner(self) -> None:
+        """Non-TTY fallback — just print the banner once."""
+        print(_BANNER_ART_MEDIUM)
+        print(f"OSift v{self._version}  |  {self._platform}  |  Python {self._pyver}")
+        print("⚠  Only use on targets you are Authorized to test.")
+
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """Remove ANSI escape sequences to measure visible character width."""
+        return re.sub(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\([A-Z]', '', text)
+
+
+# ── Global BannerManager instance — created once at module load ───────────────
+BANNER_MGR = BannerManager(
+    version      = VERSION,
+    platform_str = f"{SYSTEM} {'(Admin)' if IS_WINDOWS else '(root)'}",
+    pyver        = ".".join(str(v) for v in sys.version_info[:3]),
+)
+
+# ── Legacy BANNER string — kept for any code that still references it ─────────
+BANNER = (
+    f"{_BANNER_ART_MEDIUM}\n"
+    f"OSift v{VERSION}  |  {SYSTEM}  |  Python "
+    f"{'.'.join(str(v) for v in sys.version_info[:3])}\n"
+    f"⚠  Only use on targets you are authorized to test.\n"
+)
+
+# Default settings file name — lives next to the script unless overridden by --settings
+SETTINGS_FILE_DEFAULT = Path(__file__).parent / "osift_settings.json"
+
+# ─── Settings file loader ─────────────────────────────────────────────────────
+
+# Canonical key names used in osift_settings.json and how they map to argparse
+# dest names (underscored).  Grouped by section for readability; the loader
+# flattens everything.
+_SETTINGS_SCHEMA: Dict[str, Dict[str, Any]] = {
+    # ── Target (overridable from settings; CLI always wins) ──────────────────
+    "target": {
+        "company":  {"dest": "company",  "type": str,  "default": "",
+                     "help": "Target company name (overridden by -c / --company)"},
+        "domain":   {"dest": "domain",   "type": str,  "default": "",
+                     "help": "Primary target FQDN (legacy single-domain; prefer 'domains')"},
+        "domains":  {"dest": "domains",  "type": list, "default": [],
+                     "help": "Target FQDNs — list (overridden by -d / --domain)"},
+    },
+    # ── Scan tuning ──────────────────────────────────────────────────────────
+    "scan_options": {
+        "max_pages":   {"dest": "max_pages",  "type": int,  "default": 200},
+        "max_depth":   {"dest": "max_depth",  "type": int,  "default": 3},
+        "skip_crawl":      {"dest": "skip_crawl",      "type": bool, "default": False},
+        "skip_amass":      {"dest": "skip_amass",      "type": bool, "default": False},
+        "skip_brute":      {"dest": "skip_brute",      "type": bool, "default": False},
+        "skip_api":        {"dest": "skip_api",        "type": bool, "default": False},
+        "skip_dns_enrich": {"dest": "skip_dns_enrich", "type": bool, "default": False},
+        "skip_pd":     {"dest": "skip_pd",    "type": bool, "default": False},
+        "wordlist":    {"dest": "wordlist",   "type": str,  "default": ""},
+        "output_base": {"dest": "output_base","type": str,  "default": ""},
+        "edgar_email": {"dest": "edgar_email","type": str,  "default": "",
+                        "help": "Email for SEC EDGAR User-Agent (required by SEC policy)"},
+    },
+    # ── Breach / credential intelligence ─────────────────────────────────────
+    "breach_intelligence": {
+        "hibp_key":       {"dest": "hibp_key",       "type": str, "default": "",
+                           "secret": True,
+                           "help": "Have I Been Pwned API key — https://haveibeenpwned.com/API/Key"},
+        "dehashed_user":  {"dest": "dehashed_user",  "type": str, "default": "",
+                           "secret": True,
+                           "help": "Dehashed account e-mail — https://www.dehashed.com"},
+        "dehashed_key":   {"dest": "dehashed_key",   "type": str, "default": "",
+                           "secret": True,
+                           "help": "Dehashed API key — https://www.dehashed.com/profile"},
+    },
+    # ── Phase 10 : Attack Surface & Infrastructure (Tier-1) ──────────────────
+    "api_tier1_infrastructure": {
+        "shodan_key": {
+            "dest": "shodan_key", "type": str, "default": "", "secret": True,
+            "help": "Shodan API key — https://account.shodan.io",
+        },
+        "censys_id": {
+            "dest": "censys_id", "type": str, "default": "", "secret": True,
+            "help": "Censys API ID — https://app.censys.io/account",
+        },
+        "censys_secret": {
+            "dest": "censys_secret", "type": str, "default": "", "secret": True,
+            "help": "Censys API Secret (required with censys_id)",
+        },
+        "fullhunt_key": {
+            "dest": "fullhunt_key", "type": str, "default": "", "secret": True,
+            "help": "FullHunt API key — https://fullhunt.io/user/api",
+        },
+        "securitytrails_key": {
+            "dest": "securitytrails_key", "type": str, "default": "", "secret": True,
+            "help": "SecurityTrails API key — https://securitytrails.com/app/api",
+        },
+        "netlas_key": {
+            "dest": "netlas_key", "type": str, "default": "", "secret": True,
+            "help": "Netlas API key — https://app.netlas.io/profile/",
+        },
+    },
+    # ── Phase 10 : Threat Intelligence & Reputation (Tier-2) ─────────────────
+    "api_tier2_threat_intel": {
+        "virustotal_key": {
+            "dest": "virustotal_key", "type": str, "default": "", "secret": True,
+            "help": "VirusTotal API key — https://www.virustotal.com/gui/my-apikey",
+        },
+        "urlscan_key": {
+            "dest": "urlscan_key", "type": str, "default": "", "secret": True,
+            "help": "URLScan.io API key — https://urlscan.io/user/profile/ (searches free w/o key)",
+        },
+        "otx_key": {
+            "dest": "otx_key", "type": str, "default": "", "secret": True,
+            "help": "AlienVault OTX API key — https://otx.alienvault.com/settings",
+        },
+    },
+    # ── Phase 10 : Email & People Intelligence (Tier-3) ──────────────────────
+    "api_tier3_email_people": {
+        "hunter_key": {
+            "dest": "hunter_key", "type": str, "default": "", "secret": True,
+            "help": "Hunter.io API key — https://hunter.io/api-keys",
+        },
+    },
+    # ── Phase 11 : ProjectDiscovery toolkit ──────────────────────────────────
+    "projectdiscovery": {
+        "chaos_key": {
+            "dest": "chaos_key", "type": str, "default": "", "secret": True,
+            "help": "Chaos DB API key — https://cloud.projectdiscovery.io",
+        },
+        "cloudlist_config": {
+            "dest": "cloudlist_config", "type": str, "default": "",
+            "help": "Path to cloudlist YAML with cloud provider credentials",
+        },
+    },
+    # ── Uncover engine keys (read from env, documented here for convenience) ──
+    "uncover_engine_env_vars": {
+        "FOFA_EMAIL":          {"dest": None, "type": str, "default": "",
+                                "env": True, "secret": True,
+                                "help": "FOFA email — https://fofa.info"},
+        "FOFA_KEY":            {"dest": None, "type": str, "default": "",
+                                "env": True, "secret": True,
+                                "help": "FOFA API key"},
+        "QUAKE_TOKEN":         {"dest": None, "type": str, "default": "",
+                                "env": True, "secret": True,
+                                "help": "Quake360 token — https://quake.360.net"},
+        "ZOOMEYE_API_KEY":     {"dest": None, "type": str, "default": "",
+                                "env": True, "secret": True,
+                                "help": "ZoomEye API key — https://www.zoomeye.org"},
+        "NETLAS_API_KEY":      {"dest": None, "type": str, "default": "",
+                                "env": True, "secret": True,
+                                "help": "Netlas API key (env var variant for uncover)"},
+        "CRIMINALIP_API_KEY":  {"dest": None, "type": str, "default": "",
+                                "env": True, "secret": True,
+                                "help": "CriminalIP API key — https://www.criminalip.io"},
+    },
+}
+
+# ── Flat view: settings_key → schema entry ────────────────────────────────────
+_FLAT_SCHEMA: Dict[str, Dict[str, Any]] = {}
+for _sec, _fields in _SETTINGS_SCHEMA.items():
+    for _key, _meta in _fields.items():
+        _FLAT_SCHEMA[_key] = {**_meta, "_section": _sec}
+
+
+def load_settings(settings_path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Load and validate an OSift JSON settings file.
+
+    Returns a flat dict of {dest_name: value} for all non-env settings that
+    have a non-empty / non-default value.  Environment-variable settings are
+    injected directly into ``os.environ``.
+
+    Raises ``SystemExit`` with a clear message if the file cannot be read or
+    contains a structural problem.
+    """
+    path = Path(settings_path).expanduser().resolve()
+
+    if not path.exists():
+        print(f"[!] Settings file not found: {path}")
+        sys.exit(1)
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[!] Cannot read settings file {path}: {exc}")
+        sys.exit(1)
+
+    try:
+        doc: Dict[str, Any] = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"[!] Settings file is not valid JSON ({path}):\n    {exc}")
+        sys.exit(1)
+
+    if not isinstance(doc, dict):
+        print(f"[!] Settings file must be a JSON object (dict), got {type(doc).__name__}")
+        sys.exit(1)
+
+    # ── Remove the metadata key if present ───────────────────────────────────
+    doc.pop("_osift_settings_version", None)
+    doc.pop("_instructions", None)
+
+    result:   Dict[str, Any] = {}
+    warnings: List[str]      = []
+    env_keys: List[str]      = []
+
+    for section_name, section_val in doc.items():
+        if not isinstance(section_val, dict):
+            warnings.append(f"Section '{section_name}' is not a dict — skipped")
+            continue
+
+        for key, value in section_val.items():
+            if key == "_comment":
+                continue
+
+            schema = _FLAT_SCHEMA.get(key)
+
+            if schema is None:
+                warnings.append(f"  [{section_name}] Unknown key '{key}' — ignored")
+                continue
+
+            # Skip empty / placeholder values
+            if value in ("", None, [], "YOUR_KEY_HERE", "YOUR_API_ID_HERE",
+                         "YOUR_API_SECRET_HERE", "YOUR_EMAIL_HERE",
+                         "/path/to/cloudlist.yaml", False):
+                continue
+
+            # ── Environment-variable settings ──────────────────────────────
+            if schema.get("env"):
+                if isinstance(value, str) and value.strip():
+                    os.environ[key] = value.strip()
+                    env_keys.append(key)
+                continue
+
+            dest = schema.get("dest")
+            if dest is None:
+                continue
+
+            # ── Type coercion with friendly errors ─────────────────────────
+            expected_type = schema.get("type", str)
+            try:
+                if expected_type is bool:
+                    if isinstance(value, bool):
+                        coerced = value
+                    elif isinstance(value, str):
+                        coerced = value.lower() in ("true", "1", "yes", "on")
+                    else:
+                        coerced = bool(value)
+                elif expected_type is int:
+                    coerced = int(value)
+                elif expected_type is list:
+                    if isinstance(value, list):
+                        coerced = [str(v).strip() for v in value if str(v).strip()]
+                    else:
+                        coerced = [str(value).strip()] if str(value).strip() else []
+                else:
+                    coerced = str(value).strip()
+            except (ValueError, TypeError) as exc:
+                warnings.append(
+                    f"  [{section_name}] '{key}': expected {expected_type.__name__}, "
+                    f"got {type(value).__name__!r} ({value!r}) — skipped ({exc})"
+                )
+                continue
+
+            # Skip strings that are only whitespace after stripping
+            if expected_type is str and not coerced:
+                continue
+
+            result[dest] = coerced
+
+    if warnings:
+        print("[SETTINGS] Warnings while loading settings file:")
+        for w in warnings:
+            print(f"  {w}")
+
+    if env_keys:
+        print(f"[SETTINGS] Injected {len(env_keys)} env var(s) from settings: "
+              f"{', '.join(env_keys)}")
+
+    return result
+
+
+def merge_settings_into_args(
+    args: "argparse.Namespace",
+    settings: Dict[str, Any],
+    log: Optional[Any] = None,
+) -> None:
+    """
+    Merge a settings dict into an already-parsed argparse Namespace.
+
+    CLI values take priority: a setting is only applied if the current arg
+    value equals the argparse default (empty string, 0, or False).
+
+    *log* is optional — if provided, an INFO line is emitted for each key
+    that is applied from the settings file.  Secret values are masked.
+    """
+    applied: List[str] = []
+    skipped: List[str] = []
+
+    # Build a reverse lookup: dest_name → schema entry
+    dest_to_schema: Dict[str, Dict] = {
+        meta["dest"]: meta
+        for meta in _FLAT_SCHEMA.values()
+        if meta.get("dest")
+    }
+
+    for dest, value in settings.items():
+        schema = dest_to_schema.get(dest)
+        if schema is None:
+            continue
+
+        expected_type = schema.get("type", str)
+        # Determine the "empty / default" value for this type
+        empty_val: Any
+        if expected_type is bool:
+            empty_val = False
+        elif expected_type is int:
+            empty_val = 0          # max_pages/max_depth have real defaults; handled below
+        else:
+            empty_val = ""
+
+        current = getattr(args, dest, empty_val)
+
+        # For int args, only override if still at the hardcoded default
+        _int_defaults = {"max_pages": 200, "max_depth": 3}
+        if expected_type is int and dest in _int_defaults:
+            if current != _int_defaults[dest]:
+                skipped.append(dest)
+                continue   # CLI provided a custom value
+        elif current != empty_val:
+            skipped.append(dest)
+            continue       # CLI provided a value — do not override
+
+        setattr(args, dest, value)
+
+        display_val = "***" if schema.get("secret") else repr(value)
+        applied.append(f"  {dest} = {display_val}")
+
+    if applied and log:
+        log.info(
+            f"[SETTINGS] Applied {len(applied)} value(s) from settings file:\n"
+            + "\n".join(applied)
+        )
+    elif applied:
+        print(f"[SETTINGS] Applied {len(applied)} value(s) from settings file:")
+        for line in applied:
+            print(line)
+
+    if skipped and log:
+        log.debug(
+            f"[SETTINGS] {len(skipped)} settings key(s) skipped (CLI override): "
+            + ", ".join(skipped)
+        )
+
+
+def _settings_are_active(args: "argparse.Namespace") -> bool:
+    """Return True if any API key or feature flag in args is non-default."""
+    key_attrs = [
+        "shodan_key", "censys_id", "censys_secret",
+        "fullhunt_key", "securitytrails_key", "netlas_key",
+        "virustotal_key", "urlscan_key", "otx_key", "hunter_key",
+        "hibp_key", "dehashed_user", "dehashed_key",
+        "chaos_key", "cloudlist_config",
+    ]
+    return any(bool(getattr(args, k, "")) for k in key_attrs)
+
+
+def _check_required_pairs(args: "argparse.Namespace") -> None:
+    """
+    Validate argument pairs / co-dependencies.
+    Emits a warning (does not abort) for incomplete pairs.
+    """
+    issues: List[str] = []
+    if args.censys_id and not args.censys_secret:
+        issues.append("--censys-id provided but --censys-secret is missing "
+                       "(Censys requires both — Censys module will be skipped)")
+    if args.censys_secret and not args.censys_id:
+        issues.append("--censys-secret provided but --censys-id is missing "
+                       "(Censys module will be skipped)")
+    if args.dehashed_key and not args.dehashed_user:
+        issues.append("--dehashed-key provided but --dehashed-user (email) is missing "
+                       "(Dehashed module will be skipped)")
+    if args.dehashed_user and not args.dehashed_key:
+        issues.append("--dehashed-user provided but --dehashed-key is missing "
+                       "(Dehashed module will be skipped)")
+    for issue in issues:
+        print(f"[WARN] {issue}")
+
+# ── Platform-specific path helpers ────────────────────────────────────────────
+def _rel_path(path: "Union[str, Path]", base: Path) -> str:
+    """Return *path* as a POSIX-style string relative to *base*.
+
+    If *path* is not under *base* (e.g. a legacy absolute path from an older
+    scan), the original string is returned unchanged so nothing is lost.
+    """
+    if not path:
+        return ""
+    try:
+        return Path(path).relative_to(base).as_posix()
+    except (ValueError, TypeError):
+        return str(path)
+
+
+def _rel_output_file(output_file_str: str, base: Path) -> str:
+    """Convert a comma-separated output_file string to relative paths.
+
+    Each comma-separated entry is converted individually via _rel_path(),
+    deduplication is applied, and the results are rejoined with ','.
+    """
+    if not output_file_str:
+        return ""
+    seen: set = set()
+    result: list = []
+    for part in output_file_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        rel = _rel_path(part, base)
+        if rel and rel not in seen:
+            seen.add(rel)
+            result.append(rel)
+    return ",".join(result)
+
+
+def _safe_filename(name: str, max_len: int = 80) -> str:
+    """Return a filesystem-safe version of *name* for all three platforms."""
+    # Replace characters illegal on Windows (and generally unsafe)
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+    # Collapse multiple underscores / spaces
+    safe = re.sub(r'[\s_]+', '_', safe).strip('_')
+    return safe[:max_len]
+
+_RE_ANSI = re.compile(r'\x1b\[[0-9;]*[mGKHFJA-Z]')
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes and collapse resulting blank lines."""
+    stripped = _RE_ANSI.sub('', text)
+    # Collapse runs of blank lines to a single blank line
+    return re.sub(r'\n{3,}', '\n\n', stripped).strip()
+
+
+def _shell(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
+    """
+    Run *cmd* in a shell appropriate for the current OS.
+    Returns (stdout, stderr, returncode).
+    """
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            # Windows: hide console window for sub-processes
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+        )
+        return result.stdout, result.stderr, result.returncode
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except Exception as exc:
+        return "", str(exc), -1
+
+# ─── Wordlist ─────────────────────────────────────────────────────────────────
+DEFAULT_WORDLIST = [
+    "www", "mail", "ftp", "smtp", "pop", "imap", "webmail", "admin", "portal",
+    "vpn", "remote", "rdp", "citrix", "owa", "exchange", "autodiscover",
+    "api", "api2", "v1", "v2", "dev", "development", "staging", "stage", "uat",
+    "qa", "test", "testing", "sandbox", "demo", "beta", "alpha", "preview",
+    "prod", "production", "live", "app", "apps", "web", "web1", "web2",
+    "ns1", "ns2", "ns3", "ns4", "mx", "mx1", "mx2", "relay", "smtp2",
+    "cdn", "static", "assets", "media", "images", "img", "upload", "uploads",
+    "download", "downloads", "files", "docs", "documentation", "wiki", "kb",
+    "support", "helpdesk", "help", "service", "services", "sso", "auth",
+    "login", "secure", "security", "ssl", "gateway", "proxy", "lb",
+    "dashboard", "panel", "control", "management", "manage", "cms", "erp",
+    "crm", "hr", "finance", "accounting", "billing", "payment", "pay",
+    "shop", "store", "ecommerce", "cart", "checkout", "orders",
+    "git", "gitlab", "github", "svn", "repo", "repository", "ci", "cd",
+    "jenkins", "jira", "confluence", "sonar", "artifactory", "nexus",
+    "monitor", "monitoring", "grafana", "kibana", "elastic", "elasticsearch",
+    "db", "database", "mysql", "postgres", "postgresql", "oracle", "mssql",
+    "redis", "memcache", "mongo", "mongodb", "cassandra",
+    "backup", "bkp", "archive", "old", "legacy", "internal", "intranet",
+    "private", "corp", "corporate", "employee", "staff",
+    "iot", "vpn2", "remote2", "extranet", "partner", "partners", "vendor",
+    "customer", "clients", "b2b", "b2c", "supplier", "contractors",
+    "blog", "news", "press", "events", "careers", "jobs", "apply",
+    "m", "mobile", "wap", "pwa", "status", "health", "ping", "check",
+    "metrics", "stats", "analytics", "tracking", "pixel", "beacon",
+    "mail2", "smtp3", "mta", "mailin", "mailout", "dkim", "spf",
+    "cloud", "aws", "azure", "gcp", "k8s", "kubernetes", "docker",
+    "devops", "infra", "infrastructure", "network", "net",
+    "fw", "firewall", "ips", "ids", "siem", "soc", "noc",
+]
+
+# ─── Sensitive data patterns ──────────────────────────────────────────────────
+SENSITIVE_PATTERNS = {
+    "API Keys": [
+        r'(?i)api[_\-\s]?key[\s]*[=:]\s*["\']?([A-Za-z0-9\-_]{20,})',
+        r'(?i)apikey[\s]*[=:]\s*["\']?([A-Za-z0-9\-_]{20,})',
+    ],
+    "AWS Keys": [
+        r'(?:AKIA|AIPA|ABIA|ACCA)[0-9A-Z]{16}',
+        r'(?i)aws[_\-\s]?secret[_\-\s]?access[_\-\s]?key[\s]*[=:]\s*["\']?([A-Za-z0-9/+=]{40})',
+    ],
+    "Passwords": [
+        r'(?i)(?:password|passwd|pwd)[\s]*[=:]\s*["\']([^"\']{4,})["\']',
+        r'(?i)(?:password|passwd|pwd)[\s]*=[\s]*[^\s&"\'<>]{4,}',
+    ],
+    "Private Keys": [
+        r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----',
+        r'-----BEGIN CERTIFICATE-----',
+    ],
+    "Connection Strings": [
+        r'(?i)(?:mongodb|mysql|postgres|postgresql|redis|mssql|oracle)://[^\s"\'<>]+',
+        r'(?i)(?:jdbc|odbc):[^\s"\'<>]+',
+    ],
+    "Email Addresses": [
+        r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
+    ],
+    "IP Addresses": [
+        r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b',
+    ],
+    "Phone Numbers": [
+        r'(?:\+1[\s\-.]?)?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4}',
+        r'\+[1-9]\d{1,14}',
+    ],
+    "Social Security": [
+        r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b',
+    ],
+    "Credit Cards": [
+        r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12})\b',
+    ],
+    "JWT Tokens": [
+        r'eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+',
+    ],
+    "Internal Paths": [
+        r'(?i)(?:\/var\/|\/etc\/|\/home\/|\/usr\/|C:\\\\|D:\\\\)[^\s"\'<>]{3,}',
+    ],
+    "Comments": [
+        r'<!--.*?-->',
+        r'//\s*(?:TODO|FIXME|HACK|XXX|BUG|TEMP|DEPRECATED)[^\n]*',
+    ],
+    "OAuth Tokens": [
+        r'(?i)(?:bearer|token|access_token|refresh_token)[\s]*[=:]\s*["\']?([A-Za-z0-9\-_.]{20,})',
+    ],
+    "Google API": [
+        r'AIza[0-9A-Za-z\-_]{35}',
+    ],
+    "Slack Tokens": [
+        r'xox[baprs]-[0-9A-Za-z]{10,48}',
+    ],
+    "GitHub Tokens": [
+        r'gh[pousr]_[A-Za-z0-9]{36}',
+    ],
+}
+
+# ─── Software version detection ───────────────────────────────────────────────
+# Each body entry: (compiled regex, name_group_1based, version_group_1based)
+
+_SW_HDR_RE = re.compile(r'^([\w][\w.\- ]+?)\s*/\s*(\d+\.\d[\d.]*)', re.IGNORECASE)
+
+_META_GEN_RE = re.compile(
+    r'<meta\s[^>]*?name=["\']generator["\'][^>]*?content=["\']([^"\']+)["\']'
+    r'|<meta\s[^>]*?content=["\']([^"\']+)["\'][^>]*?name=["\']generator["\']',
+    re.IGNORECASE | re.DOTALL,
+)
+_META_GEN_VER_RE = re.compile(r'^([\w][\w. \-/]*?)\s+v?(\d+[\d.]+)', re.IGNORECASE)
+
+# Plugin-version extraction from HTML comments:
+#   "This site is optimized with the Yoast SEO plugin v27.2"
+#   → name_group="Yoast SEO plugin"  version_group="v27.2"
+_PLUGIN_VER_RE = re.compile(
+    r'\b((?:\w[\w.\-]* ){1,4}plugin)\s+(v?\d+[\d.]+)',
+    re.IGNORECASE,
+)
+# Leading words to strip when cleaning the plugin name match
+_PLUGIN_STOP = frozenset({
+    'a', 'an', 'the', 'is', 'was', 'are', 'be', 'been',
+    'with', 'for', 'by', 'of', 'to', 'in', 'on', 'at',
+    'this', 'it', 'our', 'their', 'your',
+    'site', 'page', 'blog', 'web', 'app',
+    'optimized', 'powered', 'built', 'created', 'running',
+    'using', 'uses', 'uses', 'has', 'have', 'been',
+})
+
+# Body scan patterns: each is (regex_string, name_group, version_group)
+_SW_BODY_PATS: List[Tuple[str, int, int]] = [
+    # JS/CSS library version header comments:  /* jQuery v3.6.0  or  /*! Bootstrap v5.3.0
+    (r'/\*[!*]?\s*([\w][\w. \-]*?)\s+v(\d+\.\d+[\d.]*)', 1, 2),
+    # Named popular libraries with adjacent version:  Bootstrap v4.5.2  /  React 18.2.0
+    (
+        r'\b(jQuery|Bootstrap|Angular(?:JS)?|React(?:DOM)?|Vue(?:\.js)?|Lodash|Moment(?:\.js)?'
+        r'|Axios|Backbone(?:\.js)?|Ember(?:\.js)?|Foundation|Materialize|D3(?:\.js)?'
+        r'|Three(?:\.js)?|Chart(?:\.js)?|RequireJS|Handlebars|Knockout|Svelte|Alpine(?:\.js)?'
+        r'|Stimulus|GSAP|TweenMax|TweenLite|Socket\.io|Express|Koa|Fastify|Next(?:\.js)?'
+        r'|Nuxt(?:\.js)?|Gatsby|Remix|SvelteKit|Laravel|Symfony|CodeIgniter|CakePHP|Yii'
+        r'|Django|Flask|FastAPI|Spring|Rails|Sinatra|WordPress|Drupal|Joomla|Magento'
+        r'|WooCommerce|PrestaShop|OpenCart|TYPO3|Craft|Ghost|Hugo|Jekyll|Pelican'
+        r'|Hexo|Middleman|Eleventy|Vite|Webpack|Rollup|Parcel|esbuild|Babel|TypeScript)'
+        r'\s+v?(\d+\.\d+[\d.]*)\b',
+        1, 2,
+    ),
+    # Script / link href src paths with embedded version:  /js/jquery-3.6.0.min.js
+    (
+        r'(?:src|href)=["\'][^"\']{0,200}/([\w][\w\-]*?)[-.]v?(\d+\.\d+[\d.]*)(?:\.min)?\.(?:js|css)["\']',
+        1, 2,
+    ),
+]
+
+# ─── Phone-number & SSN heuristic validators ──────────────────────────────────
+
+def _validate_phone_number(val: str) -> Tuple[bool, str]:
+    """
+    Assess whether a matched string is likely a real phone number.
+    Returns (is_likely_real, rejection_reason).
+
+    Eliminates common false positives:
+      • Timezone / HTTP-duration offsets  (+NNNN or +NNNNNN that are multiples of 60)
+      • Unix timestamps                    (10-digit values in the epoch range)
+      • Invalid NANP                       (0/1 area code, 0/1 exchange, 555-01xx)
+      • Too-short numbers                  (< 7 digits)
+      • All-same-digit noise               (111-11-1111, etc.)
+      • Bare unformatted E.164 ≤ 8 digits  (numeric IDs, not phone numbers)
+
+    Sources: ITU-T E.164, NANPA area-code rules, RFC 3966, common HTTP header
+    value patterns (Cache-Control max-age, Set-Cookie Max-Age, UTC offsets).
+    """
+    digits = re.sub(r"\D", "", val)
+    n      = len(digits)
+
+    # ── Length bounds ─────────────────────────────────────────────────────────
+    if n < 7:
+        return False, f"only {n} digit(s) — below E.164 minimum of 7"
+    if n > 15:
+        return False, f"{n} digits exceeds E.164 maximum of 15"
+
+    # ── Timezone / HTTP cache-control / cookie duration offset ───────────────
+    # Values like +3600, +86400, +604800 appear in HTTP headers and HTML attributes.
+    # All common UTC offsets and standard cache durations are multiples of 60.
+    if val.lstrip().startswith("+") and n <= 8:
+        int_val = int(digits)
+        if int_val % 60 == 0:
+            return False, (
+                f"+{digits} is a multiple of 60 — consistent with a timezone offset "
+                "or HTTP cache/cookie duration (e.g. max-age=604800 = 7 days)"
+            )
+        # ±HH:MM UTC offsets: 4 digits where HH ≤ 14 and MM ∈ {0, 15, 30, 45}
+        if n == 4:
+            hh, mm = int(digits[:2]), int(digits[2:])
+            if hh <= 14 and mm in (0, 15, 30, 45):
+                return False, f"+{digits} resembles UTC offset +{hh:02d}:{mm:02d}"
+        # ±HH:MM:SS UTC offsets: 6 digits where HH ≤ 14, MM ≤ 59, SS ≤ 59
+        if n == 6:
+            hh, mm, ss = int(digits[:2]), int(digits[2:4]), int(digits[4:])
+            if hh <= 14 and mm <= 59 and ss <= 59:
+                return False, f"+{digits} resembles UTC offset +{hh:02d}:{mm:02d}:{ss:02d}"
+        # Bare short unformatted E.164 — numeric IDs, not phone numbers
+        if n <= 8 and not re.search(r'[\-\.\s\(\)]', val):
+            return False, (
+                f"+{digits} has only {n} digit(s) with no separators — "
+                "likely a numeric value or ID, not a phone number"
+            )
+
+    # ── Unix timestamp (10-digit epoch value, 2001–2033 range) ───────────────
+    if n == 10 and not val.lstrip().startswith("+"):
+        epoch = int(digits)
+        if 1_000_000_000 <= epoch <= 2_000_000_000:
+            return False, f"{digits} falls in the Unix timestamp range (2001–2033)"
+
+    # ── All-same digit ────────────────────────────────────────────────────────
+    if len(set(digits)) == 1:
+        return False, f"all digits are '{digits[0]}' — obviously synthetic"
+
+    # ── NANP structural rules (10-digit or 11-digit with country code 1) ─────
+    nanp: Optional[str] = None
+    if n == 10:
+        nanp = digits
+    elif n == 11 and digits[0] == "1":
+        nanp = digits[1:]
+    if nanp:
+        area, exchange = nanp[:3], nanp[3:6]
+        if area[0] in "01":
+            return False, f"NANP area code '{area}' starts with '{area[0]}' — no valid NPA begins with 0 or 1"
+        if exchange[0] in "01":
+            return False, f"NANP exchange '{exchange}' starts with '{exchange[0]}' — no valid NXX begins with 0 or 1"
+        if area == "000":
+            return False, "NANP area code 000 is unassigned"
+        # 555-0100 through 555-0199 are permanently reserved as fictitious numbers
+        if exchange == "555" and 100 <= int(nanp[6:]) <= 199:
+            return False, f"555-0{int(nanp[6:])-100:03d} is a reserved fictitious number (NANPA)"
+
+    return True, ""
+
+
+def _validate_ssn(val: str) -> Tuple[bool, str]:
+    """
+    Validate whether a 9-digit string is structurally consistent with a real SSN.
+    Returns (is_likely_ssn, rejection_reason).
+
+    Applies official SSA rules (POMS RM 00201.010) and common false-positive
+    filters to avoid flagging phone numbers, dates, product codes, etc.
+
+    Rules applied:
+      • Area   (NNN): never 000, 666, or 900–999
+      • Group  (NN):  never 00
+      • Serial (NNNN): never 0000
+      • Known advertised/test SSNs (078-05-1120, 219-09-9999, 123-45-6789)
+      • All-same digit / perfectly sequential digits
+
+    References:
+      SSA POMS RM 00201.010 — SSN Structure
+      IRS Publication 1346  — taxpayer identification
+      SSA RM 10212.001      — advertised / invalid SSN list
+    """
+    digits = re.sub(r"\D", "", val)
+    if len(digits) != 9:
+        return False, f"expected 9 digits, got {len(digits)}"
+
+    area   = digits[:3]
+    group  = digits[3:5]
+    serial = digits[5:]
+
+    # ── SSA structural rules ─────────────────────────────────────────────────
+    if area == "000":
+        return False, "SSN area 000 is never issued (SSA POMS RM 00201.010)"
+    if area == "666":
+        return False, "SSN area 666 is never issued (SSA POMS RM 00201.010)"
+    if int(area) >= 900:
+        return False, f"SSN area {area} (≥900) is reserved for ITIN, never issued as SSN"
+    if group == "00":
+        return False, "SSN group 00 is never issued"
+    if serial == "0000":
+        return False, "SSN serial 0000 is never issued"
+
+    # ── Known advertised / example SSNs ─────────────────────────────────────
+    # 078-05-1120: printed inside a Woolworth sample wallet insert (1938);
+    # over 40,000 people have fraudulently used it as their own.
+    # 219-09-9999 and 123-45-6789: widely used in advertising examples.
+    _KNOWN_INVALID = {"078051120", "219099999", "123456789"}
+    if digits in _KNOWN_INVALID:
+        return False, f"{area}-{group}-{serial} is a well-known advertised/example SSN"
+
+    # ── Trivial patterns ─────────────────────────────────────────────────────
+    if len(set(digits)) == 1:
+        return False, f"all digits are '{digits[0]}' — trivially synthetic"
+    if digits == "012345678":
+        return False, "012-34-5678 is a sequential example, not a real SSN"
+
+    return True, ""
+
+
+# ─── Phone finding helper ─────────────────────────────────────────────────────
+
+def _build_phone_affected(rec: Dict[str, Any]) -> str:
+    """
+    Build the standardized 'affected' string for a validated phone record.
+
+    Format: "{e164_or_raw} — {location} ({country}) [{carrier, line_type}]"
+
+    Works with both PhoneValidator.validate() results and OSINT_Classifier
+    phone records (which add external_validation from numverify/abstractapi).
+    """
+    display = (rec.get("e164") or rec.get("raw") or "").strip()
+    if not display:
+        return ""
+    parts: List[str] = [display]
+    loc     = (rec.get("location") or "").strip()
+    country = (rec.get("country")  or "").strip()
+    if loc or country:
+        geo = f"{loc} ({country})" if (loc and country) else (loc or country)
+        parts += ["—", geo]
+    ext       = rec.get("external_validation") or {}
+    carrier   = (ext.get("carrier",   "") or "").strip()
+    line_type = (ext.get("line_type", "") or "").strip()
+    extras    = [x for x in [carrier, line_type] if x]
+    if extras:
+        parts.append(f"[{', '.join(extras)}]")
+    return " ".join(parts)
+
+
+# ─── Tool Version Registry ────────────────────────────────────────────────────
+
+class ToolRegistry:
+    """
+    Singleton that stores the name and version of every tool that runs.
+    Tools register themselves via ToolRegistry.register(name, version).
+    Version is queried automatically via --version / version flags when not
+    provided explicitly.
+
+    Query order for automatic version detection:
+      1. <binary> --version
+      2. <binary> -version
+      3. <binary> version
+      4. <binary> -v  (last resort; may produce noisy output)
+    """
+
+    _instance: Optional["ToolRegistry"] = None
+    _lock = threading.Lock()
+
+    def __new__(cls) -> "ToolRegistry":
+        with cls._lock:
+            if cls._instance is None:
+                obj = super().__new__(cls)
+                obj._tools: Dict[str, str] = {}
+                obj._query_ts: Dict[str, str] = {}   # tool → ISO timestamp of version query
+                cls._instance = obj
+        return cls._instance
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def register(self, tool: str, version: str, queried_at: Optional[str] = None) -> None:
+        """Manually register a tool name and its version string."""
+        with self._lock:
+            self._tools[tool] = version
+            self._query_ts[tool] = queried_at or datetime.datetime.now(datetime.UTC).isoformat()
+
+    def get_version(self, tool: str) -> str:
+        """Return the cached version string, or 'unknown' if not registered."""
+        return self._tools.get(tool, "unknown")
+
+    def get_timestamp(self, tool: str) -> str:
+        """Return when the version was queried."""
+        return self._query_ts.get(tool, "")
+
+    def query_and_register(self, binary: str, tool_name: Optional[str] = None) -> str:
+        """
+        Auto-detect the version of *binary* and cache it.
+        Returns the version string (may be 'unknown').
+        """
+        name = tool_name or os.path.basename(binary).replace(".exe", "")
+        if name in self._tools:
+            return self._tools[name]
+
+        version = self._detect_version(binary)
+        ts      = datetime.datetime.now(datetime.UTC).isoformat()
+        self.register(name, version, ts)
+        return version
+
+    def all_tools(self) -> Dict[str, Dict[str, str]]:
+        """Return a dict of all registered tools with version and query timestamp."""
+        with self._lock:
+            return {
+                name: {"version": ver, "queried_at": self._query_ts.get(name, "")}
+                for name, ver in self._tools.items()
+            }
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _detect_version(binary: str) -> str:
+        """Try common version flags; return the first parseable version string."""
+        flags     = ["--version", "-version", "version", "-v"]
+        ver_re    = re.compile(
+            r"v?(\d+\.\d+[\.\d]*(?:[-+][A-Za-z0-9.\-+]+)?)",
+            re.IGNORECASE,
+        )
+        for flag in flags:
+            try:
+                result = subprocess.run(
+                    [binary, flag],
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+                )
+                combined = (result.stdout + result.stderr).strip()
+                m = ver_re.search(combined)
+                if m:
+                    return m.group(0)
+            except Exception:
+                continue
+        return "unknown"
+
+
+# Singleton accessor
+TOOL_REGISTRY = ToolRegistry()
+
+# Pre-register OSift itself
+TOOL_REGISTRY.register("OSift", VERSION, datetime.datetime.now(datetime.UTC).isoformat())
+
+# Pre-register known API services (no binary to query; versions are API versions)
+_API_TOOL_VERSIONS: Dict[str, str] = {
+    "shodan":           "REST-API-v1",
+    "censys":           "Search-API-v2",
+    "fullhunt":         "API-v1",
+    "securitytrails":   "API-v1",
+    "netlas":           "API-v1",
+    "virustotal":       "API-v3",
+    "urlscan":          "API-v1",
+    "alienvault_otx":   "API-v1",
+    "hunter_io":        "API-v2",
+    "hibp":             "API-v3",
+    "dehashed":         "API-v1",
+    # passive/scrape sources
+    "hackertarget":     "free-API",
+    "rapiddns":         "scrape",
+    "threatcrowd":      "API-v2",
+    "alienvault":       "API-v1",
+    "dnsdumpster":      "scrape",
+    "ipinfo.io":        "free-API",
+    "opencorporates":   "API-v0.4",
+    "sec_edgar":        "EDGAR-API",
+    "edgartools":       "edgartools",   # version queried at runtime
+    "amass":            "unknown",   # queried at runtime
+    "OSift-DNS":        VERSION,
+    "OSift-BruteForce": VERSION,
+    "OSift-Crawl":      VERSION,
+    "OSift-Certs":      VERSION,
+    "OSift-WHOIS":      VERSION,
+    "OSift-Email":      VERSION,
+    "OSift-Company":    VERSION,
+    "OSift-IP":         VERSION,
+}
+for _svc, _ver in _API_TOOL_VERSIONS.items():
+    TOOL_REGISTRY.register(_svc, _ver)
+
+# Map tool names → install/package type for Vantage Tools tab display
+_TOOL_TYPES: Dict[str, str] = {
+    # Internal OSift modules
+    "OSift":             "Internal",
+    "OSift-DNS":         "Internal",
+    "OSift-BruteForce":  "Internal",
+    "OSift-Crawl":       "Internal",
+    "OSift-Certs":       "Internal",
+    "OSift-WHOIS":       "Internal",
+    "OSift-Email":       "Internal",
+    "OSift-Company":     "Internal",
+    "OSift-IP":          "Internal",
+    # REST APIs / web services
+    "shodan":            "API",
+    "censys":            "API",
+    "fullhunt":          "API",
+    "securitytrails":    "API",
+    "netlas":            "API",
+    "virustotal":        "API",
+    "urlscan":           "API",
+    "alienvault_otx":    "API",
+    "alienvault":        "API",
+    "hunter_io":         "API",
+    "hibp":              "API",
+    "dehashed":          "API",
+    "hackertarget":      "API",
+    "ipinfo.io":         "API",
+    "opencorporates":    "API",
+    "sec_edgar":         "API",
+    "rapiddns":          "API",
+    "threatcrowd":       "API",
+    "dnsdumpster":       "API",
+    # Go packages (go install)
+    "subfinder":         "Go Package",
+    "chaos":             "Go Package",
+    "shuffledns":        "Go Package",
+    "dnsx":              "Go Package",
+    "puredns":           "Go Package",
+    "xurlfind3r":        "Go Package",
+    "waybackurls":       "Go Package",
+    "amass":             "Go Package",
+    # Python packages (pip)
+    "wappalyzer":        "Python Package",
+    "edgartools":        "Python Package",
+    # GitHub repos (cloned / pip install from git)
+    "theHarvester":      "GitHub Repo",
+    "EmailHarvester":    "GitHub Repo",
+}
+
+
+# ─── Finding Store ────────────────────────────────────────────────────────────
+
+class FindingStore:
+    """
+    Central, deduplicated store for all security findings.
+
+    Every finding has a canonical fingerprint built from its type + key
+    discriminating fields (CVE id, URL, host, detail hash, etc.).
+
+    First arrival:   creates a full Finding record.
+    Collision:       appends a validation entry to the existing record instead
+                     of creating a duplicate — preserving full tool provenance.
+
+    Thread-safe for concurrent tool waves.
+    """
+
+    _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+    def __init__(self):
+        self._lock    = threading.Lock()
+        self._store:  Dict[str, Dict] = {}   # fingerprint → finding dict
+        self._ordered: List[str]      = []   # insertion-order fingerprints
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def add(
+        self,
+        *,
+        tool:       str,
+        type:       str,
+        category:   str,
+        severity:   str,
+        detail:     str,
+        timestamp:  Optional[str]  = None,
+        # optional discriminating fields
+        cve:        str = "",
+        ip:         str = "",
+        host:       str = "",
+        url:        str = "",
+        email:      str = "",
+        phone:      str = "",
+        domain:     str = "",
+        # extra pass-through fields
+        **extra: Any,
+    ) -> str:
+        """
+        Add a finding. Returns the fingerprint (new or existing).
+
+        If an identical finding already exists (same fingerprint), a
+        *validation entry* is appended to the existing record rather
+        than creating a duplicate.
+        """
+        ts      = timestamp or datetime.datetime.now(datetime.UTC).isoformat()
+        version = TOOL_REGISTRY.get_version(tool)
+        fp      = self._fingerprint(type, detail, cve, ip, host, url, email, domain, phone)
+
+        validation = {
+            "tool":      tool,
+            "version":   version,
+            "timestamp": ts,
+        }
+
+        with self._lock:
+            if fp in self._store:
+                existing = self._store[fp]
+                # Deduplicate: don't add the same tool twice as a validation
+                # (also skip if this tool is already the primary source)
+                _seen_tools = {existing.get("tool", "")} | {
+                    v["tool"] for v in existing.get("validations", [])
+                }
+                if validation["tool"] not in _seen_tools:
+                    existing.setdefault("validations", []).append(validation)
+                # Escalate severity if the new source reports higher
+                if self._SEVERITY_RANK.get(severity, 0) > self._SEVERITY_RANK.get(
+                    existing.get("severity", "info"), 0
+                ):
+                    existing["severity"] = severity
+                    existing["severity_escalated_by"] = tool
+                # Merge list-like extra fields so collisions accumulate all values
+                for _mk, _sep in (("affected", "\n"), ("output_file", ",")):
+                    _new = extra.get(_mk, "")
+                    if not _new:
+                        continue
+                    _old = existing.get(_mk, "")
+                    if _old:
+                        _s = set(x.strip() for x in _old.split(_sep) if x.strip())
+                        for _item in _new.split(_sep):
+                            _item = _item.strip()
+                            if _item:
+                                _s.add(_item)
+                        existing[_mk] = _sep.join(sorted(_s))
+                    else:
+                        existing[_mk] = _new
+                return fp
+
+            finding: Dict[str, Any] = {
+                "finding_id":   fp,
+                "type":         type,
+                "category":     category,
+                "severity":     severity,
+                "detail":       detail,
+                "tool":         tool,
+                "tool_version": version,
+                "timestamp":    ts,
+                "validations":  [],
+                # optional discriminating fields (only store non-empty)
+            }
+            if cve:    finding["cve"]    = cve
+            if ip:     finding["ip"]     = ip
+            if host:   finding["host"]   = host
+            if url:    finding["url"]    = url
+            if email:  finding["email"]  = email
+            if phone:  finding["phone"]  = phone
+            if domain: finding["domain"] = domain
+            finding.update({k: v for k, v in extra.items() if v is not None})
+
+            self._store[fp]   = finding
+            self._ordered.append(fp)
+
+        return fp
+
+    def all_findings(self) -> List[Dict]:
+        """Return all findings in insertion order."""
+        with self._lock:
+            return [self._store[fp] for fp in self._ordered if fp in self._store]
+
+    def by_category(self) -> Dict[str, List[Dict]]:
+        """Return findings grouped by category."""
+        groups: Dict[str, List[Dict]] = defaultdict(list)
+        for f in self.all_findings():
+            groups[f.get("category", "Uncategorized")].append(f)
+        return dict(groups)
+
+    def by_severity(self) -> Dict[str, List[Dict]]:
+        """Return findings grouped by severity (critical → info)."""
+        groups: Dict[str, List[Dict]] = defaultdict(list)
+        for f in self.all_findings():
+            groups[f.get("severity", "info")].append(f)
+        return dict(groups)
+
+    def validated_count(self) -> int:
+        """Return the number of findings confirmed by 2+ tools."""
+        return sum(1 for f in self.all_findings() if f.get("validations"))
+
+    def stats(self) -> Dict[str, Any]:
+        findings = self.all_findings()
+        by_sev   = defaultdict(int)
+        by_cat   = defaultdict(int)
+        by_tool  = defaultdict(int)
+        for f in findings:
+            by_sev[f.get("severity", "info")] += 1
+            by_cat[f.get("category", "?")] += 1
+            by_tool[f.get("tool", "?")] += 1
+            for v in f.get("validations", []):
+                by_tool[v["tool"]] += 1
+        return {
+            "total":          len(findings),
+            "validated":      self.validated_count(),
+            "by_severity":    dict(by_sev),
+            "by_category":    dict(by_cat),
+            "by_tool":        dict(by_tool),
+        }
+
+    # ── Backwards-compat shim ─────────────────────────────────────────────────
+
+    def as_legacy_list(self) -> List[Dict]:
+        """
+        Return findings in the old flat-list format that existing code
+        (aggregate_sensitive_data, report sections) expects.
+        Each finding gets a 'source' key for legacy compatibility.
+        """
+        out = []
+        for f in self.all_findings():
+            rec = dict(f)
+            rec.setdefault("source", f.get("tool", "unknown"))
+            out.append(rec)
+        return out
+
+    # ── Fingerprinting ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fingerprint(
+        type_: str, detail: str,
+        cve: str, ip: str, host: str, url: str, email: str, domain: str,
+        phone: str = "",
+    ) -> str:
+        """
+        Build a stable 16-hex-char fingerprint for deduplication.
+
+        The fingerprint is based on (type, primary_key) where primary_key
+        is chosen in priority order: CVE id → URL → email → phone → IP →
+        host → domain → normalised detail text.
+
+        Normalisation strips tool names, counts, and timestamps so that
+        "Shodan reports CVE-2021-44228 on 1.2.3.4:443" and
+        "Censys: CVE-2021-44228 found on 1.2.3.4" produce the same fingerprint.
+        """
+        if cve:
+            primary = f"cve:{cve.upper()}"
+        elif url:
+            primary = f"url:{url.lower().rstrip('/')}"
+        elif email:
+            primary = f"email:{email.lower()}"
+        elif phone:
+            primary = f"phone:{re.sub(r'[^+0-9]', '', phone)}"
+        elif ip:
+            primary = f"ip:{ip}"
+        elif host:
+            primary = f"host:{host.lower().rstrip('.')}"
+        elif domain:
+            primary = f"domain:{domain.lower()}"
+        else:
+            # Normalise detail: strip numbers, tool prefixes, whitespace
+            norm = re.sub(r'\b\d+\b', 'N', detail.lower())
+            norm = re.sub(r'\s+', ' ', norm).strip()[:120]
+            primary = f"detail:{norm}"
+
+        key = f"{type_.lower()}|{primary}"
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+# ─── Data Structures ──────────────────────────────────────────────────────────
+
+@dataclass
+class ReconData:
+    company: str
+    domain: str
+    domains: List[str] = field(default_factory=list)
+    start_time: str = field(default_factory=lambda: datetime.datetime.now(datetime.UTC).isoformat())
+    end_time: str = ""
+
+    subdomains: Dict[str, Dict] = field(default_factory=dict)
+    dns_records: Dict[str, List] = field(default_factory=dict)
+    zone_transfers: List[Dict] = field(default_factory=list)
+
+    ip_addresses: Dict[str, Dict] = field(default_factory=dict)
+    asn_info: Dict[str, Dict] = field(default_factory=dict)
+
+    certificates: List[Dict] = field(default_factory=list)
+    cert_subjects: Set = field(default_factory=set)
+
+    email_addresses: Dict[str, Dict] = field(default_factory=dict)
+    employees: List[Dict] = field(default_factory=list)
+    phone_numbers: List[str] = field(default_factory=list)
+
+    physical_addresses: List[Dict] = field(default_factory=list)
+    associated_companies: List[Dict] = field(default_factory=list)
+    associated_domains: Dict[str, Dict] = field(default_factory=dict)
+
+    crawled_urls: Dict[str, Dict] = field(default_factory=dict)
+    technologies: Dict[str, List] = field(default_factory=dict)
+    open_ports: Dict[str, List] = field(default_factory=dict)
+
+    whois_data: Dict[str, Dict] = field(default_factory=dict)
+    errors: List[Dict] = field(default_factory=list)
+    commands_run: List[Dict] = field(default_factory=list)
+
+    # ── Wildcard DNS tracking ─────────────────────────────────────────────────
+    # Maps domain → list of IPs the wildcard resolves to (empty = no wildcard)
+    wildcard_ips: Dict[str, List[str]] = field(default_factory=dict)
+
+    # ── Unified finding stores (replaces sensitive_findings + breach_data) ────
+    findings:       "FindingStore" = field(default_factory=FindingStore)
+    breach_data:    List[Dict]     = field(default_factory=list)
+
+    # ── Legacy shims (populated on demand for backward-compat code) ───────────
+    @property
+    def sensitive_findings(self) -> List[Dict]:
+        """Legacy read-only shim — returns all findings as a flat list."""
+        return self.findings.as_legacy_list()
+
+
+# ─── OSINT API Intelligence Engine ───────────────────────────────────────────
+# (injected below; the engine adds Phase 10 to the recon pipeline)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 10: OSINT API INTELLIGENCE ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Integrated APIs (all optional — provide keys via CLI arguments):
+#
+#   Tier-1 (Attack Surface & Infrastructure)
+#     • Shodan           — internet-wide device/port/vuln scan DB
+#     • Censys           — TLS certs, host services, IPv4 scan
+#     • FullHunt         — EASM: subdomains, hosts, tech stack
+#     • SecurityTrails   — DNS history, subdomain DB, WHOIS history, associated domains
+#     • Netlas           — multi-collection search: responses, certs, DNS, WHOIS-IP/domain
+#
+#   Tier-2 (Threat Intelligence & Reputation)
+#     • VirusTotal       — domain/IP reputation, passive DNS, subdomains, WHOIS
+#     • URLScan.io       — webpage scan history, tech stack, links, verdicts
+#     • AlienVault OTX   — threat feeds, pulse data, passive DNS, malware
+#
+#   Tier-3 (Email & People Intelligence)
+#     • Hunter.io        — domain email discovery, email finder, company/person enrichment
+#     • Have I Been Pwned— breach lookup per email/domain (existing key reused)
+#
+# All API classes share a common pattern:
+#   - Constructor accepts api_key (or api_id/api_secret) plus shared logger+data
+#   - .run() method orchestrates calls, writes results to output_dir/api_intel/
+#   - Every call is guarded with try/except + rate-limit sleep
+#   - Results are merged into the shared ReconData object
+#   - No key → class logs a notice and returns immediately
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── API result directory helper ──────────────────────────────────────────────
+
+def _api_dir(output_dir: Path, service: str) -> Path:
+    """Return (and create) the per-service output subdirectory."""
+    d = output_dir / "api_intel" / service
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_api_result(directory: Path, filename: str, data: Any) -> Path:
+    """Serialise *data* as pretty-printed JSON and write it to *directory*."""
+    path = directory / filename
+    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    return path
+
+
+def _write_placeholder(directory: "Path", filename: str, cmd_info: str, message: str) -> "Path":
+    """
+    Write a placeholder file to *directory/filename* when a tool or API call
+    fails or returns no results.  Contains the command/query attempted and
+    the error or empty-result message.
+
+    Returns the file Path (whether newly written or pre-existing).
+    """
+    path = directory / filename
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(
+                f"Command/Query: {cmd_info}\n\n{message}\n",
+                encoding="utf-8",
+            )
+    except OSError:
+        pass
+    return path
+
+
+def _rate_sleep(seconds: float = 1.0):
+    """Polite rate-limit pause between consecutive API calls."""
+    time.sleep(seconds)
+
+
+# ─── Shodan ───────────────────────────────────────────────────────────────────
+
+class ShodanAPI:
+    """
+    Shodan REST API integration.
+    Shodan — John Matherly @achillean / Shodan.io (https://www.shodan.io)
+
+    Endpoints used:
+      GET /shodan/host/{ip}        — full banner data: ports, vulns, services, certs
+      GET /dns/domain/{domain}     — subdomains + DNS records (1 query credit/call)
+      GET /shodan/host/search      — search by domain SSL cert subject (1 credit/100 pages)
+      GET /dns/resolve             — bulk hostname → IP resolution (no credits)
+
+    Key tiers:
+      Free account (developer)    — host lookups, resolve; search & domain cost query credits
+      Membership ($49 one-time)   — query credits included monthly
+    API rate limit: ~1 request/second
+    """
+
+    BASE = "https://api.shodan.io"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain     = domain
+        self.out        = _api_dir(output_dir, "shodan")
+        self.log        = log
+        self.data       = data
+        self.key        = api_key.strip()
+        self.session    = make_session() if REQUESTS_AVAILABLE else None
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[Shodan] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[Shodan] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("shodan")
+        self.log.info(f"[Shodan] Starting Shodan intelligence for {self.domain}")
+        self._dns_domain_lookup()
+        _rate_sleep(1.5)
+        self._ssl_cert_search()
+        _rate_sleep(1.5)
+        self._enrich_known_ips()
+        self.log.success(f"[Shodan] Intelligence phase complete")
+
+    # ── DNS domain lookup ─────────────────────────────────────────────────────
+
+    def _dns_domain_lookup(self):
+        """
+        GET /dns/domain/{domain}
+        Returns subdomains, DNS types (A, AAAA, MX, NS, TXT, etc.) and
+        their values as recorded in Shodan's curated DNS database.
+        Costs 1 query credit per page (100 records).
+        """
+        self.log.info(f"[Shodan] DNS domain lookup for {self.domain}")
+        url    = f"{self.BASE}/dns/domain/{self.domain}"
+        params = {"key": self.key}
+        result = {}
+        page   = 1
+
+        while True:
+            try:
+                params["page"] = page
+                resp = self.session.get(url, params=params, timeout=20)
+                if resp.status_code == 401:
+                    self.log.warning("[Shodan] API key rejected (401)")
+                    return
+                if resp.status_code == 402:
+                    self.log.warning("[Shodan] No query credits remaining (402)")
+                    return
+                if resp.status_code != 200:
+                    self.log.error(f"[Shodan] DNS domain lookup HTTP {resp.status_code}")
+                    _write_placeholder(self.out, "dns_domain.json",
+                                       f"GET /dns/domain/{self.domain}",
+                                       f"(Shodan DNS domain lookup returned HTTP {resp.status_code})")
+                    return
+
+                payload = resp.json()
+                if page == 1:
+                    result = payload
+                else:
+                    # Merge additional data pages
+                    result.setdefault("data", []).extend(payload.get("data", []))
+                    result.setdefault("subdomains", []).extend(payload.get("subdomains", []))
+
+                # Ingest subdomains
+                for sub in payload.get("subdomains", []):
+                    fqdn = f"{sub}.{self.domain}".lower()
+                    rec  = self.data.subdomains.setdefault(
+                        fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "shodan" not in rec["sources"]:
+                        rec["sources"].append("shodan")
+
+                # Ingest DNS records with IP resolution
+                for entry in payload.get("data", []):
+                    rtype   = entry.get("type", "")
+                    subdomain = entry.get("subdomain", "")
+                    value   = entry.get("value", "")
+                    fqdn    = f"{subdomain}.{self.domain}".lower() if subdomain else self.domain
+
+                    if rtype == "A" and value:
+                        ip_rec = self.data.ip_addresses.setdefault(
+                            value, {"fqdns": [], "context": "Shodan DNS", "asn": None, "org": None, "geo": None}
+                        )
+                        if fqdn not in ip_rec["fqdns"]:
+                            ip_rec["fqdns"].append(fqdn)
+
+                # Pagination
+                if not payload.get("more", False):
+                    break
+                page += 1
+                _rate_sleep(1.5)
+
+            except Exception as e:
+                self.log.error(f"[Shodan] DNS domain lookup error page {page}: {e}", exc=e)
+                break
+
+        if not result or (not result.get("subdomains") and not result.get("data")):
+            self.log.info("[Shodan] DNS lookup returned no data")
+            _write_placeholder(self.out, "dns_domain.json",
+                               f"GET /dns/domain/{self.domain}",
+                               "(Shodan DNS lookup returned no results for this domain)")
+        else:
+            _save_api_result(self.out, "dns_domain.json", result)
+        self.log.success(
+            f"[Shodan] DNS lookup: {len(result.get('subdomains', []))} subdomains, "
+            f"{len(result.get('data', []))} DNS records"
+        )
+
+    # ── SSL certificate search ────────────────────────────────────────────────
+
+    def _ssl_cert_search(self):
+        """
+        GET /shodan/host/search?query=ssl.cert.subject.cn:{domain}
+        Finds all hosts presenting a TLS certificate whose CN matches the domain.
+        Returns: IP, ports, hostnames, OS, organisation, location, CVEs.
+        Costs 1 query credit per 100 result pages.
+        """
+        self.log.info(f"[Shodan] SSL certificate host search for {self.domain}")
+        url    = f"{self.BASE}/shodan/host/search"
+        query  = f"ssl.cert.subject.cn:{self.domain}"
+        params = {"key": self.key, "query": query, "facets": "country,org,port"}
+        result = {}
+
+        try:
+            resp = self.session.get(url, params=params, timeout=30)
+            if resp.status_code not in (200, 201):
+                self.log.error(f"[Shodan] SSL search HTTP {resp.status_code}")
+                _write_placeholder(self.out, "ssl_cert_search.json",
+                                   f"GET /shodan/host/search?query=ssl.cert.subject.cn:{self.domain}",
+                                   f"(Shodan SSL cert search returned HTTP {resp.status_code})")
+                return
+            result = resp.json()
+        except Exception as e:
+            self.log.error(f"[Shodan] SSL cert search error: {e}", exc=e)
+            _write_placeholder(self.out, "ssl_cert_search.json",
+                               f"GET /shodan/host/search?query=ssl.cert.subject.cn:{self.domain}",
+                               f"(Shodan SSL cert search failed: {e})")
+            return
+
+        hosts_found = 0
+        for match in result.get("matches", []):
+            ip = match.get("ip_str", "")
+            if not ip:
+                continue
+
+            hosts_found += 1
+            ip_rec = self.data.ip_addresses.setdefault(
+                ip, {"fqdns": [], "context": "Shodan SSL search", "asn": None, "org": None, "geo": None}
+            )
+
+            # Enrich from Shodan match data
+            if match.get("org"):
+                ip_rec["org"] = match["org"]
+            if match.get("asn"):
+                ip_rec["asn"] = match["asn"]
+            loc = match.get("location", {})
+            if loc:
+                ip_rec["geo"] = {
+                    "country": loc.get("country_name"),
+                    "city":    loc.get("city"),
+                    "lat":     loc.get("latitude"),
+                    "lon":     loc.get("longitude"),
+                }
+
+            # Store open ports
+            port = match.get("port")
+            if port:
+                existing = self.data.open_ports.setdefault(ip, [])
+                if port not in existing:
+                    existing.append(port)
+
+            # Extract HTTP response status from this match
+            _http_status = match.get("http", {}).get("status")
+
+            # Store hostnames as subdomains
+            for hn in match.get("hostnames", []):
+                hn_lower = hn.lower().rstrip(".")
+                if hn_lower.endswith(self.domain):
+                    sub_rec = self.data.subdomains.setdefault(
+                        hn_lower, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "shodan_ssl" not in sub_rec["sources"]:
+                        sub_rec["sources"].append("shodan_ssl")
+                    if ip not in sub_rec["ips"]:
+                        sub_rec["ips"].append(ip)
+                    if _http_status and sub_rec.get("http_status") is None:
+                        sub_rec["http_status"] = _http_status
+
+            # Harvest CVEs
+            for vuln in match.get("vulns", {}).keys():
+                add_finding(
+                    self.data, "shodan", "CVE", CAT_CVE, "high",
+                    f"Shodan identified {vuln}",
+                    cve=vuln, ip=ip, affected=f"{ip}:{port}",
+                    output_file=str(self.out / "ssl_cert_search.json"),
+                )
+
+        _save_api_result(self.out, "ssl_cert_search.json", result)
+        if not result or not result.get("matches"):
+            self.log.info("[Shodan] SSL cert search returned no host matches")
+            _write_placeholder(self.out, "ssl_cert_search.json",
+                               f"GET /shodan/host/search?query=ssl.cert.subject.cn:{self.domain}",
+                               "(Shodan SSL cert search found no matching hosts)")
+        self.log.success(f"[Shodan] SSL cert search: {hosts_found} hosts found")
+
+    # ── IP enrichment ─────────────────────────────────────────────────────────
+
+    def _enrich_known_ips(self):
+        """
+        GET /shodan/host/{ip}
+        Retrieves the full banner history for each known IP:
+        all open ports, service banners, CVEs, OS guess, tags, and more.
+        IP lookups do NOT consume query credits.
+        """
+        ips = list(self.data.ip_addresses.keys())[:30]   # cap to 30 IPs
+        if not ips:
+            return
+
+        self.log.info(f"[Shodan] Enriching {len(ips)} IPs (host lookup)")
+        enriched = {}
+
+        for i, ip in enumerate(ips):
+            if i and i % 10 == 0:
+                _rate_sleep(2)
+            try:
+                resp = self.session.get(
+                    f"{self.BASE}/shodan/host/{ip}",
+                    params={"key": self.key},
+                    timeout=20,
+                )
+                if resp.status_code != 200:
+                    continue
+                host_data = resp.json()
+                enriched[ip] = host_data
+
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [], "context": "Shodan host", "asn": None, "org": None, "geo": None}
+                )
+                ip_rec["org"]       = host_data.get("org")
+                ip_rec["asn"]       = host_data.get("asn")
+                ip_rec["shodan_os"] = host_data.get("os")
+                ip_rec["shodan_tags"] = host_data.get("tags", [])
+                ip_rec["last_update"]  = host_data.get("last_update")
+
+                loc = host_data.get("location", {})
+                if loc:
+                    ip_rec["geo"] = {
+                        "country": loc.get("country_name"),
+                        "city":    loc.get("city"),
+                        "lat":     loc.get("latitude"),
+                        "lon":     loc.get("longitude"),
+                    }
+
+                for port in host_data.get("ports", []):
+                    existing = self.data.open_ports.setdefault(ip, [])
+                    if port not in existing:
+                        existing.append(port)
+
+                # Extract HTTP status from service banners and propagate to
+                # subdomains that resolve to this IP
+                for svc in host_data.get("data", []):
+                    _svc_http_status = svc.get("http", {}).get("status")
+                    if not _svc_http_status:
+                        continue
+                    # Map status to all FQDNs resolving to this IP
+                    _fqdns_for_ip = list(ip_rec.get("fqdns") or [])
+                    for _sub_k, _sub_v in self.data.subdomains.items():
+                        if ip in (_sub_v.get("ips") or []) and _sub_k not in _fqdns_for_ip:
+                            _fqdns_for_ip.append(_sub_k)
+                    for _fqdn in _fqdns_for_ip:
+                        _sub_r = self.data.subdomains.get(_fqdn)
+                        if _sub_r is not None and _sub_r.get("http_status") is None:
+                            _sub_r["http_status"] = _svc_http_status
+
+                for vuln_id in host_data.get("vulns", {}).keys():
+                    add_finding(
+                        self.data, "shodan", "CVE", CAT_CVE, "high",
+                        f"Shodan identified {vuln_id}",
+                        cve=vuln_id, ip=ip, affected=ip,
+                        output_file=str(self.out / "host_enrichment.json"),
+                    )
+
+                _rate_sleep(1.2)
+
+            except Exception as e:
+                self.log.error(f"[Shodan] Host enrichment error for {ip}: {e}", exc=e)
+
+        if not enriched:
+            self.log.info("[Shodan] Host enrichment returned no data")
+            _write_placeholder(self.out, "host_enrichment.json",
+                               "GET /shodan/host/{ip} (for each known IP)",
+                               "(Shodan host enrichment returned no results)")
+        else:
+            _save_api_result(self.out, "host_enrichment.json", enriched)
+        self.log.success(f"[Shodan] Host enrichment done for {len(enriched)} IPs")
+
+
+# ─── Censys ───────────────────────────────────────────────────────────────────
+
+class CensysAPI:
+    """
+    Censys Search API v2 integration.
+    Censys by Censys Inc. (https://censys.io) — censys-python SDK (https://github.com/censys/censys-python)
+
+    Endpoints used:
+      POST https://search.censys.io/api/v2/hosts/search
+        — search hosts by domain name in TLS cert CN / SAN or HTTP Host header
+      GET  https://search.censys.io/api/v2/hosts/{ip}
+        — structured host detail: services, ports, TLS, protocols, banner
+      POST https://search.censys.io/api/v2/certificates/search
+        — find certificates issued to subdomains of the target domain
+      GET  https://search.censys.io/api/v2/hosts/{ip}/certificates
+        — certificates currently presented on a known host
+
+    Auth: HTTP Basic (api_id : api_secret)
+    Free community tier: 250 queries/month
+    """
+
+    BASE = "https://search.censys.io/api/v2"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_id: str = "",
+        api_secret: str = "",
+    ):
+        self.domain     = domain
+        self.out        = _api_dir(output_dir, "censys")
+        self.log        = log
+        self.data       = data
+        self.api_id     = api_id.strip()
+        self.api_secret = api_secret.strip()
+        self.auth       = (self.api_id, self.api_secret) if self.api_id and self.api_secret else None
+        self.session    = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.auth:
+            self.session.auth = self.auth
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not (self.api_id and self.api_secret):
+            self.log.info("[Censys] No API credentials provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[Censys] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("censys")
+        self.log.info(f"[Censys] Starting Censys intelligence for {self.domain}")
+        self._host_search()
+        _rate_sleep(2)
+        self._certificate_search()
+        _rate_sleep(2)
+        self._enrich_known_ips()
+        self.log.success("[Censys] Intelligence phase complete")
+
+    # ── host search ───────────────────────────────────────────────────────────
+
+    def _host_search(self):
+        """
+        POST /v2/hosts/search
+        Queries Censys for hosts whose TLS certificate CN or SAN contains the
+        target domain. Returns IP, port list, service names, ASN, location.
+        Uses cursor-based pagination (max 100 results per page).
+        """
+        self.log.info(f"[Censys] Host search for domain {self.domain}")
+        url   = f"{self.BASE}/hosts/search"
+        query = f"services.tls.certificates.leaf_data.names: {self.domain}"
+        all_hits: List[Dict] = []
+        cursor = None
+
+        for page_num in range(1, 6):   # max 5 pages = 500 results
+            payload: Dict[str, Any] = {
+                "q":        query,
+                "per_page": 100,
+                "fields": [
+                    "ip", "services.port", "services.service_name",
+                    "services.tls.certificates.leaf_data.names",
+                    "autonomous_system.asn", "autonomous_system.name",
+                    "autonomous_system.country_code", "location.country_code",
+                    "location.city",
+                ],
+            }
+            if cursor:
+                payload["cursor"] = cursor
+
+            try:
+                resp = self.session.post(url, json=payload, timeout=30)
+                if resp.status_code == 401:
+                    self.log.warning("[Censys] Authentication failed (401)")
+                    return
+                if resp.status_code == 429:
+                    self.log.warning("[Censys] Rate limited — pausing 60s")
+                    _rate_sleep(60)
+                    continue
+                if resp.status_code != 200:
+                    self.log.error(f"[Censys] Host search HTTP {resp.status_code}")
+                    break
+                result = resp.json().get("result", {})
+                hits   = result.get("hits", [])
+                if not hits:
+                    break
+
+                all_hits.extend(hits)
+
+                for hit in hits:
+                    ip = hit.get("ip", "")
+                    if not ip:
+                        continue
+
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip, {"fqdns": [], "context": "Censys host", "asn": None, "org": None, "geo": None}
+                    )
+                    asn_info = hit.get("autonomous_system", {})
+                    if asn_info:
+                        ip_rec["asn"] = asn_info.get("asn")
+                        ip_rec["org"] = asn_info.get("name")
+                        ip_rec["geo"] = {
+                            "country": asn_info.get("country_code"),
+                            "city":    hit.get("location", {}).get("city"),
+                        }
+
+                    for svc in hit.get("services", []):
+                        port = svc.get("port")
+                        if port:
+                            existing = self.data.open_ports.setdefault(ip, [])
+                            if port not in existing:
+                                existing.append(port)
+                        # Extract cert SANs
+                        for cert in svc.get("tls", {}).get("certificates", []):
+                            for name in cert.get("leaf_data", {}).get("names", []):
+                                name = name.lstrip("*.").lower()
+                                if name.endswith(self.domain):
+                                    sub_rec = self.data.subdomains.setdefault(
+                                        name, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                                    )
+                                    if "censys" not in sub_rec["sources"]:
+                                        sub_rec["sources"].append("censys")
+                                    if ip not in sub_rec["ips"]:
+                                        sub_rec["ips"].append(ip)
+
+                cursor = result.get("links", {}).get("next")
+                if not cursor:
+                    break
+                _rate_sleep(2)
+
+            except Exception as e:
+                self.log.error(f"[Censys] Host search error page {page_num}: {e}", exc=e)
+                break
+
+        if not all_hits:
+            self.log.info("[Censys] Host search returned no hits")
+            _write_placeholder(self.out, "host_search.json",
+                               f"POST /v2/hosts/search q={query}",
+                               "(Censys host search found no matching hosts)")
+        else:
+            _save_api_result(self.out, "host_search.json", {"hits": all_hits})
+        self.log.success(f"[Censys] Host search: {len(all_hits)} hosts found")
+
+    # ── certificate search ────────────────────────────────────────────────────
+
+    def _certificate_search(self):
+        """
+        POST /v2/certificates/search  (legacy syntax)
+        Searches for all X.509 certificates where the subject or SAN contains
+        the target domain. Yields: SANs, issuer, validity period, fingerprint.
+        """
+        self.log.info(f"[Censys] Certificate search for *.{self.domain}")
+        url   = f"{self.BASE}/certificates/search"
+        query = f"parsed.names: {self.domain}"
+        certs_found: List[Dict] = []
+        cursor = None
+
+        for _ in range(3):   # up to 3 pages
+            payload: Dict[str, Any] = {
+                "q":        query,
+                "per_page": 100,
+                "fields": [
+                    "parsed.names", "parsed.subject.common_name",
+                    "parsed.issuer.common_name", "parsed.validity.start",
+                    "parsed.validity.end", "fingerprint_sha256",
+                ],
+            }
+            if cursor:
+                payload["cursor"] = cursor
+            try:
+                resp = self.session.post(url, json=payload, timeout=30)
+                if resp.status_code not in (200, 201):
+                    break
+                result = resp.json().get("result", {})
+                hits   = result.get("hits", [])
+                if not hits:
+                    break
+                certs_found.extend(hits)
+
+                for cert in hits:
+                    for name in cert.get("parsed", {}).get("names", []):
+                        name = name.lstrip("*.").lower()
+                        if name.endswith(self.domain) and name != self.domain:
+                            sub_rec = self.data.subdomains.setdefault(
+                                name, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                            )
+                            if "censys_cert" not in sub_rec["sources"]:
+                                sub_rec["sources"].append("censys_cert")
+
+                cursor = result.get("links", {}).get("next")
+                if not cursor:
+                    break
+                _rate_sleep(2)
+            except Exception as e:
+                self.log.error(f"[Censys] Certificate search error: {e}", exc=e)
+                break
+
+        if not certs_found:
+            self.log.info("[Censys] Certificate search returned no results")
+            _write_placeholder(self.out, "certificate_search.json",
+                               f"POST /v2/certificates/search q={query}",
+                               "(Censys certificate search found no matching certificates)")
+        else:
+            _save_api_result(self.out, "certificate_search.json", {"certs": certs_found})
+        self.log.success(f"[Censys] Certificate search: {len(certs_found)} certificates found")
+
+    # ── IP enrichment ─────────────────────────────────────────────────────────
+
+    def _enrich_known_ips(self):
+        """
+        GET /v2/hosts/{ip}
+        Retrieves structured host view for known IPs: all service ports,
+        banners, TLS data, AS, location, CVEs.
+        """
+        ips = list(self.data.ip_addresses.keys())[:20]
+        if not ips:
+            return
+
+        self.log.info(f"[Censys] Enriching {len(ips)} IPs")
+        enriched: Dict[str, Any] = {}
+
+        for i, ip in enumerate(ips):
+            if i and i % 5 == 0:
+                _rate_sleep(3)
+            try:
+                resp = self.session.get(f"{self.BASE}/hosts/{ip}", timeout=20)
+                if resp.status_code != 200:
+                    continue
+                host_data = resp.json().get("result", {})
+                enriched[ip] = host_data
+
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [], "context": "Censys enrich", "asn": None, "org": None, "geo": None}
+                )
+                asn = host_data.get("autonomous_system", {})
+                if asn:
+                    ip_rec["asn"] = asn.get("asn")
+                    ip_rec["org"] = asn.get("name")
+                loc = host_data.get("location", {})
+                if loc:
+                    ip_rec["geo"] = {
+                        "country": loc.get("country", {}).get("name"),
+                        "city":    loc.get("city", {}).get("name"),
+                        "lat":     loc.get("coordinates", {}).get("latitude"),
+                        "lon":     loc.get("coordinates", {}).get("longitude"),
+                    }
+
+                for svc in host_data.get("services", []):
+                    port = svc.get("port")
+                    if port:
+                        existing = self.data.open_ports.setdefault(ip, [])
+                        if port not in existing:
+                            existing.append(port)
+
+                _rate_sleep(1.5)
+
+            except Exception as e:
+                self.log.error(f"[Censys] IP enrichment error for {ip}: {e}", exc=e)
+
+        if not enriched:
+            self.log.info("[Censys] IP enrichment returned no data")
+            _write_placeholder(self.out, "host_enrichment.json",
+                               "GET /v2/hosts/{ip} (for each known IP)",
+                               "(Censys IP enrichment returned no results)")
+        else:
+            _save_api_result(self.out, "host_enrichment.json", enriched)
+        self.log.success(f"[Censys] IP enrichment complete: {len(enriched)} hosts")
+
+
+# ─── FullHunt ─────────────────────────────────────────────────────────────────
+
+class FullHuntAPI:
+    """
+    FullHunt EASM API integration.
+
+    Endpoints used:
+      GET /api/v1/domain/{domain}/details
+        — subdomains, hosts (IP, ports, techs, CDN status, DNS), DNS records
+      GET /api/v1/domain/{domain}/subdomains
+        — fast subdomain listing endpoint (lighter response)
+      GET /api/v1/host/{host}
+        — per-host detail: services, OS, CDN, cloud, TLS, techs, vulnerabilities
+      GET /api/v1/auth/status
+        — validate key + check API quota
+
+    Auth: X-API-KEY header
+    Free community tier available; professional/enterprise for deeper access
+    """
+
+    BASE = "https://fullhunt.io/api/v1"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.out     = _api_dir(output_dir, "fullhunt")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({"X-API-KEY": self.key})
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[FullHunt] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[FullHunt] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("fullhunt")
+        self.log.info(f"[FullHunt] Starting FullHunt EASM intelligence for {self.domain}")
+        if self._verify_key():
+            self._domain_details()
+            _rate_sleep(2)
+            self._enrich_hosts()
+        self.log.success("[FullHunt] Intelligence phase complete")
+
+    # ── key validation ────────────────────────────────────────────────────────
+
+    def _verify_key(self) -> bool:
+        try:
+            resp = self.session.get(f"{self.BASE}/auth/status", timeout=10)
+            if resp.status_code == 200:
+                status = resp.json()
+                self.log.info(
+                    f"[FullHunt] Authenticated. Plan: {status.get('plan', 'unknown')} | "
+                    f"Credits remaining: {status.get('credits_remaining', '?')}"
+                )
+                return True
+            self.log.warning(f"[FullHunt] Auth failed HTTP {resp.status_code}")
+            return False
+        except Exception as e:
+            self.log.debug(f"[FullHunt] Key verify error: {e}")
+            return False
+
+    # ── domain details ────────────────────────────────────────────────────────
+
+    def _domain_details(self):
+        """
+        GET /api/v1/domain/{domain}/details
+        Returns:
+          - hosts[]: IP, ports, techs, CDN, DNS record, cloud provider
+          - dns: A/AAAA/MX/NS/TXT/CNAME/SOA
+          - statistics: host count, tech count, cloud breakdown
+        """
+        self.log.info(f"[FullHunt] Domain details for {self.domain}")
+        url = f"{self.BASE}/domain/{self.domain}/details"
+        try:
+            resp = self.session.get(url, timeout=30)
+            if resp.status_code == 401:
+                self.log.warning("[FullHunt] Authentication failed (401)")
+                return
+            if resp.status_code == 403:
+                self.log.warning("[FullHunt] Access denied — plan upgrade may be required (403)")
+                return
+            if resp.status_code == 429:
+                self.log.warning("[FullHunt] Rate limited — pausing 30s")
+                _rate_sleep(30)
+                resp = self.session.get(url, timeout=30)
+            if resp.status_code != 200:
+                self.log.error(f"[FullHunt] Domain details HTTP {resp.status_code}")
+                _write_placeholder(self.out, "domain_details.json",
+                                   f"GET /api/v1/domain/{self.domain}/details",
+                                   f"(FullHunt domain details returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload or (not payload.get("hosts") and not payload.get("dns")):
+                self.log.info("[FullHunt] Domain details returned no hosts or DNS data")
+                _write_placeholder(self.out, "domain_details.json",
+                                   f"GET /api/v1/domain/{self.domain}/details",
+                                   "(FullHunt domain details returned no results)")
+            _save_api_result(self.out, "domain_details.json", payload)
+
+            hosts_ingested = 0
+            for host in payload.get("hosts", []):
+                fqdn = host.get("domain", "").lower().rstrip(".")
+                ip   = host.get("ip_address", "")
+
+                if fqdn and fqdn.endswith(self.domain):
+                    sub_rec = self.data.subdomains.setdefault(
+                        fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "fullhunt" not in sub_rec["sources"]:
+                        sub_rec["sources"].append("fullhunt")
+                    if ip and ip not in sub_rec["ips"]:
+                        sub_rec["ips"].append(ip)
+
+                if ip:
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip, {"fqdns": [], "context": "FullHunt EASM", "asn": None, "org": None, "geo": None}
+                    )
+                    if fqdn and fqdn not in ip_rec["fqdns"]:
+                        ip_rec["fqdns"].append(fqdn)
+                    ip_rec["cloud"]      = host.get("cloud_provider")
+                    ip_rec["cdn"]        = host.get("is_cdn")
+                    ip_rec["technologies"] = host.get("technologies", [])
+
+                    for port in host.get("ports", []):
+                        existing = self.data.open_ports.setdefault(ip, [])
+                        if port not in existing:
+                            existing.append(port)
+
+                # Collect technologies
+                for tech in host.get("technologies", []):
+                    tech_list = self.data.technologies.setdefault(tech, [])
+                    if fqdn and fqdn not in tech_list:
+                        tech_list.append(fqdn)
+
+                hosts_ingested += 1
+
+            self.log.success(
+                f"[FullHunt] Domain details: {hosts_ingested} hosts, "
+                f"{len(payload.get('dns', {}))} DNS record types"
+            )
+
+        except Exception as e:
+            self.log.error(f"[FullHunt] Domain details error: {e}", exc=e)
+            _write_placeholder(self.out, "domain_details.json",
+                               f"GET /api/v1/domain/{self.domain}/details",
+                               f"(FullHunt domain details failed: {e})")
+
+    # ── per-host enrichment ───────────────────────────────────────────────────
+
+    def _enrich_hosts(self):
+        """
+        GET /api/v1/host/{host}
+        Per-host deep enrichment: all detected services, TLS cert metadata,
+        OS fingerprint, CDN status, cloud provider, vulnerability flags.
+        Capped at 20 hosts to stay within free-tier credits.
+        """
+        hosts = [
+            fqdn for fqdn in list(self.data.subdomains.keys())[:20]
+            if "fullhunt" in self.data.subdomains[fqdn].get("sources", [])
+        ]
+        if not hosts:
+            hosts = list(self.data.subdomains.keys())[:10]
+        if not hosts:
+            return
+
+        self.log.info(f"[FullHunt] Host enrichment for {len(hosts)} hosts")
+        enriched: Dict[str, Any] = {}
+
+        for i, host in enumerate(hosts):
+            if i and i % 5 == 0:
+                _rate_sleep(3)
+            try:
+                resp = self.session.get(f"{self.BASE}/host/{host}", timeout=20)
+                if resp.status_code != 200:
+                    continue
+                host_data = resp.json()
+                enriched[host] = host_data
+
+                # Ingest technologies
+                for tech in host_data.get("technologies", []):
+                    tech_list = self.data.technologies.setdefault(tech, [])
+                    if host not in tech_list:
+                        tech_list.append(host)
+
+                # Ingest vulnerability flags
+                for vuln in host_data.get("vulnerabilities", []):
+                    add_finding(
+                        self.data, "fullhunt", "vulnerability", CAT_CVE, "high",
+                        f"FullHunt: {vuln}",
+                        host=host, affected=host,
+                        output_file=str(self.out / "host_enrichment.json"),
+                    )
+
+                _rate_sleep(1.5)
+
+            except Exception as e:
+                self.log.error(f"[FullHunt] Host enrichment error for {host}: {e}", exc=e)
+
+        if not enriched:
+            self.log.info("[FullHunt] Host enrichment returned no data")
+            _write_placeholder(self.out, "host_enrichment.json",
+                               "GET /api/v1/host/{host} (for each known host)",
+                               "(FullHunt host enrichment returned no results)")
+        else:
+            _save_api_result(self.out, "host_enrichment.json", enriched)
+        self.log.success(f"[FullHunt] Host enrichment: {len(enriched)} hosts processed")
+
+
+# ─── SecurityTrails ───────────────────────────────────────────────────────────
+
+class SecurityTrailsAPI:
+    """
+    SecurityTrails API v1 integration.
+
+    Endpoints used:
+      GET /v1/domain/{domain}
+        — current DNS + WHOIS statistics: A, AAAA, MX, NS, SOA, TXT, registrar,
+          date created/updated/expires, Alexa rank, mail/host provider
+      GET /v1/domain/{domain}/subdomains
+        — passive subdomain database (up to 2,000 subdomains per domain)
+      GET /v1/domain/{domain}/associated
+        — domains associated by shared WHOIS registrant email/org
+      GET /v1/history/{domain}/dns/{type}
+        — historical DNS records: A, AAAA, MX, NS, SOA, TXT (with timestamps)
+      GET /v1/domain/{domain}/whois
+        — full current WHOIS data with all registrant contact fields
+      POST /v1/domains/list
+        — DSL filter search: find domains by whois_email, whois_org, ns, mx, etc.
+      GET /v1/ips/nearby/{ip}
+        — neighboring IPs: /28 neighbourhood with reverse DNS
+
+    Auth: APIKEY header  (also accepted as ?apikey= query param)
+    Free community tier: 50 API calls/month; paid plans for higher volumes
+    """
+
+    BASE = "https://api.securitytrails.com/v1"
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = _api_dir(output_dir, "securitytrails")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({"APIKEY": self.key})
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[SecurityTrails] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[SecurityTrails] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("securitytrails")
+        self.log.info(f"[SecurityTrails] Starting intelligence for {self.domain}")
+        self._domain_info()
+        _rate_sleep(2)
+        self._subdomains()
+        _rate_sleep(2)
+        self._associated_domains()
+        _rate_sleep(2)
+        self._dns_history()
+        _rate_sleep(2)
+        self._whois()
+        self.log.success("[SecurityTrails] Intelligence phase complete")
+
+    # ── domain info ───────────────────────────────────────────────────────────
+
+    def _domain_info(self):
+        """
+        GET /v1/domain/{domain}
+        Returns current A/MX/NS/SOA/TXT/AAAA records, Alexa rank,
+        mail provider, host provider, apex domain, and WHOIS summary.
+        """
+        self.log.info(f"[SecurityTrails] Domain info for {self.domain}")
+        try:
+            resp = self.session.get(f"{self.BASE}/domain/{self.domain}", timeout=20)
+            if resp.status_code == 401:
+                self.log.warning("[SecurityTrails] API key rejected (401)")
+                return
+            if resp.status_code == 429:
+                self.log.warning("[SecurityTrails] Domain info rate-limited (429) — skipping")
+                _write_placeholder(self.out, "domain_info.json",
+                                   f"GET /v1/domain/{self.domain}",
+                                   "(SecurityTrails domain info rate-limited)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[SecurityTrails] Domain info HTTP {resp.status_code}")
+                _write_placeholder(self.out, "domain_info.json",
+                                   f"GET /v1/domain/{self.domain}",
+                                   f"(SecurityTrails domain info returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            _save_api_result(self.out, "domain_info.json", payload)
+
+            # Ingest DNS records
+            for rtype, records in payload.get("current_dns", {}).items():
+                values = records.get("values", []) if isinstance(records, dict) else []
+                extracted: List[str] = []
+                for v in values:
+                    if isinstance(v, dict):
+                        for field_name in ("ip", "host", "value", "nameserver"):
+                            if field_name in v:
+                                extracted.append(str(v[field_name]).rstrip("."))
+                    elif isinstance(v, str):
+                        extracted.append(v.rstrip("."))
+                if extracted:
+                    existing = self.data.dns_records.setdefault(self.domain, {})
+                    existing[f"securitytrails_{rtype}"] = extracted
+
+            # Ingest mail/host providers
+            for mp in payload.get("mail_provider", []):
+                self.data.technologies.setdefault("mail_provider", [])
+                if mp not in self.data.technologies["mail_provider"]:
+                    self.data.technologies["mail_provider"].append(mp)
+
+            self.log.success(f"[SecurityTrails] Domain info ingested")
+
+        except Exception as e:
+            if _is_rate_limit_err(e):
+                self.log.warning(f"[SecurityTrails] Domain info rate-limited — {e}")
+            else:
+                self.log.error(f"[SecurityTrails] Domain info error: {e}", exc=e)
+            _write_placeholder(self.out, "domain_info.json",
+                               f"GET /v1/domain/{self.domain}",
+                               f"(SecurityTrails domain info failed: {e})")
+
+    # ── subdomains ────────────────────────────────────────────────────────────
+
+    def _subdomains(self):
+        """
+        GET /v1/domain/{domain}/subdomains?includeInactive=false
+        Returns up to 2,000 subdomains from SecurityTrails passive DNS database.
+        Response: { "endpoint": "...", "subdomains": ["www", "api", ...] }
+        """
+        self.log.info(f"[SecurityTrails] Subdomain lookup for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/domain/{self.domain}/subdomains",
+                params={"includeInactive": "false"},
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                self.log.warning("[SecurityTrails] Subdomains rate-limited (429) — skipping")
+                _write_placeholder(self.out, "subdomains.json",
+                                   f"GET /v1/domain/{self.domain}/subdomains",
+                                   "(SecurityTrails subdomains rate-limited)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[SecurityTrails] Subdomains HTTP {resp.status_code}")
+                _write_placeholder(self.out, "subdomains.json",
+                                   f"GET /v1/domain/{self.domain}/subdomains",
+                                   f"(SecurityTrails subdomains returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("subdomains"):
+                self.log.info("[SecurityTrails] Subdomains returned no results")
+                _write_placeholder(self.out, "subdomains.json",
+                                   f"GET /v1/domain/{self.domain}/subdomains",
+                                   "(SecurityTrails subdomain lookup found no subdomains)")
+            _save_api_result(self.out, "subdomains.json", payload)
+            new_count = 0
+
+            for sub in payload.get("subdomains", []):
+                fqdn = f"{sub}.{self.domain}".lower()
+                rec  = self.data.subdomains.setdefault(
+                    fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                )
+                if "securitytrails" not in rec["sources"]:
+                    rec["sources"].append("securitytrails")
+                    new_count += 1
+
+            self.log.success(
+                f"[SecurityTrails] Subdomains: {payload.get('subdomain_count', len(payload.get('subdomains', [])))} "
+                f"found, {new_count} new"
+            )
+
+        except Exception as e:
+            if _is_rate_limit_err(e):
+                self.log.warning(f"[SecurityTrails] Subdomains rate-limited — {e}")
+            else:
+                self.log.error(f"[SecurityTrails] Subdomains error: {e}", exc=e)
+            _write_placeholder(self.out, "subdomains.json",
+                               f"GET /v1/domain/{self.domain}/subdomains",
+                               f"(SecurityTrails subdomains failed: {e})")
+
+    # ── associated domains ────────────────────────────────────────────────────
+
+    def _associated_domains(self):
+        """
+        GET /v1/domain/{domain}/associated
+        Returns domains sharing the same WHOIS registrant email or organisation —
+        identifies the full portfolio of domains owned by the same company.
+        """
+        self.log.info(f"[SecurityTrails] Associated domains for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/domain/{self.domain}/associated",
+                params={"page": 1},
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                self.log.warning("[SecurityTrails] Associated domains rate-limited (429) — skipping")
+                _write_placeholder(self.out, "associated_domains.json",
+                                   f"GET /v1/domain/{self.domain}/associated",
+                                   "(SecurityTrails associated domains rate-limited)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[SecurityTrails] Associated domains HTTP {resp.status_code}")
+                _write_placeholder(self.out, "associated_domains.json",
+                                   f"GET /v1/domain/{self.domain}/associated",
+                                   f"(SecurityTrails associated domains returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("records"):
+                self.log.info("[SecurityTrails] Associated domains returned no records")
+                _write_placeholder(self.out, "associated_domains.json",
+                                   f"GET /v1/domain/{self.domain}/associated",
+                                   "(SecurityTrails found no associated domains)")
+            _save_api_result(self.out, "associated_domains.json", payload)
+            new_count = 0
+
+            for item in payload.get("records", []):
+                hostname = item.get("hostname", "")
+                if not hostname:
+                    continue
+                hostname = hostname.lower().rstrip(".")
+                rec = self.data.associated_domains.setdefault(hostname, {
+                    "source": "securitytrails",
+                    "registrar": item.get("whois", {}).get("registrar"),
+                    "created":   item.get("whois", {}).get("createdDate"),
+                    "company":   item.get("computed", {}).get("company_name"),
+                    "mail_provider": item.get("mail_provider", []),
+                    "host_provider": item.get("host_provider", []),
+                })
+                new_count += 1
+
+            self.log.success(
+                f"[SecurityTrails] Associated domains: {payload.get('record_count', new_count)} found"
+            )
+
+        except Exception as e:
+            if _is_rate_limit_err(e):
+                self.log.warning(f"[SecurityTrails] Associated domains rate-limited — {e}")
+            else:
+                self.log.error(f"[SecurityTrails] Associated domains error: {e}", exc=e)
+            _write_placeholder(self.out, "associated_domains.json",
+                               f"GET /v1/domain/{self.domain}/associated",
+                               f"(SecurityTrails associated domains failed: {e})")
+
+    # ── DNS history ───────────────────────────────────────────────────────────
+
+    def _dns_history(self):
+        """
+        GET /v1/history/{domain}/dns/{type}
+        Retrieves historical A records to surface old IPs, CDN migrations,
+        previously used hosting providers, and infrastructure changes.
+        """
+        self.log.info(f"[SecurityTrails] DNS history (A records) for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/history/{self.domain}/dns/a",
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                self.log.warning("[SecurityTrails] DNS history rate-limited (429) — skipping")
+                _write_placeholder(self.out, "dns_history_a.json",
+                                   f"GET /v1/history/{self.domain}/dns/a",
+                                   "(SecurityTrails DNS history rate-limited)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[SecurityTrails] DNS history HTTP {resp.status_code}")
+                _write_placeholder(self.out, "dns_history_a.json",
+                                   f"GET /v1/history/{self.domain}/dns/a",
+                                   f"(SecurityTrails DNS history returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("records"):
+                self.log.info("[SecurityTrails] DNS history returned no records")
+                _write_placeholder(self.out, "dns_history_a.json",
+                                   f"GET /v1/history/{self.domain}/dns/a",
+                                   "(SecurityTrails DNS history found no historical records)")
+            _save_api_result(self.out, "dns_history_a.json", payload)
+            historical_ips: Set[str] = set()
+
+            for record in payload.get("records", []):
+                for val in record.get("values", []):
+                    ip = val.get("ip", "")
+                    if ip:
+                        historical_ips.add(ip)
+                        ip_rec = self.data.ip_addresses.setdefault(
+                            ip, {"fqdns": [], "context": "SecurityTrails historical A", "asn": None, "org": None, "geo": None}
+                        )
+                        ip_rec["securitytrails_historical"] = True
+                        first_seen = record.get("first_seen", "")
+                        last_seen  = record.get("last_seen",  "")
+                        ip_rec["first_seen"] = first_seen
+                        ip_rec["last_seen"]  = last_seen
+
+            self.log.success(
+                f"[SecurityTrails] DNS history: {len(payload.get('records', []))} record sets, "
+                f"{len(historical_ips)} unique historical IPs"
+            )
+
+        except Exception as e:
+            if _is_rate_limit_err(e):
+                self.log.warning(f"[SecurityTrails] DNS history rate-limited — {e}")
+            else:
+                self.log.error(f"[SecurityTrails] DNS history error: {e}", exc=e)
+            _write_placeholder(self.out, "dns_history_a.json",
+                               f"GET /v1/history/{self.domain}/dns/a",
+                               f"(SecurityTrails DNS history failed: {e})")
+
+    # ── WHOIS ─────────────────────────────────────────────────────────────────
+
+    def _whois(self):
+        """
+        GET /v1/domain/{domain}/whois
+        Full WHOIS: registrant name/email/org/address/phone, registrar,
+        created/updated/expires dates, name servers.
+        """
+        self.log.info(f"[SecurityTrails] WHOIS for {self.domain}")
+        try:
+            resp = self.session.get(f"{self.BASE}/domain/{self.domain}/whois", timeout=20)
+            if resp.status_code == 429:
+                self.log.warning("[SecurityTrails] WHOIS rate-limited (429) — skipping")
+                _write_placeholder(self.out, "whois.json",
+                                   f"GET /v1/domain/{self.domain}/whois",
+                                   "(SecurityTrails WHOIS rate-limited)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[SecurityTrails] WHOIS HTTP {resp.status_code}")
+                _write_placeholder(self.out, "whois.json",
+                                   f"GET /v1/domain/{self.domain}/whois",
+                                   f"(SecurityTrails WHOIS returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            _save_api_result(self.out, "whois.json", payload)
+
+            # Merge WHOIS data into shared structure
+            self.data.whois_data[self.domain] = {
+                "source":    "securitytrails",
+                "registrar": payload.get("registrar"),
+                "created":   payload.get("created"),
+                "updated":   payload.get("updated"),
+                "expires":   payload.get("expires"),
+                "nameservers": payload.get("nameServers", []),
+                "contacts":  payload.get("contacts", []),
+            }
+
+            # Harvest contact emails
+            for contact in payload.get("contacts", []):
+                email = contact.get("email", "")
+                if email and re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                    rec = self.data.email_addresses.setdefault(email, {
+                        "source": "securitytrails_whois",
+                        "type":   contact.get("type", ""),
+                        "name":   contact.get("name", ""),
+                        "org":    contact.get("organization", ""),
+                    })
+
+            self.log.success(f"[SecurityTrails] WHOIS data ingested for {self.domain}")
+
+        except Exception as e:
+            if _is_rate_limit_err(e):
+                self.log.warning(f"[SecurityTrails] WHOIS rate-limited — {e}")
+            else:
+                self.log.error(f"[SecurityTrails] WHOIS error: {e}", exc=e)
+            _write_placeholder(self.out, "whois.json",
+                               f"GET /v1/domain/{self.domain}/whois",
+                               f"(SecurityTrails WHOIS failed: {e})")
+
+
+# ─── Netlas ───────────────────────────────────────────────────────────────────
+
+class NetlasAPI:
+    """
+    Netlas.io multi-collection intelligence API.
+
+    Endpoints used:
+      GET  /api/host/{domain_or_ip}/
+        — unified host summary: DNS, WHOIS, ports, IoC score, related domains, geo
+      GET  /api/responses/
+        — internet scan responses: services, banners, tech stacks matching a query
+      GET  /api/domains/
+        — domain DNS collection search (find related domains, NS, TXT)
+      GET  /api/certificates/
+        — SSL certificate search by domain name
+      GET  /api/whois-ip/
+        — IP WHOIS data: ASN, netblock owner, abuse contacts
+      GET  /api/whois-domain/
+        — domain WHOIS data: registrant, registrar, dates, name servers
+
+    Auth: X-API-Key header  (Bearer token also accepted)
+    Free community tier: 50 requests/day; paid plans for bulk access
+    """
+
+    BASE = "https://app.netlas.io"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.out     = _api_dir(output_dir, "netlas")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        # Netlas free tier: 50 req/day.  Do NOT auto-retry 429 — it burns quota
+        # fast and turns a rate-limit into a RetryError.  Handle 429 explicitly.
+        if REQUESTS_AVAILABLE:
+            self.session = requests.Session()
+            _nr = Retry(total=2, backoff_factor=1.0, status_forcelist=[500, 503, 504])
+            _na = HTTPAdapter(max_retries=_nr)
+            self.session.mount("https://", _na)
+            self.session.mount("http://",  _na)
+            self.session.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
+            })
+            if self.key:
+                self.session.headers.update({"X-API-Key": self.key})
+        else:
+            self.session = None
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[Netlas] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[Netlas] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("netlas")
+        self.log.info(f"[Netlas] Starting Netlas intelligence for {self.domain}")
+        self._host_summary()
+        _rate_sleep(5)
+        self._domain_dns_search()
+        _rate_sleep(5)
+        self._certificate_search()
+        _rate_sleep(5)
+        self._whois_domain()
+        _rate_sleep(5)
+        self._enrich_ips()
+        self.log.success("[Netlas] Intelligence phase complete")
+
+    # ── host summary ──────────────────────────────────────────────────────────
+
+    def _host_summary(self):
+        """
+        GET /api/host/{domain}/
+        Returns a synthesised view of a host: DNS records, WHOIS snapshot,
+        exposed ports, related domains, IoC threat score, geo, privacy flags
+        (VPN/proxy/Tor detection).
+        """
+        self.log.info(f"[Netlas] Host summary for {self.domain}")
+        try:
+            resp = self.session.get(f"{self.BASE}/api/host/{self.domain}/", timeout=20)
+            if resp.status_code == 429:
+                self.log.warning("[Netlas] Rate limited (429) on host summary — skipping remaining calls")
+                return
+            if resp.status_code == 401:
+                self.log.warning("[Netlas] API key rejected (401)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[Netlas] Host summary HTTP {resp.status_code}")
+                _write_placeholder(self.out, "host_summary.json",
+                                   f"GET /api/host/{self.domain}/",
+                                   f"(Netlas host summary returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            _save_api_result(self.out, "host_summary.json", payload)
+
+            # Ingest related domains
+            for related in payload.get("related_domains", []):
+                rd = related.lower().rstrip(".")
+                if rd.endswith(self.domain):
+                    sub_rec = self.data.subdomains.setdefault(
+                        rd, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "netlas" not in sub_rec["sources"]:
+                        sub_rec["sources"].append("netlas")
+
+            # Ingest port data
+            for port_obj in payload.get("ports", []):
+                ip = payload.get("ip", "")
+                p  = port_obj.get("port") if isinstance(port_obj, dict) else port_obj
+                if ip and p:
+                    existing = self.data.open_ports.setdefault(ip, [])
+                    if p not in existing:
+                        existing.append(p)
+
+            # Ingest IoC findings
+            for ioc in payload.get("ioc", []):
+                score = ioc.get("score", {}).get("total", 0)
+                if score > 30:
+                    add_finding(
+                        self.data, "netlas", "ioc", CAT_THREAT_INTEL,
+                        "high" if score > 60 else "medium",
+                        f"Netlas IoC indicator detected (score: {score}): {ioc.get('threat', [])}",
+                        domain=self.domain, affected=self.domain,
+                        ioc_score=score, tags=ioc.get("tags", []),
+                        output_file=str(self.out / "host_summary.json"),
+                    )
+
+            self.log.success(f"[Netlas] Host summary ingested for {self.domain}")
+
+        except Exception as e:
+            self.log.error(f"[Netlas] Host summary error: {e}", exc=e)
+            _write_placeholder(self.out, "host_summary.json",
+                               f"GET /api/host/{self.domain}/",
+                               f"(Netlas host summary failed: {e})")
+
+    # ── domain DNS search ─────────────────────────────────────────────────────
+
+    def _domain_dns_search(self):
+        """
+        GET /api/domains/?q=domain:{target}
+        Searches Netlas domain DNS collection for records associated with
+        the target domain. Returns A, AAAA, NS, MX, TXT records.
+        """
+        self.log.info(f"[Netlas] Domain DNS search for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/domains/",
+                params={"q": f"domain:{self.domain}", "start": 0},
+                timeout=25,
+            )
+            if resp.status_code == 429:
+                self.log.warning("[Netlas] Rate limited (429) on domain DNS search — skipping")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[Netlas] Domain DNS search HTTP {resp.status_code}")
+                _write_placeholder(self.out, "domain_dns.json",
+                                   f"GET /api/domains/?q=domain:{self.domain}",
+                                   f"(Netlas domain DNS search returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("items"):
+                self.log.info("[Netlas] Domain DNS search returned no items")
+                _write_placeholder(self.out, "domain_dns.json",
+                                   f"GET /api/domains/?q=domain:{self.domain}",
+                                   "(Netlas domain DNS search found no records)")
+            _save_api_result(self.out, "domain_dns.json", payload)
+            count = 0
+
+            for item in payload.get("items", []):
+                item_data = item.get("data", {})
+                for rtype in ("a", "aaaa", "ns", "mx", "txt"):
+                    values = item_data.get(rtype, [])
+                    if values:
+                        existing = self.data.dns_records.setdefault(self.domain, {})
+                        existing[f"netlas_{rtype}"] = values
+                        if rtype == "a":
+                            for ip in values:
+                                ip_str = ip if isinstance(ip, str) else str(ip)
+                                self.data.ip_addresses.setdefault(
+                                    ip_str, {"fqdns": [self.domain], "context": "Netlas DNS", "asn": None, "org": None, "geo": None}
+                                )
+                        count += 1
+
+            self.log.success(f"[Netlas] Domain DNS search: {count} record types ingested")
+
+        except Exception as e:
+            self.log.error(f"[Netlas] Domain DNS search error: {e}", exc=e)
+            _write_placeholder(self.out, "domain_dns.json",
+                               f"GET /api/domains/?q=domain:{self.domain}",
+                               f"(Netlas domain DNS search failed: {e})")
+
+    # ── certificate search ────────────────────────────────────────────────────
+
+    def _certificate_search(self):
+        """
+        GET /api/certificates/?q=certificate.subject.common_name:{domain}
+        Searches the Netlas certificate collection (from CT logs + active scanning)
+        for certs issued to the target domain or its subdomains.
+        """
+        self.log.info(f"[Netlas] Certificate search for {self.domain}")
+        try:
+            query = f"certificate.subject.common_name:{self.domain} OR certificate.subject_alternative_name:{self.domain}"
+            resp  = self.session.get(
+                f"{self.BASE}/api/certificates/",
+                params={"q": query, "start": 0},
+                timeout=25,
+            )
+            if resp.status_code == 429:
+                self.log.warning("[Netlas] Rate limited (429) on certificate search — skipping")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[Netlas] Certificate search HTTP {resp.status_code}")
+                _write_placeholder(self.out, "certificates.json",
+                                   f"GET /api/certificates/?q={query}",
+                                   f"(Netlas certificate search returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("items"):
+                self.log.info("[Netlas] Certificate search returned no items")
+                _write_placeholder(self.out, "certificates.json",
+                                   f"GET /api/certificates/?q={query}",
+                                   "(Netlas certificate search found no matching certificates)")
+            _save_api_result(self.out, "certificates.json", payload)
+            new_count = 0
+
+            for item in payload.get("items", []):
+                cert_data = item.get("data", {}).get("certificate", {})
+                # Extract SANs
+                sans = cert_data.get("subject_alternative_name", [])
+                if isinstance(sans, str):
+                    sans = [s.strip() for s in sans.split(",")]
+                for san in sans:
+                    san = san.lstrip("*.").lower().rstrip(".")
+                    if san.endswith(self.domain) and san != self.domain:
+                        sub_rec = self.data.subdomains.setdefault(
+                            san, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                        )
+                        if "netlas_cert" not in sub_rec["sources"]:
+                            sub_rec["sources"].append("netlas_cert")
+                            new_count += 1
+
+            self.log.success(f"[Netlas] Certificate search: {new_count} new subdomains from certs")
+
+        except Exception as e:
+            self.log.error(f"[Netlas] Certificate search error: {e}", exc=e)
+            _write_placeholder(self.out, "certificates.json",
+                               f"GET /api/certificates/?q=certificate.subject.common_name:{self.domain}",
+                               f"(Netlas certificate search failed: {e})")
+
+    # ── domain WHOIS ──────────────────────────────────────────────────────────
+
+    def _whois_domain(self):
+        """
+        GET /api/whois-domain/?q=domain:{domain}
+        Returns structured WHOIS data from Netlas's curated WHOIS database:
+        registrant, registrar, name servers, dates, EPP status codes.
+        """
+        self.log.info(f"[Netlas] Domain WHOIS for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/whois-domain/",
+                params={"q": f"domain:{self.domain}", "start": 0},
+                timeout=20,
+            )
+            if resp.status_code == 429:
+                self.log.warning("[Netlas] Rate limited (429) on WHOIS domain — skipping")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[Netlas] WHOIS domain HTTP {resp.status_code}")
+                _write_placeholder(self.out, "whois_domain.json",
+                                   f"GET /api/whois-domain/?q=domain:{self.domain}",
+                                   f"(Netlas WHOIS domain returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("items"):
+                self.log.info("[Netlas] WHOIS domain returned no items")
+                _write_placeholder(self.out, "whois_domain.json",
+                                   f"GET /api/whois-domain/?q=domain:{self.domain}",
+                                   "(Netlas WHOIS domain found no data)")
+            _save_api_result(self.out, "whois_domain.json", payload)
+
+            for item in payload.get("items", []):
+                whois = item.get("data", {})
+                if whois:
+                    existing = self.data.whois_data.setdefault(self.domain, {})
+                    existing["netlas"] = {
+                        "registrar":    whois.get("registrar"),
+                        "created_date": whois.get("created_date"),
+                        "last_updated": whois.get("last_updated"),
+                        "expires_date": whois.get("expires_date"),
+                        "status":       whois.get("status", []),
+                        "nameservers":  whois.get("nameservers", []),
+                        "registrant":   whois.get("registrant", {}),
+                    }
+                    # Harvest registrant email
+                    reg_email = whois.get("registrant", {}).get("email", "")
+                    if reg_email and re.match(r"[^@]+@[^@]+\.[^@]+", reg_email):
+                        self.data.email_addresses.setdefault(reg_email, {
+                            "source": "netlas_whois",
+                            "type":   "registrant",
+                            "name":   whois.get("registrant", {}).get("name", ""),
+                        })
+                    break   # use first match
+
+            self.log.success(f"[Netlas] WHOIS data ingested")
+
+        except Exception as e:
+            self.log.error(f"[Netlas] WHOIS domain error: {e}", exc=e)
+            _write_placeholder(self.out, "whois_domain.json",
+                               f"GET /api/whois-domain/?q=domain:{self.domain}",
+                               f"(Netlas WHOIS domain failed: {e})")
+
+    # ── IP WHOIS enrichment ───────────────────────────────────────────────────
+
+    def _enrich_ips(self):
+        """
+        GET /api/whois-ip/?q=ip:{ip}
+        Retrieves ASN, netblock owner, org name, abuse contact, and country
+        for known IPs from Netlas's IP WHOIS collection.
+        Capped at 15 IPs to stay within free-tier request budget.
+        """
+        ips = list(self.data.ip_addresses.keys())[:15]
+        if not ips:
+            return
+
+        self.log.info(f"[Netlas] IP WHOIS enrichment for {len(ips)} IPs")
+        enriched: Dict[str, Any] = {}
+
+        for i, ip in enumerate(ips):
+            if i and i % 5 == 0:
+                _rate_sleep(3)
+            try:
+                resp = self.session.get(
+                    f"{self.BASE}/api/whois-ip/",
+                    params={"q": f"ip:{ip}", "start": 0},
+                    timeout=15,
+                )
+                if resp.status_code == 429:
+                    self.log.warning(f"[Netlas] Rate limited (429) on IP WHOIS — stopping enrichment at {i}/{len(ips)} IPs")
+                    break
+                if resp.status_code != 200:
+                    continue
+
+                items = resp.json().get("items", [])
+                if items:
+                    w = items[0].get("data", {})
+                    enriched[ip] = w
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip, {"fqdns": [], "context": "Netlas IP WHOIS", "asn": None, "org": None, "geo": None}
+                    )
+                    for net in w.get("related_nets", []):
+                        if not ip_rec.get("org") and net.get("organization"):
+                            ip_rec["org"] = net["organization"]
+                        if not ip_rec.get("asn"):
+                            asn_val = net.get("asn", "")
+                            if asn_val:
+                                ip_rec["asn"] = asn_val
+                _rate_sleep(1.5)
+
+            except Exception as e:
+                self.log.error(f"[Netlas] IP WHOIS error for {ip}: {e}", exc=e)
+
+        if not enriched:
+            self.log.info("[Netlas] IP WHOIS enrichment returned no data")
+            _write_placeholder(self.out, "ip_whois.json",
+                               "GET /api/whois-ip/?q=ip:{ip} (for each known IP)",
+                               "(Netlas IP WHOIS enrichment returned no results)")
+        else:
+            _save_api_result(self.out, "ip_whois.json", enriched)
+        self.log.success(f"[Netlas] IP WHOIS enrichment complete: {len(enriched)} IPs")
+
+
+# ─── VirusTotal ───────────────────────────────────────────────────────────────
+
+class VirusTotalAPI:
+    """
+    VirusTotal API v3 integration.
+
+    Endpoints used:
+      GET /api/v3/domains/{domain}
+        — domain attributes: reputation score (70+ AV vendors), categories,
+          creation date, last modification, WHOIS, popularity ranks
+      GET /api/v3/domains/{domain}/subdomains
+        — domains seen hierarchically below the target (direct subdomains only)
+      GET /api/v3/domains/{domain}/resolutions
+        — passive DNS: all IP→hostname mappings VT has observed (timestamped)
+      GET /api/v3/domains/{domain}/related_action_types
+        — communicating files, downloaded files, referrer files, URLS
+      GET /api/v3/ip_addresses/{ip}
+        — IP reputation, ASN, country, passive DNS, SSL certs, malicious count
+      GET /api/v3/ip_addresses/{ip}/resolutions
+        — all hostnames VT has observed resolving to this IP
+
+    Auth: x-apikey header
+    Free public API: 4 requests/minute, 500/day, 15,500/month
+    """
+
+    BASE = "https://www.virustotal.com/api/v3"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.out     = _api_dir(output_dir, "virustotal")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({"x-apikey": self.key})
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[VirusTotal] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[VirusTotal] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("virustotal")
+        self.log.info(f"[VirusTotal] Starting VirusTotal intelligence for {self.domain}")
+        self._domain_report()
+        _rate_sleep(16)   # free tier: 4 req/min → 15s safe gap
+        self._subdomains()
+        _rate_sleep(16)
+        self._passive_dns_domain()
+        _rate_sleep(16)
+        self._enrich_ips()
+        self.log.success("[VirusTotal] Intelligence phase complete")
+
+    # ── domain report ─────────────────────────────────────────────────────────
+
+    def _domain_report(self):
+        """
+        GET /api/v3/domains/{domain}
+        Returns domain object with:
+          - last_analysis_stats: malicious/suspicious/harmless counts
+          - last_analysis_results: per-vendor verdicts
+          - categories: Bitdefender/Cisco Umbrella/Fortinet categories
+          - creation_date, last_modification_date
+          - whois (raw text string)
+          - popularity_ranks: Alexa/Majestic/Cisco Umbrella rank
+          - registrar, jarm
+        """
+        self.log.info(f"[VirusTotal] Domain report for {self.domain}")
+        try:
+            resp = self.session.get(f"{self.BASE}/domains/{self.domain}", timeout=20)
+            if resp.status_code == 401:
+                self.log.warning("[VirusTotal] API key rejected (401)")
+                return
+            if resp.status_code == 429:
+                self.log.warning("[VirusTotal] Rate limit hit — pausing 60s")
+                _rate_sleep(60)
+                resp = self.session.get(f"{self.BASE}/domains/{self.domain}", timeout=20)
+            if resp.status_code != 200:
+                self.log.error(f"[VirusTotal] Domain report HTTP {resp.status_code}")
+                _write_placeholder(self.out, "domain_report.json",
+                                   f"GET /api/v3/domains/{self.domain}",
+                                   f"(VirusTotal domain report returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            _save_api_result(self.out, "domain_report.json", payload)
+            attrs   = payload.get("data", {}).get("attributes", {})
+            stats   = attrs.get("last_analysis_stats", {})
+            malicious = stats.get("malicious", 0)
+
+            if malicious > 0:
+                add_finding(
+                    self.data, "virustotal", "malicious_domain", CAT_THREAT_INTEL, "critical",
+                    f"VirusTotal: domain flagged malicious by {malicious} vendors",
+                    domain=self.domain, affected=self.domain,
+                    vt_stats=stats,
+                    output_file=str(self.out / "domain_report.json"),
+                )
+
+            self.data.whois_data.setdefault(self.domain, {})["virustotal"] = {
+                "registrar":         attrs.get("registrar"),
+                "creation_date":     attrs.get("creation_date"),
+                "reputation":        attrs.get("reputation"),
+                "popularity_ranks":  attrs.get("popularity_ranks", {}),
+                "categories":        attrs.get("categories", {}),
+                "malicious_vendors": malicious,
+            }
+
+            self.log.success(
+                f"[VirusTotal] Domain report: reputation={attrs.get('reputation', '?')}, "
+                f"malicious={malicious}"
+            )
+
+        except Exception as e:
+            self.log.error(f"[VirusTotal] Domain report error: {e}", exc=e)
+            _write_placeholder(self.out, "domain_report.json",
+                               f"GET /api/v3/domains/{self.domain}",
+                               f"(VirusTotal domain report failed: {e})")
+
+    # ── subdomains ────────────────────────────────────────────────────────────
+
+    def _subdomains(self):
+        """
+        GET /api/v3/domains/{domain}/subdomains
+        Returns a paginated list of subdomain objects seen under the target domain.
+        Each object includes its own analysis stats. Non-recursive (direct children only).
+        """
+        self.log.info(f"[VirusTotal] Subdomains relationship for {self.domain}")
+        all_subs: List[Dict] = []
+        url = f"{self.BASE}/domains/{self.domain}/subdomains"
+        params: Dict[str, Any] = {"limit": 40}
+
+        for page_num in range(1, 6):
+            try:
+                resp = self.session.get(url, params=params, timeout=20)
+                if resp.status_code == 429:
+                    _rate_sleep(60)
+                    resp = self.session.get(url, params=params, timeout=20)
+                if resp.status_code != 200:
+                    break
+
+                payload = resp.json()
+                items   = payload.get("data", [])
+                if not items:
+                    break
+
+                all_subs.extend(items)
+                for item in items:
+                    sub_id = item.get("id", "").lower()
+                    if sub_id and sub_id.endswith(self.domain):
+                        sub_rec = self.data.subdomains.setdefault(
+                            sub_id, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                        )
+                        if "virustotal" not in sub_rec["sources"]:
+                            sub_rec["sources"].append("virustotal")
+                        # Check reputation
+                        sub_stats = item.get("attributes", {}).get("last_analysis_stats", {})
+                        if sub_stats.get("malicious", 0) > 0:
+                            add_finding(
+                                self.data, "virustotal", "malicious_subdomain",
+                                CAT_THREAT_INTEL, "high",
+                                f"VirusTotal: subdomain flagged malicious by {sub_stats['malicious']} vendors",
+                                host=sub_id, affected=sub_id,
+                                output_file=str(self.out / "subdomains.json"),
+                            )
+
+                cursor = payload.get("links", {}).get("next", "")
+                if not cursor:
+                    break
+                # Extract cursor token from full next URL
+                cursor_match = re.search(r"cursor=([^&]+)", cursor)
+                if cursor_match:
+                    params["cursor"] = cursor_match.group(1)
+                _rate_sleep(16)
+
+            except Exception as e:
+                self.log.error(f"[VirusTotal] Subdomains error page {page_num}: {e}", exc=e)
+                break
+
+        if not all_subs:
+            self.log.info("[VirusTotal] Subdomains returned no results")
+            _write_placeholder(self.out, "subdomains.json",
+                               f"GET /api/v3/domains/{self.domain}/subdomains",
+                               "(VirusTotal subdomains found no results)")
+        else:
+            _save_api_result(self.out, "subdomains.json", {"data": all_subs})
+        self.log.success(f"[VirusTotal] Subdomains: {len(all_subs)} found")
+
+    # ── passive DNS (domain resolutions) ─────────────────────────────────────
+
+    def _passive_dns_domain(self):
+        """
+        GET /api/v3/domains/{domain}/resolutions
+        Returns all IP↔hostname resolution pairs VT has observed for the domain,
+        each timestamped. Critical for historical infrastructure mapping.
+        """
+        self.log.info(f"[VirusTotal] Passive DNS for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/domains/{self.domain}/resolutions",
+                params={"limit": 40},
+                timeout=20,
+            )
+            if resp.status_code == 429:
+                _rate_sleep(60)
+                resp = self.session.get(
+                    f"{self.BASE}/domains/{self.domain}/resolutions",
+                    params={"limit": 40},
+                    timeout=20,
+                )
+            if resp.status_code != 200:
+                self.log.error(f"[VirusTotal] Passive DNS HTTP {resp.status_code}")
+                _write_placeholder(self.out, "passive_dns.json",
+                                   f"GET /api/v3/domains/{self.domain}/resolutions",
+                                   f"(VirusTotal passive DNS returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload.get("data"):
+                self.log.info("[VirusTotal] Passive DNS returned no resolutions")
+                _write_placeholder(self.out, "passive_dns.json",
+                                   f"GET /api/v3/domains/{self.domain}/resolutions",
+                                   "(VirusTotal passive DNS found no IP resolutions)")
+            _save_api_result(self.out, "passive_dns.json", payload)
+            new_ips = 0
+
+            for res in payload.get("data", []):
+                attrs = res.get("attributes", {})
+                ip    = attrs.get("ip_address", "")
+                if ip:
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip, {
+                            "fqdns":    [self.domain],
+                            "context":  "VirusTotal passive DNS",
+                            "asn":      None,
+                            "org":      None,
+                            "geo":      None,
+                            "first_seen": attrs.get("date"),
+                        }
+                    )
+                    if self.domain not in ip_rec["fqdns"]:
+                        ip_rec["fqdns"].append(self.domain)
+                    ip_rec["vt_last_seen"] = attrs.get("date")
+                    new_ips += 1
+
+            self.log.success(f"[VirusTotal] Passive DNS: {new_ips} IP resolutions")
+
+        except Exception as e:
+            self.log.error(f"[VirusTotal] Passive DNS error: {e}", exc=e)
+            _write_placeholder(self.out, "passive_dns.json",
+                               f"GET /api/v3/domains/{self.domain}/resolutions",
+                               f"(VirusTotal passive DNS failed: {e})")
+
+    # ── IP enrichment ─────────────────────────────────────────────────────────
+
+    def _enrich_ips(self):
+        """
+        GET /api/v3/ip_addresses/{ip}
+        For each known IP, retrieves: reputation, ASN, country, passive DNS,
+        last HTTPS certificate, vendor analysis stats.
+        Capped at 10 IPs due to free-tier rate limits.
+        """
+        ips = list(self.data.ip_addresses.keys())[:10]
+        if not ips:
+            return
+
+        self.log.info(f"[VirusTotal] IP enrichment for {len(ips)} IPs")
+        enriched: Dict[str, Any] = {}
+
+        for i, ip in enumerate(ips):
+            if i:
+                _rate_sleep(16)
+            try:
+                resp = self.session.get(f"{self.BASE}/ip_addresses/{ip}", timeout=20)
+                if resp.status_code != 200:
+                    continue
+                ip_data = resp.json()
+                enriched[ip] = ip_data
+
+                attrs  = ip_data.get("data", {}).get("attributes", {})
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [], "context": "VirusTotal IP", "asn": None, "org": None, "geo": None}
+                )
+                ip_rec["asn"]             = attrs.get("asn")
+                ip_rec["org"]             = attrs.get("as_owner")
+                ip_rec["country"]         = attrs.get("country")
+                ip_rec["vt_reputation"]   = attrs.get("reputation")
+                mal = attrs.get("last_analysis_stats", {}).get("malicious", 0)
+                if mal > 0:
+                    add_finding(
+                        self.data, "virustotal", "malicious_ip", CAT_THREAT_INTEL, "high",
+                        "IP Address Flagged as Malicious",
+                        ip=ip, affected=ip, host=self.domain,
+                        output_file=str(self.out / "ip_enrichment.json"),
+                    )
+
+            except Exception as e:
+                self.log.error(f"[VirusTotal] IP enrichment error for {ip}: {e}", exc=e)
+
+        if not enriched:
+            self.log.info("[VirusTotal] IP enrichment returned no data")
+            _write_placeholder(self.out, "ip_enrichment.json",
+                               "GET /api/v3/ip_addresses/{ip} (for each known IP)",
+                               "(VirusTotal IP enrichment returned no results)")
+        else:
+            _save_api_result(self.out, "ip_enrichment.json", enriched)
+        self.log.success(f"[VirusTotal] IP enrichment: {len(enriched)} IPs")
+
+
+# ─── URLScan.io ───────────────────────────────────────────────────────────────
+
+class URLScanAPI:
+    """
+    URLScan.io API integration.
+
+    Endpoints used:
+      GET  /api/v1/search/?q=domain:{domain}
+        — search historical scans for the domain: page title, IP, ASN,
+          TLS cert, detected technologies (via Wappalyzer), security verdicts
+      POST /api/v1/scan/
+        — trigger a new scan (optional; creates a browser-automated snapshot)
+      GET  /api/v1/result/{uuid}/
+        — retrieve complete scan result: DOM, all requests, cookies, links,
+          screenshots, page metadata, verdicts
+
+    Auth: api-key header  (unauthenticated: 5 searches/minute; authenticated: 120/minute)
+    Free tier: unlimited searches on public scans; scans cost quota credits
+    """
+
+    BASE = "https://urlscan.io/api/v1"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.out     = _api_dir(output_dir, "urlscan")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({"api-key": self.key})
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[URLScan] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("urlscan")
+        # Search works without a key (public scans only); key widens access
+        self.log.info(f"[URLScan] Starting URLScan.io intelligence for {self.domain}")
+        self._search()
+        self.log.success("[URLScan] Intelligence phase complete")
+
+    # ── search ────────────────────────────────────────────────────────────────
+
+    def _search(self):
+        """
+        GET /api/v1/search/?q=page.domain:{domain}&size=100
+        Returns up to 100 historical scan results for pages in the target domain.
+        Each result provides:
+          - page: IP, ASN, country, title, status, URL, MIME
+          - verdicts: URLScan + community malicious flag
+          - task: time, country of scanner
+          - result UUID (for fetching full scan data)
+          - content.technologies: Wappalyzer-detected tech stack per scan
+        """
+        self.log.info(f"[URLScan] Search for page.domain:{self.domain}")
+        url   = f"{self.BASE}/search/"
+        query = f"page.domain:{self.domain}"
+        all_results: List[Dict] = []
+
+        try:
+            for page_num in range(1, 4):   # up to 3 pages = 300 results
+                params: Dict[str, Any] = {"q": query, "size": 100}
+                if all_results:
+                    # Pagination via search_after: sort value of last result
+                    last = all_results[-1]
+                    sort_val = last.get("sort")
+                    if sort_val:
+                        params["search_after"] = ",".join(str(s) for s in sort_val) if isinstance(sort_val, list) else sort_val
+
+                resp = self.session.get(url, params=params, timeout=25)
+                if resp.status_code == 429:
+                    self.log.warning("[URLScan] Rate limited — pausing 30s")
+                    _rate_sleep(30)
+                    resp = self.session.get(url, params=params, timeout=25)
+                if resp.status_code != 200:
+                    self.log.debug(f"[URLScan] Search HTTP {resp.status_code}")
+                    break
+
+                payload = resp.json()
+                results = payload.get("results", [])
+                if not results:
+                    break
+
+                all_results.extend(results)
+
+                for r in results:
+                    page_data = r.get("page", {})
+                    ip  = page_data.get("ip", "")
+                    asn = page_data.get("asn", "")
+                    url_str = page_data.get("url", "")
+                    techs = r.get("content", {}).get("technologies", [])
+
+                    if ip:
+                        ip_rec = self.data.ip_addresses.setdefault(
+                            ip, {"fqdns": [], "context": "URLScan page", "asn": None, "org": None, "geo": None}
+                        )
+                        if asn:
+                            ip_rec["asn"] = asn
+                        if page_data.get("asnname") and not ip_rec.get("org"):
+                            ip_rec["org"] = page_data["asnname"]
+                        if page_data.get("country") and not ip_rec.get("geo"):
+                            ip_rec["geo"] = {"country": page_data["country"]}
+
+                    for tech in techs:
+                        tech_name = tech if isinstance(tech, str) else tech.get("name", "")
+                        if tech_name:
+                            tech_list = self.data.technologies.setdefault(tech_name, [])
+                            if url_str and url_str not in tech_list:
+                                tech_list.append(url_str)
+
+                    # Harvest subdomains from scanned URLs
+                    try:
+                        parsed = urllib.parse.urlparse(url_str)
+                        host   = parsed.netloc.lower().split(":")[0]
+                        if host.endswith(self.domain):
+                            sub_rec = self.data.subdomains.setdefault(
+                                host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                            )
+                            if "urlscan" not in sub_rec["sources"]:
+                                sub_rec["sources"].append("urlscan")
+                    except Exception:
+                        pass
+
+                    # Record malicious verdicts
+                    verdict = r.get("verdicts", {}).get("overall", {})
+                    if verdict.get("malicious"):
+                        add_finding(
+                            self.data, "urlscan", "malicious_url", CAT_THREAT_INTEL, "high",
+                            "URLScan verdict: malicious URL detected",
+                            url=url_str, affected=url_str,
+                            scan_id=r.get("task", {}).get("uuid", ""),
+                            output_file=str(self.out / "search_results.json"),
+                        )
+
+                if not payload.get("has_more", False):
+                    break
+                _rate_sleep(3)
+
+        except Exception as e:
+            self.log.error(f"[URLScan] Search error: {e}", exc=e)
+            _write_placeholder(self.out, "search_results.json",
+                               f"GET /api/v1/search/?q=page.domain:{self.domain}",
+                               f"(URLScan search failed: {e})")
+
+        if not all_results:
+            self.log.info("[URLScan] Search returned no historical scans")
+            _write_placeholder(self.out, "search_results.json",
+                               f"GET /api/v1/search/?q=page.domain:{self.domain}",
+                               "(URLScan search found no historical scans for this domain)")
+        else:
+            _save_api_result(self.out, "search_results.json", {"results": all_results})
+        self.log.success(f"[URLScan] Search complete: {len(all_results)} historical scans found")
+
+    # ── trigger new scan (optional) ───────────────────────────────────────────
+
+    def _trigger_scan(self, url_to_scan: str) -> Optional[str]:
+        """
+        POST /api/v1/scan/
+        Submits a URL for a fresh URLScan browser scan. Returns the scan UUID.
+        Requires a valid API key. Uses 1 scan credit.
+        Returns the UUID string, or None on failure.
+        """
+        if not self.key:
+            return None
+        try:
+            resp = self.session.post(
+                f"{self.BASE}/scan/",
+                json={"url": url_to_scan, "visibility": "public"},
+                timeout=20,
+            )
+            if resp.status_code in (200, 201):
+                uuid = resp.json().get("uuid", "")
+                self.log.info(f"[URLScan] Scan submitted: uuid={uuid}")
+                return uuid
+        except Exception as e:
+            self.log.debug(f"[URLScan] Scan trigger error: {e}")
+        return None
+
+    # ── retrieve scan result ──────────────────────────────────────────────────
+
+    def _get_scan_result(self, uuid: str) -> Optional[Dict]:
+        """
+        GET /api/v1/result/{uuid}/
+        Retrieves the full scan result including:
+          lists.{domains,ips,urls,asns,hashes}: all entities encountered
+          data.requests:  full HTTP request/response log
+          data.links:     all hyperlinks found on the page
+          data.cookies:   cookie names, values, flags
+          meta.processors.asn/geoip/wappa: enrichment from browser session
+          verdicts:       malicious scoring from URLScan + community
+        Waits up to 60s for the scan to complete.
+        """
+        if not uuid:
+            return None
+        _rate_sleep(15)   # let the scan complete
+        try:
+            resp = self.session.get(f"{self.BASE}/result/{uuid}/", timeout=20)
+            if resp.status_code == 200:
+                result = resp.json()
+                _save_api_result(self.out, f"scan_result_{uuid[:8]}.json", result)
+                return result
+        except Exception as e:
+            self.log.debug(f"[URLScan] Get result error for {uuid}: {e}")
+        return None
+
+
+# ─── AlienVault OTX ───────────────────────────────────────────────────────────
+
+class AlienVaultOTXAPI:
+    """
+    AlienVault Open Threat Exchange (OTX) API v1 integration.
+
+    Endpoints used:
+      GET /api/v1/indicators/domain/{domain}/general
+        — domain general info: pulse count, validation, whois, geo
+      GET /api/v1/indicators/domain/{domain}/passive_dns
+        — passive DNS: all observed IP resolutions with timestamps
+      GET /api/v1/indicators/domain/{domain}/url_list
+        — URL list: all URLs found under the domain across OTX pulses
+      GET /api/v1/indicators/domain/{domain}/malware
+        — associated malware samples that contacted this domain
+      GET /api/v1/indicators/ip/{ip}/general
+        — IP general info: reputation, ASN, country, pulse associations
+      GET /api/v1/indicators/ip/{ip}/passive_dns
+        — hostnames observed resolving to this IP across OTX
+
+    Auth: X-OTX-API-KEY header
+    Free account available at otx.alienvault.com; no credit limits for lookups
+    """
+
+    BASE = "https://otx.alienvault.com"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.out     = _api_dir(output_dir, "alienvault_otx")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({"X-OTX-API-KEY": self.key})
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[OTX] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[OTX] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("alienvault_otx")
+        self.log.info(f"[OTX] Starting AlienVault OTX intelligence for {self.domain}")
+        self._domain_general()
+        _rate_sleep(2)
+        self._domain_passive_dns()
+        _rate_sleep(2)
+        self._domain_url_list()
+        _rate_sleep(2)
+        self._domain_malware()
+        _rate_sleep(2)
+        self._enrich_ips()
+        self.log.success("[OTX] Intelligence phase complete")
+
+    # ── domain general ────────────────────────────────────────────────────────
+
+    def _domain_general(self):
+        """
+        GET /api/v1/indicators/domain/{domain}/general
+        Returns: pulse_info (threat pulses referencing this domain),
+        validation status, whois data, Alexa rank, geo.
+        """
+        self.log.info(f"[OTX] Domain general info for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/v1/indicators/domain/{self.domain}/general",
+                timeout=20,
+            )
+            if resp.status_code == 403:
+                self.log.warning("[OTX] API key rejected or quota exceeded (403)")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[OTX] Domain general HTTP {resp.status_code}")
+                _write_placeholder(self.out, "domain_general.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/general",
+                                   f"(OTX domain general returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            _save_api_result(self.out, "domain_general.json", payload)
+
+            pulse_count = payload.get("pulse_info", {}).get("count", 0)
+            if pulse_count > 0:
+                add_finding(
+                    self.data, "alienvault_otx", "threat_intelligence",
+                    CAT_THREAT_INTEL,
+                    "high" if pulse_count > 5 else "medium",
+                    f"OTX: domain referenced in {pulse_count} threat pulses",
+                    domain=self.domain, affected=self.domain,
+                    pulse_count=pulse_count,
+                    output_file=str(self.out / "domain_general.json"),
+                )
+
+            self.log.success(f"[OTX] Domain general: {pulse_count} threat pulses")
+
+        except Exception as e:
+            self.log.error(f"[OTX] Domain general error: {e}", exc=e)
+            _write_placeholder(self.out, "domain_general.json",
+                               f"GET /api/v1/indicators/domain/{self.domain}/general",
+                               f"(OTX domain general failed: {e})")
+
+    # ── passive DNS ───────────────────────────────────────────────────────────
+
+    def _domain_passive_dns(self):
+        """
+        GET /api/v1/indicators/domain/{domain}/passive_dns
+        Returns timestamped IP→hostname resolution history across OTX's network.
+        """
+        self.log.info(f"[OTX] Passive DNS for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/v1/indicators/domain/{self.domain}/passive_dns",
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                self.log.error(f"[OTX] Passive DNS HTTP {resp.status_code}")
+                _write_placeholder(self.out, "passive_dns.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/passive_dns",
+                                   f"(OTX passive DNS returned HTTP {resp.status_code})")
+                return
+            payload = resp.json()
+            if not payload.get("passive_dns"):
+                self.log.info("[OTX] Passive DNS returned no resolutions")
+                _write_placeholder(self.out, "passive_dns.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/passive_dns",
+                                   "(OTX passive DNS found no IP resolutions)")
+            _save_api_result(self.out, "passive_dns.json", payload)
+
+            new_ips = 0
+            for entry in payload.get("passive_dns", []):
+                ip  = entry.get("address", "")
+                if not ip:
+                    continue
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [self.domain], "context": "OTX passive DNS", "asn": None, "org": None, "geo": None}
+                )
+                if self.domain not in ip_rec["fqdns"]:
+                    ip_rec["fqdns"].append(self.domain)
+                ip_rec["otx_first"] = entry.get("first", "")
+                ip_rec["otx_last"]  = entry.get("last", "")
+                new_ips += 1
+
+            self.log.success(f"[OTX] Passive DNS: {new_ips} IP resolutions")
+
+        except Exception as e:
+            self.log.error(f"[OTX] Passive DNS error: {e}", exc=e)
+            _write_placeholder(self.out, "passive_dns.json",
+                               f"GET /api/v1/indicators/domain/{self.domain}/passive_dns",
+                               f"(OTX passive DNS failed: {e})")
+
+    # ── URL list ──────────────────────────────────────────────────────────────
+
+    def _domain_url_list(self):
+        """
+        GET /api/v1/indicators/domain/{domain}/url_list
+        Returns all URLs observed under the domain in OTX pulses.
+        Useful for finding admin panels, API endpoints, and sensitive paths.
+        """
+        self.log.info(f"[OTX] URL list for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/v1/indicators/domain/{self.domain}/url_list",
+                params={"limit": 500, "page": 1},
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                self.log.error(f"[OTX] URL list HTTP {resp.status_code}")
+                _write_placeholder(self.out, "url_list.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/url_list",
+                                   f"(OTX URL list returned HTTP {resp.status_code})")
+                return
+            payload = resp.json()
+            if not payload.get("url_list"):
+                self.log.info("[OTX] URL list returned no URLs")
+                _write_placeholder(self.out, "url_list.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/url_list",
+                                   "(OTX URL list found no URLs for this domain)")
+            _save_api_result(self.out, "url_list.json", payload)
+
+            url_count = 0
+            for entry in payload.get("url_list", []):
+                url_str = entry.get("url", "")
+                if not url_str:
+                    continue
+                url_count += 1
+                # Harvest subdomain from URL
+                try:
+                    parsed = urllib.parse.urlparse(url_str)
+                    host   = parsed.netloc.lower().split(":")[0]
+                    if host.endswith(self.domain) and host != self.domain:
+                        sub_rec = self.data.subdomains.setdefault(
+                            host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                        )
+                        if "otx_url" not in sub_rec["sources"]:
+                            sub_rec["sources"].append("otx_url")
+                except Exception:
+                    pass
+                # Record in crawled URLs for sensitive data scanning
+                self.data.crawled_urls.setdefault(url_str, {
+                    "status": entry.get("httpcode"),
+                    "result": entry.get("result", {}).get("urlworker", {}).get("http_code"),
+                    "source": "otx",
+                })
+
+            self.log.success(f"[OTX] URL list: {url_count} URLs")
+
+        except Exception as e:
+            self.log.error(f"[OTX] URL list error: {e}", exc=e)
+            _write_placeholder(self.out, "url_list.json",
+                               f"GET /api/v1/indicators/domain/{self.domain}/url_list",
+                               f"(OTX URL list failed: {e})")
+
+    # ── malware ───────────────────────────────────────────────────────────────
+
+    def _domain_malware(self):
+        """
+        GET /api/v1/indicators/domain/{domain}/malware
+        Returns hashes of malware samples that communicated with this domain —
+        a key signal for C2 infrastructure and compromise detection.
+        """
+        self.log.info(f"[OTX] Malware samples for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/v1/indicators/domain/{self.domain}/malware",
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                self.log.error(f"[OTX] Malware HTTP {resp.status_code}")
+                _write_placeholder(self.out, "malware.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/malware",
+                                   f"(OTX malware lookup returned HTTP {resp.status_code})")
+                return
+            payload = resp.json()
+            if not payload.get("data"):
+                self.log.info("[OTX] Malware returned no associated samples")
+                _write_placeholder(self.out, "malware.json",
+                                   f"GET /api/v1/indicators/domain/{self.domain}/malware",
+                                   "(OTX malware lookup found no associated malware samples)")
+            _save_api_result(self.out, "malware.json", payload)
+            count = len(payload.get("data", []))
+            if count > 0:
+                add_finding(
+                    self.data, "alienvault_otx", "malware_association",
+                    CAT_MALWARE, "critical",
+                    f"OTX: {count} malware samples associated with domain",
+                    domain=self.domain, affected=self.domain,
+                    sample_count=count,
+                    output_file=str(self.out / "malware.json"),
+                )
+            self.log.success(f"[OTX] Malware samples: {count} samples")
+
+        except Exception as e:
+            self.log.error(f"[OTX] Malware error: {e}", exc=e)
+            _write_placeholder(self.out, "malware.json",
+                               f"GET /api/v1/indicators/domain/{self.domain}/malware",
+                               f"(OTX malware lookup failed: {e})")
+
+    # ── IP enrichment ─────────────────────────────────────────────────────────
+
+    def _enrich_ips(self):
+        """
+        GET /api/v1/indicators/ip/{ip}/general
+        For each known IP, retrieves: ASN, country, city, OTX pulse associations,
+        reputation flags.
+        Capped at 15 IPs.
+        """
+        ips = list(self.data.ip_addresses.keys())[:15]
+        if not ips:
+            return
+
+        self.log.info(f"[OTX] IP enrichment for {len(ips)} IPs")
+        enriched: Dict[str, Any] = {}
+
+        for i, ip in enumerate(ips):
+            if i:
+                _rate_sleep(1.5)
+            try:
+                resp = self.session.get(
+                    f"{self.BASE}/api/v1/indicators/ip/{ip}/general",
+                    timeout=15,
+                )
+                if resp.status_code != 200:
+                    continue
+                ip_data = resp.json()
+                enriched[ip] = ip_data
+
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [], "context": "OTX IP", "asn": None, "org": None, "geo": None}
+                )
+                ip_rec["asn"]      = ip_data.get("asn", "").replace("AS", "")
+                ip_rec["org"]      = ip_data.get("asn_name")
+                ip_rec["country"]  = ip_data.get("country_code")
+                ip_rec["city"]     = ip_data.get("city")
+                ip_rec["reputation"] = ip_data.get("reputation")
+
+                pulse_count = ip_data.get("pulse_info", {}).get("count", 0)
+                if pulse_count > 0:
+                    add_finding(
+                        self.data, "alienvault_otx", "threat_intelligence",
+                        CAT_THREAT_INTEL,
+                        "high" if pulse_count > 3 else "medium",
+                        f"OTX: IP referenced in {pulse_count} threat pulses",
+                        ip=ip, affected=ip,
+                        pulse_count=pulse_count,
+                        output_file=str(self.out / "ip_enrichment.json"),
+                    )
+
+            except Exception as e:
+                self.log.error(f"[OTX] IP enrichment error for {ip}: {e}", exc=e)
+
+        if not enriched:
+            self.log.info("[OTX] IP enrichment returned no data")
+            _write_placeholder(self.out, "ip_enrichment.json",
+                               "GET /api/v1/indicators/ip/{ip}/general (for each known IP)",
+                               "(OTX IP enrichment returned no results)")
+        else:
+            _save_api_result(self.out, "ip_enrichment.json", enriched)
+        self.log.success(f"[OTX] IP enrichment: {len(enriched)} IPs")
+
+
+# ─── Hunter.io ────────────────────────────────────────────────────────────────
+
+class HunterIOAPI:
+    """
+    Hunter.io API v2 integration.
+
+    Endpoints used:
+      GET /v2/domain-search
+        — all email addresses found for a domain: name, confidence, type
+          (personal vs generic), sources, position/department, LinkedIn URL
+      GET /v2/email-finder
+        — find the most likely professional email for a name + domain combo
+      GET /v2/email-verifier
+        — verify deliverability + check Hunter database for a known email
+      GET /v2/company-enrichment
+        — company firmographics: industry, employee count, HQ location,
+          tech stack (from job postings), social profiles, founded year
+      GET /v2/email-enrichment
+        — per-person enrichment: name, title, social handles, location,
+          employment history (from email address)
+
+    Auth: api_key query parameter
+    Free tier: 25 searches/month; paid plans for higher volume
+    Rate limit: 15 requests/second for domain-search and email-finder
+    """
+
+    BASE = "https://api.hunter.io/v2"
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = _api_dir(output_dir, "hunter_io")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+
+    # ── public entry point ────────────────────────────────────────────────────
+
+    def run(self):
+        if not self.key:
+            self.log.info("[Hunter.io] No API key provided — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[Hunter.io] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("hunter_io")
+        self.log.info(f"[Hunter.io] Starting email intelligence for {self.domain}")
+        self._domain_search()
+        _rate_sleep(2)
+        self._company_enrichment()
+        self.log.success("[Hunter.io] Email intelligence phase complete")
+
+    # ── domain search ─────────────────────────────────────────────────────────
+
+    def _domain_search(self):
+        """
+        GET /v2/domain-search?domain={domain}&limit=100&offset=0
+        Returns all email addresses found for the domain:
+          - first_name, last_name, position, department, linkedin_url
+          - type: 'personal' or 'generic' (role-based like info@, contact@)
+          - confidence: 0–100 probability the address is valid
+          - sources: list of pages where the email was found
+          - verification.status: 'valid' / 'invalid' / 'unknown' / 'accept_all'
+        Paginates at 100 per page; max 2,000 results (offset).
+        """
+        self.log.info(f"[Hunter.io] Domain search for {self.domain}")
+        all_emails: List[Dict] = []
+        offset = 0
+
+        while True:
+            try:
+                resp = self.session.get(
+                    f"{self.BASE}/domain-search",
+                    params={
+                        "domain":   self.domain,
+                        "limit":    100,
+                        "offset":   offset,
+                        "api_key":  self.key,
+                    },
+                    timeout=25,
+                )
+                if resp.status_code == 401:
+                    self.log.warning("[Hunter.io] API key rejected (401)")
+                    return
+                if resp.status_code == 429:
+                    self.log.warning("[Hunter.io] Rate limited — pausing 10s")
+                    _rate_sleep(10)
+                    continue
+                if resp.status_code != 200:
+                    self.log.debug(f"[Hunter.io] Domain search HTTP {resp.status_code}")
+                    break
+
+                payload = resp.json()
+                data_block = payload.get("data", {})
+                emails     = data_block.get("emails", [])
+                if not emails:
+                    break
+
+                all_emails.extend(emails)
+
+                for entry in emails:
+                    email = entry.get("value", "")
+                    if not email:
+                        continue
+
+                    # Ingest into shared email registry
+                    email_rec = self.data.email_addresses.setdefault(email, {})
+                    email_rec.update({
+                        "source":       "hunter_io",
+                        "type":         entry.get("type", ""),
+                        "confidence":   entry.get("confidence"),
+                        "verified":     entry.get("verification", {}).get("status"),
+                        "first_name":   entry.get("first_name", ""),
+                        "last_name":    entry.get("last_name", ""),
+                        "position":     entry.get("position", ""),
+                        "department":   entry.get("department", ""),
+                        "seniority":    entry.get("seniority", ""),
+                        "linkedin":     entry.get("linkedin", ""),
+                        "twitter":      entry.get("twitter", ""),
+                        "phone_number": entry.get("phone_number", ""),
+                    })
+
+                    # Add to employees list if it has a name
+                    if entry.get("first_name") or entry.get("last_name"):
+                        employee = {
+                            "name":       f"{entry.get('first_name', '')} {entry.get('last_name', '')}".strip(),
+                            "email":      email,
+                            "title":      entry.get("position", ""),
+                            "department": entry.get("department", ""),
+                            "linkedin":   entry.get("linkedin", ""),
+                            "source":     "hunter_io",
+                        }
+                        # Avoid duplicates
+                        if not any(e.get("email") == email for e in self.data.employees):
+                            self.data.employees.append(employee)
+
+                    # Harvest phone numbers
+                    phone = entry.get("phone_number", "")
+                    if phone and phone not in self.data.phone_numbers:
+                        self.data.phone_numbers.append(phone)
+
+                # Check if there are more results
+                total = data_block.get("meta", {}).get("total", 0) if isinstance(data_block.get("meta"), dict) else 0
+                if not isinstance(total, int):
+                    total = payload.get("meta", {}).get("total", 0)
+                offset += len(emails)
+                if offset >= total or offset >= 500 or len(emails) < 100:
+                    break
+                _rate_sleep(2)
+
+            except Exception as e:
+                self.log.error(f"[Hunter.io] Domain search error offset {offset}: {e}", exc=e)
+                break
+
+        if not all_emails:
+            self.log.info("[Hunter.io] Domain search returned no emails")
+            _write_placeholder(self.out, "domain_search.json",
+                               f"GET /v2/domain-search?domain={self.domain}",
+                               "(Hunter.io domain search found no email addresses)")
+        else:
+            _save_api_result(self.out, "domain_search.json", {"emails": all_emails})
+        self.log.success(f"[Hunter.io] Domain search: {len(all_emails)} emails found")
+
+    # ── company enrichment ────────────────────────────────────────────────────
+
+    def _company_enrichment(self):
+        """
+        GET /v2/company-enrichment?domain={domain}
+        Returns comprehensive company firmographics:
+          - name, legal name, domain, description
+          - industry, kind (private/public/nonprofit), size (employee count range)
+          - location: country, city, state, street, postal code
+          - year founded, annual revenue range
+          - technologies detected from job postings (1,800+ tech categories)
+          - social profiles: LinkedIn, Twitter, Facebook, Crunchbase, AngelList
+        """
+        self.log.info(f"[Hunter.io] Company enrichment for {self.domain}")
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/company-enrichment",
+                params={"domain": self.domain, "api_key": self.key},
+                timeout=20,
+            )
+            if resp.status_code == 404:
+                self.log.info("[Hunter.io] Company enrichment: no data found")
+                return
+            if resp.status_code != 200:
+                self.log.error(f"[Hunter.io] Company enrichment HTTP {resp.status_code}")
+                _write_placeholder(self.out, "company_enrichment.json",
+                                   f"GET /v2/company-enrichment?domain={self.domain}",
+                                   f"(Hunter.io company enrichment returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            _save_api_result(self.out, "company_enrichment.json", payload)
+            data_block = payload.get("data", {})
+
+            # Ingest into associated_companies
+            company_entry = {
+                "source":       "hunter_io",
+                "name":         data_block.get("name"),
+                "legal_name":   data_block.get("legal_name"),
+                "industry":     data_block.get("industry"),
+                "size":         data_block.get("size"),
+                "kind":         data_block.get("kind"),
+                "description":  data_block.get("description"),
+                "linkedin":     data_block.get("linkedin"),
+                "twitter":      data_block.get("twitter"),
+                "facebook":     data_block.get("facebook"),
+                "crunchbase":   data_block.get("crunchbase"),
+                "founded_year": data_block.get("founded_year"),
+                "technologies": data_block.get("technologies", []),
+                "location": {
+                    "country":     data_block.get("country"),
+                    "city":        data_block.get("city"),
+                    "state":       data_block.get("state"),
+                    "street":      data_block.get("street"),
+                    "postal_code": data_block.get("postal_code"),
+                },
+            }
+            self.data.associated_companies.append(company_entry)
+
+            # Ingest technologies
+            for tech in data_block.get("technologies", []):
+                tech_name = tech if isinstance(tech, str) else tech.get("name", "")
+                if tech_name:
+                    tech_list = self.data.technologies.setdefault(f"hunter_{tech_name}", [])
+                    if self.domain not in tech_list:
+                        tech_list.append(self.domain)
+
+            # Ingest physical address
+            if data_block.get("city") or data_block.get("street"):
+                self.data.physical_addresses.append({
+                    "source":  "hunter_io",
+                    "street":  data_block.get("street"),
+                    "city":    data_block.get("city"),
+                    "state":   data_block.get("state"),
+                    "country": data_block.get("country"),
+                    "postal":  data_block.get("postal_code"),
+                })
+
+            self.log.success(
+                f"[Hunter.io] Company: {data_block.get('name', '?')}, "
+                f"industry={data_block.get('industry', '?')}, "
+                f"techs={len(data_block.get('technologies', []))}"
+            )
+
+        except Exception as e:
+            self.log.error(f"[Hunter.io] Company enrichment error: {e}", exc=e)
+            _write_placeholder(self.out, "company_enrichment.json",
+                               f"GET /v2/company-enrichment?domain={self.domain}",
+                               f"(Hunter.io company enrichment failed: {e})")
+
+    # ── email verifier (per-email utility) ────────────────────────────────────
+
+    def verify_email(self, email: str) -> Dict:
+        """
+        GET /v2/email-verifier?email={email}
+        Checks deliverability and database presence for a single email.
+        Returns: status ('valid'/'risky'/'disposable'/'invalid'/'unknown'),
+        score (0–100), regexp check, gibberish check, disposable check,
+        webmail flag, mx_records list, smtp_server, smtp_check result.
+        Utility method — call directly when verifying specific addresses.
+        """
+        if not self.key:
+            return {}
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/email-verifier",
+                params={"email": email, "api_key": self.key},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                result = resp.json().get("data", {})
+                # Update email record in shared data
+                if email in self.data.email_addresses:
+                    self.data.email_addresses[email]["verified_status"] = result.get("status")
+                    self.data.email_addresses[email]["verified_score"]  = result.get("score")
+                return result
+        except Exception as e:
+            self.log.debug(f"[Hunter.io] Email verify error for {email}: {e}")
+        return {}
+
+
+# ─── HaveIBeenPwned Domain Search (enhancement to existing phase) ─────────────
+
+class HIBPDomainAPI:
+    """
+    HaveIBeenPwned API v3 domain-level breach search.
+
+    Endpoints used:
+      GET /api/v3/breacheddomain/{domain}
+        — returns all breached email addresses at the domain (per-account results)
+        — counts by breach source (e.g., LinkedIn: 1234 accounts)
+      GET /api/v3/breaches
+        — master breach list with metadata: name, domain, date, count, data classes
+      GET /api/v3/breach/{breachname}
+        — detailed breach info: data classes exposed, description, is-verified flag
+
+    Auth: hibp-api-key header
+    Paid key required for domain search endpoint; free for single-email queries
+    """
+
+    BASE = "https://haveibeenpwned.com"
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+    ):
+        self.domain  = domain
+        self.out     = _api_dir(output_dir, "hibp")
+        self.log     = log
+        self.data    = data
+        self.key     = api_key.strip()
+        self.session = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({
+                "hibp-api-key": self.key,
+                "User-Agent":   "OSift-OSINT-Framework/2.0",
+            })
+
+    def run(self):
+        if not self.key:
+            self.log.info("[HIBP] No API key provided — skipping domain search")
+            return
+        if not REQUESTS_AVAILABLE:
+            return
+        self.log.set_tool_context("hibp")
+        self.log.info(f"[HIBP] Domain breach search for {self.domain}")
+        self._domain_breach_search()
+
+    def _domain_breach_search(self):
+        """
+        GET /api/v3/breacheddomain/{domain}
+        Returns a JSON object mapping email aliases to breach names.
+        e.g., {"johndoe": ["LinkedIn", "Adobe"], "janedoe": ["Dropbox"]}
+        Requires paid HIBP API key.
+        """
+        try:
+            resp = self.session.get(
+                f"{self.BASE}/api/v3/breacheddomain/{self.domain}",
+                timeout=20,
+            )
+            if resp.status_code == 401:
+                self.log.warning("[HIBP] API key rejected (401)")
+                return
+            if resp.status_code == 404:
+                self.log.info(f"[HIBP] No breaches found for domain {self.domain}")
+                return
+            if resp.status_code == 429:
+                _rate_sleep(5)
+                resp = self.session.get(
+                    f"{self.BASE}/api/v3/breacheddomain/{self.domain}",
+                    timeout=20,
+                )
+            if resp.status_code != 200:
+                self.log.error(f"[HIBP] Domain breach HTTP {resp.status_code}")
+                _write_placeholder(self.out, "domain_breaches.json",
+                                   f"GET /api/v3/breacheddomain/{self.domain}",
+                                   f"(HIBP domain breach search returned HTTP {resp.status_code})")
+                return
+
+            payload = resp.json()
+            if not payload:
+                self.log.info("[HIBP] Domain breach search returned no breach data")
+                _write_placeholder(self.out, "domain_breaches.json",
+                                   f"GET /api/v3/breacheddomain/{self.domain}",
+                                   "(HIBP found no breached accounts for this domain)")
+            _save_api_result(self.out, "domain_breaches.json", payload)
+
+            breach_count = 0
+            for alias, breaches in payload.items():
+                email_addr = f"{alias}@{self.domain}"
+                existing   = self.data.email_addresses.setdefault(email_addr, {
+                    "source": "hibp_domain", "breach": True
+                })
+                existing["breach"]         = True
+                existing["breach_sources"] = breaches
+
+                for breach_name in breaches:
+                    self.data.breach_data.append({
+                        "email":        email_addr,
+                        "breach_name":  breach_name,
+                        "breach_sources": [breach_name],
+                        "domain":       self.domain,
+                        "type":         "hibp_domain_search",
+                        "source":       "hibp",
+                        "tool":         "hibp",
+                        "tool_version": TOOL_REGISTRY.get_version("hibp"),
+                        "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+                        "output_file":  str(self.out / "domain_breaches.json"),
+                    })
+                    breach_count += 1
+
+            if breach_count:
+                affected_count = len(payload)
+                add_finding(
+                    self.data, "hibp", "credential_breach", CAT_BREACH, "HIGH",
+                    f"{affected_count} account alias(es) found in {breach_count} "
+                    f"breach record(s) via HaveIBeenPwned. Affected aliases: "
+                    f"{', '.join(list(payload.keys())[:10])}"
+                    + (" (…and more)" if len(payload) > 10 else ""),
+                    domain=self.domain, affected=self.domain,
+                    output_file=str(self.out / "domain_breaches.json"),
+                )
+            self.log.success(
+                f"[HIBP] Domain breach search: {len(payload)} affected accounts, "
+                f"{breach_count} breach entries"
+            )
+
+        except Exception as e:
+            self.log.error(f"[HIBP] Domain breach search error: {e}", exc=e)
+            _write_placeholder(self.out, "domain_breaches.json",
+                               f"GET /api/v3/breacheddomain/{self.domain}",
+                               f"(HIBP domain breach search failed: {e})")
+
+
+# ─── OSINTAPIs orchestrator ───────────────────────────────────────────────────
+
+class OSINTAPIOrchestrator:
+    """
+    Master orchestrator for all OSINT API integrations.
+
+    Instantiates and runs each API class in logical order:
+      1. FullHunt    — fast EASM: subdomains + hosts (sets baseline)
+      2. SecurityTrails — passive DNS, associated domains, history
+      3. Netlas      — multi-collection: certs, DNS, WHOIS, IoC
+      4. Shodan      — port/vuln/banner data for known IPs
+      5. Censys      — TLS cert search, structured host data
+      6. VirusTotal  — threat reputation, passive DNS, subdomains
+      7. URLScan     — tech stack, scan history, malicious verdicts
+      8. OTX         — threat pulses, malware associations, URL list
+      9. Hunter.io   — email discovery + company enrichment
+     10. HIBP        — domain-level breach search
+
+    Each API writes its raw results to output_dir/api_intel/<service>/
+    and merges findings into the shared ReconData object.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        # ── API credentials (all optional) ───────────────────────────────────
+        shodan_key:             str = "",
+        censys_id:              str = "",
+        censys_secret:          str = "",
+        fullhunt_key:           str = "",
+        securitytrails_key:     str = "",
+        netlas_key:             str = "",
+        virustotal_key:         str = "",
+        urlscan_key:            str = "",
+        otx_key:                str = "",
+        hunter_key:             str = "",
+        hibp_key:               str = "",
+    ):
+        self.domain     = domain
+        self.company    = company
+        self.output_dir = output_dir
+        self.log        = log
+        self.data       = data
+
+        # Instantiate all API clients
+        self.shodan = ShodanAPI(
+            domain, output_dir, log, data, api_key=shodan_key
+        )
+        self.censys = CensysAPI(
+            domain, output_dir, log, data,
+            api_id=censys_id, api_secret=censys_secret
+        )
+        self.fullhunt = FullHuntAPI(
+            domain, output_dir, log, data, api_key=fullhunt_key
+        )
+        self.securitytrails = SecurityTrailsAPI(
+            domain, company, output_dir, log, data, api_key=securitytrails_key
+        )
+        self.netlas = NetlasAPI(
+            domain, output_dir, log, data, api_key=netlas_key
+        )
+        self.virustotal = VirusTotalAPI(
+            domain, output_dir, log, data, api_key=virustotal_key
+        )
+        self.urlscan = URLScanAPI(
+            domain, output_dir, log, data, api_key=urlscan_key
+        )
+        self.otx = AlienVaultOTXAPI(
+            domain, output_dir, log, data, api_key=otx_key
+        )
+        self.hunter = HunterIOAPI(
+            domain, company, output_dir, log, data, api_key=hunter_key
+        )
+        self.hibp_domain = HIBPDomainAPI(
+            domain, output_dir, log, data, api_key=hibp_key
+        )
+
+    def run(self):
+        """Run all enabled API integrations in sequence."""
+        self.log.set_tool_context("OSift")
+        self.log.info(
+            "[OSINT APIs] Running intelligence APIs "
+            f"(domain={self.domain})"
+        )
+
+        # Tier-1: Attack Surface & Infrastructure
+        self.fullhunt.run();        self.log.reset_tool_context(); _rate_sleep(3)
+        self.securitytrails.run();  self.log.reset_tool_context(); _rate_sleep(3)
+        self.netlas.run();          self.log.reset_tool_context(); _rate_sleep(3)
+        self.shodan.run();          self.log.reset_tool_context(); _rate_sleep(3)
+        self.censys.run();          self.log.reset_tool_context()
+
+        # Tier-2: Threat Intelligence & Reputation
+        _rate_sleep(3)
+        self.virustotal.run();  self.log.reset_tool_context(); _rate_sleep(3)
+        self.urlscan.run();     self.log.reset_tool_context(); _rate_sleep(3)
+        self.otx.run();         self.log.reset_tool_context()
+
+        # Tier-3: Email & People Intelligence
+        _rate_sleep(3)
+        self.hunter.run();      self.log.reset_tool_context(); _rate_sleep(2)
+        self.hibp_domain.run(); self.log.reset_tool_context()
+
+        # ── Post-API summary ───────────────────────────────────────────────────
+        self.log.set_tool_context("OSift")
+        total_subs   = len(self.data.subdomains)
+        total_ips    = len(self.data.ip_addresses)
+        total_emails = len(self.data.email_addresses)
+        total_vuln   = len([f for f in self.data.findings.all_findings()
+                            if f.get("type") == "CVE"])
+
+        self.log.success(
+            f"[OSINT APIs] All integrations complete | "
+            f"subdomains={total_subs} | IPs={total_ips} | "
+            f"emails={total_emails} | CVEs={total_vuln}"
+        )
+
+        # Write consolidated summary
+        summary = {
+            "timestamp":        datetime.datetime.now(datetime.UTC).isoformat(),
+            "domain":           self.domain,
+            "company":          self.company,
+            "subdomains_total": total_subs,
+            "ips_total":        total_ips,
+            "emails_total":     total_emails,
+            "employees_total":  len(self.data.employees),
+            "technologies":     list(self.data.technologies.keys()),
+            "open_ports_ips":   len(self.data.open_ports),
+            "findings_total":   len(self.data.findings.all_findings()),
+            "findings_validated": self.data.findings.validated_count(),
+            "cves":             total_vuln,
+            "tools_run": {
+                name: TOOL_REGISTRY.get_version(name)
+                for name in [
+                    "fullhunt", "securitytrails", "netlas",
+                    "shodan", "censys", "virustotal",
+                    "urlscan", "alienvault_otx", "hunter_io", "hibp",
+                ]
+            },
+        }
+        _save_api_result(
+            _api_dir(self.output_dir, ""),
+            "api_intelligence_summary.json",
+            summary,
+        )
+
+
+# ─── Directory Setup ──────────────────────────────────────────────────────────
+
+
+def _dir_creation_timestamp(path: Path) -> str:
+    """
+    Return a compact timestamp string for *path* based on its creation time.
+    Falls back to mtime on platforms where st_birthtime is unavailable.
+    """
+    try:
+        stat = path.stat()
+        # st_birthtime exists on macOS; on Linux we fall back to st_ctime
+        ctime = getattr(stat, "st_birthtime", None) or stat.st_ctime
+        return datetime.datetime.fromtimestamp(ctime).strftime("%Y%m%d_%H%M%S")
+    except Exception:
+        return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def setup_directory_structure(company: str, domain: str, base_path: Optional[Path] = None) -> Path:
+    """
+    Build the output directory tree.
+
+    Naming convention:  <company_slug>_osift/
+    If that parent directory already exists it is renamed to
+    <company_slug>_osift_<creation_timestamp>/ before the fresh one is created.
+
+    The run-specific subdirectory inside is timestamped:
+        <company_slug>_osift/<domain>_<YYYYMMDD_HHMMSS>/
+    """
+    company_slug = _safe_filename(company.lower().replace(" ", "_"))
+    parent_name  = f"{company_slug}_osift"
+    root         = (base_path or Path.cwd()) / parent_name
+
+    # ── Rotate existing parent directory ─────────────────────────────────────
+    if root.exists():
+        old_ts   = _dir_creation_timestamp(root)
+        old_name = f"{parent_name}_{old_ts}"
+        old_path = root.parent / old_name
+        # Guard against the extremely unlikely case the rotated name also exists
+        if old_path.exists():
+            old_path = root.parent / f"{old_name}_{int(time.time())}"
+        root.rename(old_path)
+        print(f"[*] Existing directory renamed → {old_path.name}")
+
+    # ── Create fresh parent + run subdirectory ────────────────────────────────
+    run_ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    company_slug = _safe_filename(company) or "osift"
+    base_dir     = root / f"{company_slug}_{run_ts}"
+
+    subdirs = [
+        base_dir / "logs",
+        base_dir / "dns"          / "subdomains",
+        base_dir / "dns"          / "zone_transfers",
+        base_dir / "dns"          / "records",
+        base_dir / "dns"          / "dig",
+        base_dir / "dns"          / "dnsx_enrich",
+        base_dir / "ip_addresses",
+        base_dir / "certificates" / "raw",
+        base_dir / "certificates" / "parsed",
+        base_dir / "emails",
+        base_dir / "employees",
+        base_dir / "company_info" / "addresses",
+        base_dir / "company_info" / "associated",
+        base_dir / "web_crawl"    / "pages",
+        base_dir / "web_crawl"    / "screenshots",
+        base_dir / "sensitive_data",
+        base_dir / "breach_data",
+        base_dir / "whois",
+        base_dir / "amass",
+        base_dir / "reports",
+    ]
+    for d in subdirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+    return base_dir
+
+
+# ─── Logger ───────────────────────────────────────────────────────────────────
+
+class ReconLogger:
+    """
+    Structured logger that embeds tool name, tool version, and ISO timestamp
+    in every log entry and every command record.
+
+    Text log format:
+        2026-02-21T14:30:05Z [INFO] [OSift/2.0.0] Message text
+
+    JSON log entry schema:
+        {
+          "timestamp":    "2026-02-21T14:30:05.123456",
+          "level":        "INFO",
+          "tool":         "subfinder",
+          "tool_version": "2.6.3",
+          "message":      "..."
+        }
+
+    Command log entry schema:
+        {
+          "timestamp":     "...",
+          "tool":          "subfinder",
+          "tool_version":  "2.6.3",
+          "command":       "subfinder -d example.com ...",
+          "returncode":    0,
+          "stdout":        "...",
+          "stderr":        "..."
+        }
+    """
+
+    def __init__(self, output_dir: Path):
+        self.output_dir  = output_dir
+        self.log_dir     = output_dir / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        self.txt_log_path      = self.log_dir / "osift.log"
+        self.json_log_path     = self.log_dir / "osift.json"
+        self.error_log_path    = self.log_dir / "errors.log"
+        self.commands_log_path = self.log_dir / "commands.log"
+        self.commands_json_path = self.log_dir / "commands.json"
+
+        self._json_entries:    List[Dict] = []
+        self._command_entries: List[Dict] = []
+        self._write_lock = threading.Lock()
+
+        # Current tool context (updated via set_tool_context)
+        self._tool:    str = "OSift"
+        self._version: str = VERSION
+
+        self.logger = logging.getLogger("osift")
+        self.logger.setLevel(logging.DEBUG)
+        if not self.logger.handlers:
+            # File handler — full timestamp + tool context
+            fh_fmt = logging.Formatter(
+                "%(asctime)s [%(levelname)-7s] %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%SZ",
+            )
+            fh = logging.FileHandler(self.txt_log_path, encoding="utf-8")
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(fh_fmt)
+
+            # Console handler
+            ch_fmt = logging.Formatter(
+                "%(asctime)s [%(levelname)-7s] %(message)s",
+                datefmt="%H:%M:%S",
+            )
+            ch = logging.StreamHandler(sys.stdout)
+            ch.setLevel(logging.INFO)
+            ch.setFormatter(ch_fmt)
+
+            # Error handler
+            eh = logging.FileHandler(self.error_log_path, encoding="utf-8")
+            eh.setLevel(logging.ERROR)
+            eh.setFormatter(fh_fmt)
+
+            self.logger.addHandler(fh)
+            self.logger.addHandler(ch)
+            self.logger.addHandler(eh)
+
+    # ── Tool context ──────────────────────────────────────────────────────────
+
+    def set_tool_context(self, tool: str, version: Optional[str] = None) -> None:
+        """
+        Set the active tool context for subsequent log / command entries.
+        If *version* is None the ToolRegistry is queried automatically.
+        """
+        self._tool    = tool
+        self._version = version or TOOL_REGISTRY.get_version(tool)
+
+    def reset_tool_context(self) -> None:
+        """Reset to the OSift framework context."""
+        self._tool    = "OSift"
+        self._version = VERSION
+
+    # ── Logging helpers ───────────────────────────────────────────────────────
+
+    def _tag(self) -> str:
+        """Return '[ToolName/version]' prefix for text log lines."""
+        return f"[{self._tool}/{self._version}]"
+
+    def info(self, msg: str, **kw):
+        self.logger.info(f"{self._tag()} {msg}")
+        self._log_json("INFO", msg, kw)
+
+    def debug(self, msg: str, **kw):
+        self.logger.debug(f"{self._tag()} {msg}")
+
+    def warning(self, msg: str, **kw):
+        self.logger.warning(f"{self._tag()} {msg}")
+        self._log_json("WARNING", msg, kw)
+
+    def success(self, msg: str, **kw):
+        self.logger.info(f"{self._tag()} [OK] {msg}")
+        self._log_json("SUCCESS", msg, kw)
+
+    def error(self, msg: str, exc: Optional[Exception] = None, **kw):
+        full = msg + (f" | {type(exc).__name__}: {exc}" if exc else "")
+        self.logger.error(f"{self._tag()} {full}")
+        self._log_json("ERROR", full, kw)
+        self._write_error(full, exc)
+        if _VANTAGE_MANAGED:
+            _vc.error(full, source=self._tool)
+
+    def log_command(
+        self,
+        cmd: str,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int = 0,
+        tool: Optional[str] = None,
+        version: Optional[str] = None,
+    ):
+        """
+        Record a shell command with full provenance.
+
+        *tool* and *version* default to the current context if not supplied.
+        """
+        tool_name = tool or self._tool
+        tool_ver  = version or (TOOL_REGISTRY.get_version(tool_name) if tool else self._version)
+        ts        = datetime.datetime.now(datetime.UTC).isoformat()
+
+        entry = {
+            "timestamp":    ts,
+            "tool":         tool_name,
+            "tool_version": tool_ver,
+            "command":      cmd,
+            "returncode":   returncode,
+            "stdout":       (stdout or "")[:2000],
+            "stderr":       (stderr or "")[:500],
+        }
+
+        with self._write_lock:
+            self._command_entries.append(entry)
+            with open(self.commands_log_path, "a", encoding="utf-8") as f:
+                sep = "=" * 60
+                f.write(
+                    f"\n{sep}\n"
+                    f"[{ts}] [{tool_name}/{tool_ver}]\n"
+                    f"$ {cmd}\n"
+                )
+                if stdout:
+                    f.write(f"STDOUT:\n{stdout[:2000]}\n")
+                if stderr:
+                    f.write(f"STDERR:\n{stderr[:500]}\n")
+                f.write(f"Return code: {returncode}\n")
+
+        if len(self._command_entries) % 20 == 0:
+            self.flush_all()
+
+    def flush_all(self):
+        with self._write_lock:
+            with open(self.json_log_path, "w", encoding="utf-8") as f:
+                json.dump(self._json_entries, f, indent=2, default=str)
+            with open(self.commands_json_path, "w", encoding="utf-8") as f:
+                json.dump(self._command_entries, f, indent=2, default=str)
+
+    # ── Private ───────────────────────────────────────────────────────────────
+
+    def _log_json(self, level: str, msg: str, extra: dict):
+        entry = {
+            "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+            "level":        level,
+            "tool":         self._tool,
+            "tool_version": self._version,
+            "message":      msg,
+            **extra,
+        }
+        self._json_entries.append(entry)
+        if len(self._json_entries) % 50 == 0:
+            self.flush_all()
+
+    def _write_error(self, msg: str, exc: Optional[Exception]):
+        with self._write_lock:
+            with open(self.error_log_path, "a", encoding="utf-8") as f:
+                ts = datetime.datetime.now(datetime.UTC).isoformat()
+                f.write(f"[{ts}] [{self._tool}/{self._version}] {msg}\n")
+                if exc:
+                    f.write(traceback.format_exc())
+                    f.write("\n")
+
+
+# ─── HTTP session ─────────────────────────────────────────────────────────────
+
+def make_session() -> "requests.Session":
+    session = requests.Session()
+    # 429 is excluded from status_forcelist: retrying rate-limited requests within
+    # seconds is never effective (rate limit windows are typically 60s+) and just
+    # produces RetryError noise.  Each API caller handles 429 responses directly.
+    # 502 Bad Gateway is also excluded: upstream is down, retrying immediately fails.
+    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://",  adapter)
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
+    })
+    return session
+
+
+def _is_rate_limit_err(exc: BaseException) -> bool:
+    """Return True when *exc* is caused by HTTP 429 rate-limiting.
+
+    requests raises MaxRetryError / RetryError when the Retry adapter exhausts
+    its attempts on a 429 response.  The string representation reliably contains
+    '429' or 'too many'.
+    """
+    msg = str(exc).lower()
+    return "429" in msg or "too many 429" in msg or "rate limit" in msg
+
+
+# ─── Unified finding helper ───────────────────────────────────────────────────
+
+# Category constants — every finding must use one of these
+CAT_CVE              = "CVE / Vulnerability"
+CAT_THREAT_INTEL     = "Threat Intelligence"
+CAT_MALWARE          = "Malware Association"
+CAT_TLS              = "TLS / Certificate"
+CAT_INFRA            = "Infrastructure"
+CAT_SENSITIVE        = "Sensitive Data"
+CAT_BREACH           = "Credential Breach"
+CAT_WEB              = "Web Intelligence"
+CAT_RECON            = "Reconnaissance"
+CAT_DNS              = "DNS"
+
+# Map legacy 'source' strings → canonical tool names
+_SOURCE_TO_TOOL: Dict[str, str] = {
+    "shodan":            "shodan",
+    "shodan_host":       "shodan",
+    "shodan_ssl":        "shodan",
+    "shodan-cli":        "shodan-cli",
+    "censys":            "censys",
+    "censys_cert":       "censys",
+    "fullhunt":          "fullhunt",
+    "fullhunt_host":     "fullhunt",
+    "securitytrails":    "securitytrails",
+    "netlas_host":       "netlas",
+    "virustotal":        "virustotal",
+    "virustotal_ip":     "virustotal",
+    "urlscan":           "urlscan",
+    "alienvault_otx":    "alienvault_otx",
+    "otx_ip":            "alienvault_otx",
+    "hunter_io":         "hunter_io",
+    "hibp_domain":       "hibp",
+    "hibp":              "hibp",
+    "dehashed":          "dehashed",
+    "tlsx":              "tlsx",
+    "cdncheck":          "cdncheck",
+    "katana":            "katana",
+    "web_crawl":         "web_crawl",
+    "hackertarget":      "hackertarget",
+    "OSift-DNS":         "OSift-DNS",
+    "edgartools":        "edgartools",
+    "edgar_8k":          "edgartools",
+    "dig":               "dig",
+    "dnsx_enrich":       "dnsx",
+    # Subdomain discovery — PD wave
+    "subfinder":         "subfinder",
+    "puredns":           "puredns",
+    "chaos":             "chaos",
+    "shuffledns":        "shuffledns",
+    # Subdomain discovery — passive sources
+    "rapiddns":          "rapiddns",
+    "threatcrowd":       "threatcrowd",
+    "alienvault":        "alienvault_otx",
+    "dnsdumpster":       "dnsdumpster",
+    # URL mining tools
+    "waybackurls":       "waybackurls",
+    "xurlfind3r":        "xurlfind3r",
+    # Internet-wide search / cloud enumeration
+    "amass":             "amass",
+    "uncover":           "uncover",
+    "cloudlist":         "cloudlist",
+    "dnsx_cname":        "dnsx",
+    # Email discovery tools
+    "theHarvester":      "theHarvester",
+    "EmailHarvester":    "EmailHarvester",
+    "hunter.io":         "hunter_io",
+    "search_engine":     "OSift-Email",
+    "format_guess":      "OSift-Email",
+    "whois":             "OSift-DNS",
+    "whois_raw":         "OSift-DNS",
+    "certificate_san":   "OSift-DNS",
+    # Subdomain discovery — DNS enumeration internal sources
+    "MX record":         "OSift-DNS",
+    "NS record":         "OSift-DNS",
+    "CNAME record":      "OSift-DNS",
+    "SRV record":        "OSift-DNS",
+    "zone transfer":     "OSift-DNS",
+    "brute force":       "OSift-DNS",
+    "nslookup":          "OSift-DNS",
+    "nslookup-ns":       "OSift-DNS",
+    "nslookup-mx":       "OSift-DNS",
+    "nslookup-cname":    "OSift-DNS",
+    "nslookup-reverse":  "OSift-DNS",
+}
+
+
+def add_finding(
+    data:     "ReconData",
+    tool:     str,
+    type_:    str,
+    category: str,
+    severity: str,
+    detail:   str,
+    *,
+    cve:      str = "",
+    ip:       str = "",
+    host:     str = "",
+    url:      str = "",
+    email:    str = "",
+    phone:    str = "",
+    domain:   str = "",
+    timestamp: Optional[str] = None,
+    **extra: Any,
+) -> str:
+    """
+    Single entry point for adding any finding to the unified FindingStore.
+
+    Returns the finding_id (fingerprint).
+    """
+    canonical_tool = _SOURCE_TO_TOOL.get(tool, tool)
+    return data.findings.add(
+        tool      = canonical_tool,
+        type      = type_,
+        category  = category,
+        severity  = severity,
+        detail    = detail,
+        cve       = cve,
+        ip        = ip,
+        host      = host,
+        url       = url,
+        email     = email,
+        phone     = phone,
+        domain    = domain,
+        timestamp = timestamp,
+        **extra,
+    )
+
+
+# ─── Install helpers ──────────────────────────────────────────────────────────
+
+def _osift_apt_install(pkg: str) -> tuple:
+    """Run apt-get/apt install -y -q <pkg>. Returns (success, error_text)."""
+    apt = shutil.which("apt-get") or shutil.which("apt")
+    if not apt:
+        return False, "apt unavailable"
+    sudo = [] if os.geteuid() == 0 else (["sudo"] if shutil.which("sudo") else [])
+    try:
+        r = subprocess.run(
+            sudo + [apt, "install", "-y", "-q", pkg],
+            capture_output=True, text=True, timeout=120,
+        )
+        return r.returncode == 0, (r.stderr or r.stdout).strip()
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _osift_pip_install(pkg: str) -> tuple:
+    """pip install --break-system-packages <pkg>. Returns (success, error_text)."""
+    try:
+        pip_exe = "python3" if IS_MACOS else sys.executable
+        r = subprocess.run(
+            [pip_exe, "-m", "pip", "install",
+             "--quiet", "--break-system-packages", pkg],
+            capture_output=True, text=True, timeout=180,
+        )
+        return r.returncode == 0, (r.stderr or r.stdout).strip()
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _tool_log(log: "ReconLogger", msg: str, level: str = "INFO") -> None:
+    """Emit a tool-check message to VantageConsole (managed) or ReconLogger (TTY)."""
+    if _VANTAGE_MANAGED:
+        _vc.log(msg, level)
+    elif level in ("WARNING", "WARN"):
+        log.warning(msg)
+    elif level == "SUCCESS":
+        log.success(msg)
+    elif level == "ERROR":
+        log.error(msg, "OSift-tools", "", "tools")
+    else:
+        log.info(msg)
+
+
+# ─── Dependency checks ────────────────────────────────────────────────────────
+
+def check_python_deps(log: ReconLogger):
+    """
+    Ensure required third-party Python packages are importable.
+
+    Install strategy
+    ----------------
+    On Linux (Kali, Debian, Ubuntu, Parrot, ...):
+      1. apt-get install -y <python3-pkg>  -- preferred; keeps the system
+         package manager in sync and sidesteps PEP-668 entirely.
+         Each package is attempted individually so a missing apt package
+         does not block the others.
+      2. pip install --break-system-packages <remaining>  -- for any package
+         that has no apt equivalent (e.g. edgartools) or whose apt install
+         failed.
+
+    On macOS / Windows:
+      pip install --break-system-packages <missing>  (single batch call)
+
+    Never uses check=True. All subprocess exceptions are caught and logged;
+    the function never raises CalledProcessError.
+    """
+    # (import-module, pip-package, apt-package-or-None)
+    # apt name is None when the package is not in Debian/Ubuntu repos.
+    DEPS: List[Tuple[str, str, Optional[str]]] = [
+        ("requests",     "requests",      "python3-requests"),
+        ("bs4",          "beautifulsoup4", "python3-bs4"),
+        ("dns",          "dnspython",      "python3-dnspython"),
+        ("cryptography", "cryptography",   "python3-cryptography"),
+        ("OpenSSL",      "pyOpenSSL",      "python3-openssl"),
+        ("whois",        "python-whois",   "python3-whois"),
+        ("edgar",        "edgartools",     None),   # pip-only; no apt package
+        ("wappalyzer",   "wappalyzer",     None),   # s0md3v python-wappalyzer, 3000+ signatures
+        ("maigret",      "maigret",        None),   # social media username OSINT
+    ]
+
+    # -- 1. Identify what is actually missing ---------------------------------
+    missing: List[Tuple[str, str, Optional[str]]] = [
+        (mod, pip_pkg, apt_pkg)
+        for mod, pip_pkg, apt_pkg in DEPS
+        if not _importable(mod)
+    ]
+    if not missing:
+        return
+
+    # ── Vantage-managed: auto-install silently without sys.exit() ────────────
+    if _VANTAGE_MANAGED:
+        sys.stdout.write(
+            "__VANTAGE_LOG__:" + json.dumps({
+                "ts": datetime.datetime.now().isoformat(),
+                "level": "INFO",
+                "message": f"[deps] Auto-installing missing packages: "
+                           f"{', '.join(pip for _, pip, _ in missing)}",
+            }) + "\n"
+        )
+        sys.stdout.flush()
+        apt = shutil.which("apt-get") if IS_LINUX else None
+        for mod, pip_pkg, apt_pkg in missing:
+            installed = False
+            if apt and apt_pkg:
+                try:
+                    r = subprocess.run(
+                        ["apt-get", "install", "-y", "-q", apt_pkg],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    installed = r.returncode == 0 and _importable(mod)
+                except Exception:
+                    pass
+            if not installed:
+                try:
+                    r = subprocess.run(
+                        [sys.executable, "-m", "pip", "install",
+                         "--quiet", "--break-system-packages", pip_pkg],
+                        capture_output=True, text=True, timeout=180,
+                    )
+                    installed = r.returncode == 0
+                except Exception:
+                    pass
+            level = "INFO" if installed else "WARNING"
+            msg   = (f"[deps] {'Installed' if installed else 'Failed to install'}: {pip_pkg}")
+            sys.stdout.write(
+                "__VANTAGE_LOG__:" + json.dumps({
+                    "ts": datetime.datetime.now().isoformat(),
+                    "level": level,
+                    "message": msg,
+                }) + "\n"
+            )
+            sys.stdout.flush()
+        return
+
+    log.info(
+        f"[deps] Missing packages: "
+        f"{', '.join(pip_pkg for _, pip_pkg, _ in missing)}"
+    )
+
+    still_missing: List[Tuple[str, str, Optional[str]]] = []
+
+    # -- 2. Try apt-get on Linux ----------------------------------------------
+    apt = shutil.which("apt-get") if IS_LINUX else None
+    if apt:
+        for mod, pip_pkg, apt_pkg in missing:
+            if apt_pkg is None:
+                still_missing.append((mod, pip_pkg, None))
+                continue
+            log.info(f"[deps] apt-get install -y {apt_pkg} ...")
+            try:
+                result = subprocess.run(
+                    ["apt-get", "install", "-y", "-q", apt_pkg],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if result.returncode == 0 and _importable(mod):
+                    log.success(f"[deps] Installed via apt: {apt_pkg}")
+                else:
+                    log.warning(
+                        f"[deps] apt-get {apt_pkg} failed "
+                        f"(rc={result.returncode}) -- will try pip"
+                    )
+                    still_missing.append((mod, pip_pkg, apt_pkg))
+            except subprocess.TimeoutExpired:
+                log.warning(f"[deps] apt-get {apt_pkg} timed out -- will try pip")
+                still_missing.append((mod, pip_pkg, apt_pkg))
+            except Exception as exc:
+                log.warning(f"[deps] apt-get {apt_pkg} error: {exc} -- will try pip")
+                still_missing.append((mod, pip_pkg, apt_pkg))
+    else:
+        # Not Linux, or apt-get not found (e.g. macOS, Windows, Alpine)
+        still_missing = list(missing)
+
+    if not still_missing:
+        log.success("[deps] All packages satisfied via apt.")
+        sys.exit(0)
+        return   # guard: keeps code correct if sys.exit is suppressed (e.g. tests)
+
+    # -- 3. pip install --break-system-packages for what apt could not do -----
+    pip_pkgs = [pip_pkg for _, pip_pkg, _ in still_missing]
+    if not pip_pkgs:
+        return
+
+    log.info(
+        f"[deps] Installing via pip --break-system-packages: "
+        f"{', '.join(pip_pkgs)}"
+    )
+    pip_cmd = [
+        sys.executable, "-m", "pip", "install",
+        "--quiet", "--break-system-packages",
+    ] + pip_pkgs
+    try:
+        result = subprocess.run(
+            pip_cmd,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0:
+            log.success(
+                f"[deps] Installed via pip: {', '.join(pip_pkgs)}\n"
+                f"       Please re-run OSift to load the new modules."
+            )
+            sys.exit(0)
+        else:
+            stderr = (result.stderr or "").strip()
+            log.warning(
+                f"[deps] pip install failed (rc={result.returncode}): "
+                f"{stderr[:300]}"
+            )
+    except subprocess.TimeoutExpired:
+        log.warning("[deps] pip install timed out")
+    except Exception as exc:
+        log.warning(f"[deps] pip install error: {exc}")
+
+    # -- 4. All strategies exhausted -- print clear manual instructions --------
+    pip_list = " ".join(pip_pkgs)
+    apt_list  = " ".join(apt_pkg for _, _, apt_pkg in still_missing if apt_pkg)
+    log.warning(
+        f"[deps] Automatic install failed for: {', '.join(pip_pkgs)}\n"
+        f"       Install manually and re-run OSift:\n"
+        + (f"         sudo apt-get install -y {apt_list}\n" if apt_list else "")
+        + f"         pip install --break-system-packages {pip_list}"
+    )
+def _importable(module: str) -> bool:
+    try:
+        __import__(module)
+        return True
+    except ImportError:
+        return False
+
+
+def check_amass(log: ReconLogger) -> bool:
+    """Detect amass, auto-install in managed mode, prompt-to-skip in TTY mode."""
+    if shutil.which("amass"):
+        ver = TOOL_REGISTRY.query_and_register("amass")
+        _tool_log(log, f"[tools] amass found (version: {ver})", "SUCCESS")
+        return True
+
+    _tool_log(log, "[tools] amass not found — attempting install", "WARNING")
+
+    # ── Auto-install ──────────────────────────────────────────────────────────
+    installed = False
+
+    if IS_LINUX:
+        ok, _ = _osift_apt_install("amass")
+        if ok and shutil.which("amass"):
+            installed = True
+            _tool_log(log, "[tools] amass installed via apt", "SUCCESS")
+
+    _amass_brew = (
+        shutil.which("brew")
+        or (os.path.isfile("/opt/homebrew/bin/brew") and "/opt/homebrew/bin/brew")
+        or (os.path.isfile("/usr/local/bin/brew") and "/usr/local/bin/brew")
+    ) if IS_MACOS else None
+    if not installed and _amass_brew:
+        try:
+            r = subprocess.run([_amass_brew, "install", "amass"],
+                               capture_output=True, text=True, timeout=300)
+            if r.returncode == 0 and shutil.which("amass"):
+                installed = True
+                _tool_log(log, "[tools] amass installed via brew", "SUCCESS")
+        except Exception:
+            pass
+
+    if not installed:
+        go = _find_go()
+        if go:
+            _tool_log(log, "[tools] Trying: go install amass...", "INFO")
+            gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
+            gobin  = os.path.join(gopath, "bin")
+            env    = os.environ.copy()
+            env["GOPATH"] = gopath
+            env["PATH"]   = gobin + os.pathsep + env.get("PATH", "")
+            try:
+                r = subprocess.run(
+                    [go, "install", "github.com/owasp-amass/amass/v4/...@master"],
+                    capture_output=True, text=True, timeout=300, env=env,
+                )
+                if r.returncode == 0:
+                    if gobin not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = gobin + os.pathsep + os.environ.get("PATH", "")
+                    if shutil.which("amass"):
+                        installed = True
+                        _tool_log(log, "[tools] amass installed via go install", "SUCCESS")
+            except Exception:
+                pass
+
+    if installed:
+        ver = TOOL_REGISTRY.query_and_register("amass")
+        _tool_log(log, f"[tools] amass ready (version: {ver})", "SUCCESS")
+        return True
+
+    _tool_log(log, "[tools] amass auto-install failed — will skip amass phase", "WARNING")
+
+    if _VANTAGE_MANAGED:
+        return False   # non-interactive: skip gracefully
+
+    # TTY: show install hints and ask
+    print("[tools] Amass could not be installed automatically. Install options:")
+    if IS_WINDOWS:
+        print("[tools]   winget : winget install OWASP.Amass")
+        print("[tools]   Scoop  : scoop install amass")
+        print("[tools]   Go     : go install github.com/owasp-amass/amass/v4/...@master")
+    elif IS_MACOS:
+        print("[tools]   brew   : brew install amass")
+        print("[tools]   Go     : go install github.com/owasp-amass/amass/v4/...@master")
+    else:
+        print("[tools]   apt    : sudo apt-get install amass")
+        print("[tools]   snap   : sudo snap install amass")
+        print("[tools]   Go     : go install github.com/owasp-amass/amass/v4/...@master")
+    try:
+        ans = input("Skip Amass and continue? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ans = "y"
+    return ans == "y"
+
+
+def check_tool(tool: str) -> bool:
+    return shutil.which(tool) is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Binary tool detection + auto-install
+# Each entry: (display_name, [binary_candidates], apt_pkg, pip_pkg, go_pkg, brew_pkg)
+# None = not available via that method.
+# ─────────────────────────────────────────────────────────────────────────────
+_BINARY_TOOLS: list = [
+    # (name, candidates, apt, pip, go_pkg, brew, git_url)
+    ("whois",          ["whois"],
+     "whois",          None,
+     None,
+     "whois",          None),
+    ("theHarvester",   ["theharvester", "theHarvester", "theHarvester.py"],
+     "theharvester",   "theHarvester",
+     None,
+     "theharvester",
+     "https://github.com/laramies/theHarvester.git"),
+    ("xurlfind3r",     ["xurlfind3r"],
+     None,             None,
+     "github.com/hueristiq/xurlfind3r/cmd/xurlfind3r@latest",
+     None,             None),
+    ("EmailHarvester", ["EmailHarvester", "emailharvester", "EmailHarvester.py"],
+     None,             "EmailHarvester",
+     None,
+     None,             None),
+    ("puredns",        ["puredns"],
+     None,             None,
+     "github.com/d3mondev/puredns/v2@latest",
+     None,             None),
+    ("waybackurls",    ["waybackurls"],
+     None,             None,
+     "github.com/tomnomnom/waybackurls@latest",
+     None,             None),
+    ("trufflehog",     ["trufflehog"],
+     None,             None,
+     "github.com/trufflesecurity/trufflehog/v3@latest",
+     "trufflehog",     None),
+    ("cloud_enum",     ["cloud_enum", "cloud_enum.py"],
+     None,             "cloud-enum",
+     None,
+     None,             "https://github.com/initstring/cloud_enum.git"),
+    ("dig",            ["dig"],
+     "dnsutils",       None,
+     None,
+     "bind",           None),
+]
+
+
+def _find_binary(candidates: list) -> Optional[str]:
+    """Return the path to the first candidate found on PATH (or as a file)."""
+    for name in candidates:
+        p = shutil.which(name)
+        if p:
+            return p
+    # Also probe GOPATH/bin for Go binaries
+    gobin = os.path.join(os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin")
+    for name in candidates:
+        full = os.path.join(gobin, name + (".exe" if IS_WINDOWS else ""))
+        if os.path.isfile(full):
+            if gobin not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = gobin + os.pathsep + os.environ.get("PATH", "")
+            return full
+    return None
+
+
+def _try_install_binary(name: str, apt_pkg: Optional[str], pip_pkg: Optional[str],
+                         go_pkg: Optional[str], brew_pkg: Optional[str],
+                         log: "ReconLogger",
+                         git_url: Optional[str] = None) -> bool:
+    """
+    Attempt to install a binary tool using the best available method for the
+    current platform. Returns True if the binary becomes available afterward.
+
+    Install order:
+      Linux  : apt → pip → git clone → go install
+      macOS  : brew → pip → git clone
+      Windows: winget → choco
+    """
+    # ── apt (Linux) ───────────────────────────────────────────────────────────
+    if IS_LINUX and apt_pkg:
+        ok, _err = _osift_apt_install(apt_pkg)
+        if ok:
+            return True
+
+    # ── brew (macOS) ──────────────────────────────────────────────────────────
+    brew_ok = False
+    if IS_MACOS and brew_pkg:
+        # Homebrew may live at /usr/local/bin (Intel) or /opt/homebrew/bin (Apple Silicon)
+        _brew_bin = (
+            shutil.which("brew")
+            or (os.path.isfile("/opt/homebrew/bin/brew") and "/opt/homebrew/bin/brew")
+            or (os.path.isfile("/usr/local/bin/brew") and "/usr/local/bin/brew")
+            or None
+        )
+        if _brew_bin:
+            try:
+                r = subprocess.run([_brew_bin, "install", brew_pkg],
+                                   capture_output=True, text=True, timeout=300)
+                brew_ok = r.returncode == 0
+                if brew_ok:
+                    return True
+            except Exception:
+                pass
+
+    # ── pip ───────────────────────────────────────────────────────────────────
+    if pip_pkg:
+        ok, _err = _osift_pip_install(pip_pkg)
+        if ok:
+            return True
+
+    # ── git clone + pip install -r requirements.txt (macOS brew fallback, all) ─
+    if git_url and shutil.which("git"):
+        install_dir = Path(os.path.expanduser(f"~/.local/share/{name.lower()}"))
+        try:
+            if not install_dir.exists():
+                _tool_log(log, f"[tools] Cloning {name} from {git_url} ...", "INFO")
+                r = subprocess.run(
+                    ["git", "clone", "--depth=1", git_url, str(install_dir)],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if r.returncode != 0:
+                    raise RuntimeError(r.stderr.strip())
+
+            # Install Python dependencies if requirements file exists
+            for req_file in ("requirements/base.txt", "requirements.txt"):
+                req_path = install_dir / req_file
+                if req_path.exists():
+                    _osift_pip_install(f"-r {req_path}")
+                    break
+
+            # Symlink the entry-point script to a bin directory on PATH
+            entry_candidates = [
+                install_dir / f"{name}.py",
+                install_dir / name,
+                install_dir / "src" / f"{name}.py",
+            ]
+            entry = next((p for p in entry_candidates if p.exists()), None)
+            if entry:
+                bin_dir = Path(os.path.expanduser("~/.local/bin"))
+                bin_dir.mkdir(parents=True, exist_ok=True)
+                link = bin_dir / name
+                if not link.exists():
+                    link.symlink_to(entry)
+                    entry.chmod(entry.stat().st_mode | 0o111)
+                # Ensure ~/.local/bin is on PATH for this process
+                if str(bin_dir) not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+                _tool_log(log, f"[tools] {name} installed via git clone → {link}", "SUCCESS")
+                return True
+        except Exception as _exc:
+            _tool_log(log, f"[tools] git clone install for {name} failed: {_exc}", "WARNING")
+
+    # ── go install ────────────────────────────────────────────────────────────
+    if go_pkg:
+        go = _find_go()
+        if go:
+            gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
+            gobin  = os.path.join(gopath, "bin")
+            env    = os.environ.copy()
+            env["GOPATH"] = gopath
+            env["PATH"]   = gobin + os.pathsep + env.get("PATH", "")
+            try:
+                r = subprocess.run([go, "install", go_pkg],
+                                   capture_output=True, text=True,
+                                   timeout=300, env=env)
+                if r.returncode == 0:
+                    if gobin not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = gobin + os.pathsep + os.environ.get("PATH", "")
+                    return True
+            except Exception:
+                pass
+
+    # ── winget / choco (Windows) ──────────────────────────────────────────────
+    if IS_WINDOWS:
+        for pm, args in [("winget", ["install", name, "--silent"]),
+                          ("choco",  ["install", name, "-y"])]:
+            if shutil.which(pm):
+                try:
+                    r = subprocess.run([pm] + args,
+                                       capture_output=True, text=True, timeout=300)
+                    if r.returncode == 0:
+                        return True
+                except Exception:
+                    pass
+
+    return False
+
+
+def check_binary_tools(log: "ReconLogger") -> dict:
+    """
+    Detect and auto-install all external binaries used by OSift.
+
+    Returns a dict {tool_name: is_available} for downstream callers.
+    Missing tools are skipped gracefully — no hard exit.
+    """
+    availability: dict = {}
+
+    for name, candidates, apt_pkg, pip_pkg, go_pkg, brew_pkg, git_url in _BINARY_TOOLS:
+        found = _find_binary(candidates)
+        if found:
+            ver = TOOL_REGISTRY.query_and_register(found, name)
+            _tool_log(log, f"[tools] {name} found: {found} (version: {ver})", "SUCCESS")
+            availability[name] = True
+            continue
+
+        _tool_log(log, f"[tools] {name} not found — attempting install", "WARNING")
+        ok = _try_install_binary(name, apt_pkg, pip_pkg, go_pkg, brew_pkg, log,
+                                 git_url=git_url)
+
+        if ok:
+            found = _find_binary(candidates)
+            if found:
+                ver = TOOL_REGISTRY.query_and_register(found, name)
+                _tool_log(log, f"[tools] {name} installed ({ver})", "SUCCESS")
+                availability[name] = True
+                continue
+
+        _tool_log(log, f"[tools] {name} unavailable — phase will be skipped", "WARNING")
+        availability[name] = False
+
+        if not _VANTAGE_MANAGED:
+            # Print manual install hints in TTY mode
+            hints = []
+            if apt_pkg and IS_LINUX:
+                hints.append(f"  apt  : sudo apt-get install {apt_pkg}")
+            if brew_pkg and IS_MACOS:
+                hints.append(f"  brew : brew install {brew_pkg}")
+            if pip_pkg:
+                hints.append(f"  pip  : pip install {pip_pkg}")
+            if go_pkg:
+                hints.append(f"  go   : go install {go_pkg}")
+            if hints:
+                print(f"\n[!] {name} not installed. To install:")
+                print("\n".join(hints))
+
+    return availability
+
+
+# ─── DNS Enumeration ──────────────────────────────────────────────────────────
+
+class DNSEnumerator:
+    def __init__(self, domain: str, output_dir: Path, log: ReconLogger, data: ReconData):
+        self.domain     = domain
+        self.output_dir = output_dir / "dns"
+        self.log        = log
+        self.data       = data
+        if DNS_AVAILABLE:
+            self.resolver = dns.resolver.Resolver()
+            self.resolver.timeout     = 3
+            self.resolver.lifetime    = 6
+            self.resolver.nameservers = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1"]
+        else:
+            self.resolver = None
+
+    def run(self):
+        self.log.set_tool_context("OSift-DNS")
+        self.log.info("[DNS] Starting DNS enumeration")
+        self._get_dns_records()
+        self._detect_and_record_wildcard()
+        self._attempt_zone_transfer()
+        self._run_nslookup()
+        self._brute_force_subdomains()
+        self._enumerate_from_search_engines()
+        self._dnsdumpster_lookup()
+        self.log.success(f"[DNS] Found {len(self.data.subdomains)} subdomains")
+
+    # ── Record types queried ───────────────────────────────────────────────────
+    # Core infrastructure
+    _CORE_RTYPES    = ["A", "AAAA", "CNAME", "NS", "SOA", "PTR"]
+    # Mail
+    _MAIL_RTYPES    = ["MX"]
+    # Security / policy records (all live in TXT or own types)
+    _SECURITY_RTYPES = ["CAA", "TLSA", "DNSKEY", "DS"]
+    # Service / location
+    _SRV_RTYPES     = ["SRV", "NAPTR", "SVCB", "HTTPS"]
+    # Informational
+    _INFO_RTYPES    = ["TXT", "HINFO", "LOC", "CERT"]
+    # All types to query — order matters: A/AAAA first for IP harvesting
+    _ALL_RTYPES = (
+        _CORE_RTYPES + _MAIL_RTYPES + _SECURITY_RTYPES + _SRV_RTYPES + _INFO_RTYPES
+    )
+    # Well-known SRV service names to probe on each domain
+    _SRV_SERVICES = [
+        "_http._tcp",  "_https._tcp", "_ftp._tcp",   "_ftps._tcp",
+        "_smtp._tcp",  "_smtps._tcp", "_submission._tcp",
+        "_pop3._tcp",  "_pop3s._tcp", "_imap._tcp",  "_imaps._tcp",
+        "_xmpp-client._tcp", "_xmpp-server._tcp",
+        "_sip._tcp",   "_sip._udp",   "_sips._tcp",
+        "_ldap._tcp",  "_ldaps._tcp",
+        "_kerberos._tcp", "_kpasswd._tcp",
+        "_autodiscover._tcp", "_dmarc._tcp",
+        "_caldav._tcp", "_carddav._tcp",
+        "_matrix._tcp",
+    ]
+
+    def _query(self, name: str, rtype: str) -> List[str]:
+        """
+        Resolve *name* for *rtype* and return raw string representations.
+        Returns [] on any failure (NXDOMAIN, timeout, unsupported type, etc.).
+        """
+        if not DNS_AVAILABLE:
+            return []
+        try:
+            answers = self.resolver.resolve(name, rtype)
+            return [str(r) for r in answers]
+        except Exception:
+            return []
+
+    def _query_structured(self, name: str, rtype: str) -> List[Dict]:
+        """
+        Like _query() but returns structured dicts instead of raw strings.
+        The dict always contains {"raw": str, "rtype": str}; additional keys
+        are added for record types with parseable content.
+        """
+        if not DNS_AVAILABLE:
+            return []
+        try:
+            answers = self.resolver.resolve(name, rtype)
+        except Exception:
+            return []
+
+        results = []
+        for rdata in answers:
+            raw = str(rdata)
+            rec: Dict[str, Any] = {"raw": raw, "rtype": rtype}
+
+            if rtype == "A":
+                rec["address"] = raw
+            elif rtype == "AAAA":
+                rec["address"] = raw
+            elif rtype == "MX":
+                # "10 mail.example.com."
+                parts = raw.split(None, 1)
+                rec["priority"] = int(parts[0]) if parts[0].isdigit() else 0
+                rec["exchange"] = parts[1].rstrip(".") if len(parts) > 1 else raw
+            elif rtype == "NS":
+                rec["nameserver"] = raw.rstrip(".")
+            elif rtype == "CNAME":
+                rec["target"] = raw.rstrip(".")
+            elif rtype == "SOA":
+                # "ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 300"
+                parts = raw.split()
+                if len(parts) >= 7:
+                    rec.update({
+                        "mname":   parts[0].rstrip("."),
+                        "rname":   parts[1].rstrip("."),
+                        "serial":  parts[2],
+                        "refresh": parts[3],
+                        "retry":   parts[4],
+                        "expire":  parts[5],
+                        "minimum": parts[6],
+                    })
+            elif rtype == "CAA":
+                # "0 issue "letsencrypt.org""
+                parts = raw.split(None, 2)
+                if len(parts) == 3:
+                    rec.update({
+                        "flags": parts[0],
+                        "tag":   parts[1],          # issue | issuewild | iodef
+                        "value": parts[2].strip('"'),
+                    })
+            elif rtype == "TXT":
+                rec["text"] = raw.strip('"')
+                rec.update(self._classify_txt(raw))
+            elif rtype == "SRV":
+                # "10 20 443 target.example.com."
+                parts = raw.split()
+                if len(parts) == 4:
+                    rec.update({
+                        "priority": parts[0],
+                        "weight":   parts[1],
+                        "port":     parts[2],
+                        "target":   parts[3].rstrip("."),
+                    })
+            elif rtype == "TLSA":
+                # "3 1 1 <hash>"
+                parts = raw.split(None, 3)
+                if len(parts) == 4:
+                    rec.update({
+                        "usage":     parts[0],
+                        "selector":  parts[1],
+                        "matching":  parts[2],
+                        "cert_data": parts[3],
+                    })
+            elif rtype == "DNSKEY":
+                parts = raw.split(None, 3)
+                if len(parts) == 4:
+                    rec.update({
+                        "flags":     parts[0],
+                        "protocol":  parts[1],
+                        "algorithm": parts[2],
+                        "key":       parts[3][:32] + "...",   # truncated
+                    })
+            elif rtype == "DS":
+                parts = raw.split(None, 3)
+                if len(parts) == 4:
+                    rec.update({
+                        "key_tag":   parts[0],
+                        "algorithm": parts[1],
+                        "digest_type": parts[2],
+                        "digest":    parts[3][:32] + "...",
+                    })
+            elif rtype in ("SVCB", "HTTPS"):
+                parts = raw.split(None, 2)
+                if len(parts) >= 2:
+                    rec.update({
+                        "priority": parts[0],
+                        "target":   parts[1].rstrip("."),
+                        "params":   parts[2] if len(parts) > 2 else "",
+                    })
+            results.append(rec)
+        return results
+
+    @staticmethod
+    def _classify_txt(raw: str) -> Dict[str, Any]:
+        """
+        Identify which policy or service a TXT record belongs to and
+        return a dict of sub-type classifications and parsed fields.
+        """
+        txt = raw.strip('"').lower()
+        out: Dict[str, Any] = {"txt_type": "generic"}
+
+        if txt.startswith("v=spf1"):
+            out["txt_type"] = "SPF"
+            out["spf_raw"]  = raw.strip('"')
+            # Warn on permissive all mechanisms
+            if "+all" in txt:
+                out["spf_policy"] = "pass_all (overly permissive)"
+            elif "~all" in txt:
+                out["spf_policy"] = "softfail"
+            elif "-all" in txt:
+                out["spf_policy"] = "fail (strict)"
+            elif "?all" in txt:
+                out["spf_policy"] = "neutral"
+            else:
+                out["spf_policy"] = "no_all_mechanism"
+
+        elif txt.startswith("v=dmarc1"):
+            out["txt_type"] = "DMARC"
+            out["dmarc_raw"] = raw.strip('"')
+            for part in raw.strip('"').split(";"):
+                k, _, v = part.strip().partition("=")
+                k = k.strip().lower()
+                if k == "p":
+                    out["dmarc_policy"] = v.strip()
+                elif k == "sp":
+                    out["dmarc_subdomain_policy"] = v.strip()
+                elif k == "rua":
+                    out["dmarc_rua"] = v.strip()
+                elif k == "ruf":
+                    out["dmarc_ruf"] = v.strip()
+                elif k == "pct":
+                    out["dmarc_pct"] = v.strip()
+                elif k == "adkim":
+                    out["dmarc_adkim"] = v.strip()
+                elif k == "aspf":
+                    out["dmarc_aspf"] = v.strip()
+
+        elif txt.startswith("v=dkim1"):
+            out["txt_type"] = "DKIM"
+            out["dkim_raw"] = raw.strip('"')
+            for part in raw.strip('"').split(";"):
+                k, _, v = part.strip().partition("=")
+                k = k.strip().lower()
+                if k == "p":
+                    key_data = v.strip()
+                    out["dkim_pubkey_length"] = len(key_data)
+                    out["dkim_pubkey_absent"] = (key_data == "")
+                elif k == "k":
+                    out["dkim_key_type"] = v.strip()
+                elif k == "h":
+                    out["dkim_hash_alg"] = v.strip()
+                elif k == "t":
+                    out["dkim_flags"] = v.strip()
+
+        elif txt.startswith("v=bimi1"):
+            out["txt_type"] = "BIMI"
+            for part in raw.strip('"').split(";"):
+                k, _, v = part.strip().partition("=")
+                k = k.strip().lower()
+                if k == "l":
+                    out["bimi_logo_url"] = v.strip()
+                elif k == "a":
+                    out["bimi_authority"] = v.strip()
+
+        elif txt.startswith("v=mta-sts1"):
+            out["txt_type"] = "MTA-STS"
+
+        elif txt.startswith("v=tls-rpt1"):
+            out["txt_type"] = "TLS-RPT"
+            for part in raw.strip('"').split(";"):
+                k, _, v = part.strip().partition("=")
+                if k.strip().lower() == "rua":
+                    out["tlsrpt_rua"] = v.strip()
+
+        elif "google-site-verification" in txt:
+            out["txt_type"] = "google_site_verification"
+        elif "ms=" in txt or "microsoft" in txt:
+            out["txt_type"] = "microsoft_verification"
+        elif "docusign=" in txt:
+            out["txt_type"] = "docusign_verification"
+        elif "apple-domain-verification=" in txt:
+            out["txt_type"] = "apple_verification"
+        elif "atlassian-domain-verification=" in txt:
+            out["txt_type"] = "atlassian_verification"
+        elif "facebook-domain-verification=" in txt:
+            out["txt_type"] = "facebook_verification"
+        elif "stripe-verification=" in txt:
+            out["txt_type"] = "stripe_verification"
+        elif "protonmail-verification=" in txt:
+            out["txt_type"] = "protonmail_verification"
+        elif "have-i-been-pwned-verification=" in txt:
+            out["txt_type"] = "hibp_verification"
+        elif "_amazonses" in txt or "amazonses" in txt:
+            out["txt_type"] = "amazonses_verification"
+        elif "keybase-site-verification=" in txt:
+            out["txt_type"] = "keybase_verification"
+
+        return out
+
+    def _probe_dkim_selectors(self, domain: str) -> List[Dict]:
+        """
+        Query a list of common DKIM selectors under *domain*.
+        Returns structured records for any that resolve.
+        """
+        selectors = [
+            "default", "google", "k1", "k2", "k3",
+            "mail", "email", "dkim", "dkim1", "dkim2",
+            "selector1", "selector2",               # Microsoft 365
+            "s1", "s2", "s3",
+            "mimecast", "mandrill", "sendgrid",
+            "mailchimp", "klaviyo", "hubspot",
+            "zoho", "protonmail",
+            "20120113", "20161025", "20221208",     # date-based Google selectors
+            "smtp", "smtpapi",
+        ]
+        found = []
+        for sel in selectors:
+            qname = f"{sel}._domainkey.{domain}"
+            recs  = self._query_structured(qname, "TXT")
+            for rec in recs:
+                if "v=dkim1" in rec.get("raw", "").lower():
+                    rec["selector"] = sel
+                    rec["qname"]    = qname
+                    found.append(rec)
+        return found
+
+    # ── Wildcard DNS detection ────────────────────────────────────────────────
+
+    def _detect_and_record_wildcard(self) -> None:
+        """
+        Probe a guaranteed-nonexistent subdomain label. If it resolves, the
+        domain has wildcard DNS. Stores resolved IPs in data.wildcard_ips and
+        emits a "DNS: Wildcard Entry Detected" finding so that downstream
+        subdomain validation can discard false positives.
+        """
+        probe = f"__osift_wc_{_uuid.uuid4().hex[:12]}__.{self.domain}"
+        wc_ips = [
+            ip for ip in (self._query(probe, "A") + self._query(probe, "AAAA"))
+            if self._is_valid_ip(ip)
+        ]
+        if not wc_ips:
+            return
+
+        self.data.wildcard_ips[self.domain] = wc_ips
+        self.log.warning(
+            f"[DNS] Wildcard DNS detected for {self.domain} "
+            f"(resolves to: {', '.join(wc_ips)}). "
+            f"Brute-force results will be filtered; all subdomains will be "
+            f"validated after collection."
+        )
+        _rec_file = str(
+            self.output_dir / "records" / f"{_safe_filename(self.domain)}_records.json"
+        )
+        add_finding(
+            self.data, "OSift-DNS", "dns_wildcard", "DNS Intelligence", "INFO",
+            "DNS: Wildcard Entry Detected",
+            domain=self.domain, affected=self.domain,
+            wildcard_ips=", ".join(wc_ips),
+            output_file=_rec_file,
+        )
+
+    def _is_wildcard_false_positive(self, fqdn: str) -> bool:
+        """
+        Return True when fqdn resolves AND all resolved IPs are in the
+        wildcard IP set for the parent domain (i.e., it is a false positive).
+        Subdomains that do NOT resolve are kept — they may be passive/historical.
+        """
+        wc_ips = self.data.wildcard_ips.get(self.domain)
+        if not wc_ips:
+            return False
+        ips = self._query(fqdn, "A") + self._query(fqdn, "AAAA")
+        if not ips:
+            return False
+        wc_set = set(wc_ips)
+        return all(ip in wc_set for ip in ips)
+
+    def _get_dns_records(self):
+        """
+        Query the full set of DNS record types for the target domain,
+        parse each record type into structured form, detect DMARC/SPF/DKIM/
+        BIMI/CAA/TLSA/DNSSEC, probe SRV service names, and write all results
+        to dns/records/<domain>_records.json.
+        """
+        _rec_file = str(self.output_dir / "records" / f"{_safe_filename(self.domain)}_records.json")
+        self.log.info(
+            f"[DNS] Querying {len(self._ALL_RTYPES)} record types for {self.domain}"
+        )
+        records: Dict[str, Any] = {}
+
+        # ── Standard record types ──────────────────────────────────────────────
+        for rtype in self._ALL_RTYPES:
+            structured = self._query_structured(self.domain, rtype)
+            if not structured:
+                continue
+            records[rtype] = structured
+
+            # ── Side-effects: feed IPs and subdomains into ReconData ───────────
+            if rtype == "A":
+                for rec in structured:
+                    self._add_ip(rec["address"], self.domain, "A record")
+            elif rtype == "AAAA":
+                for rec in structured:
+                    self._add_ip(rec["address"], self.domain, "AAAA record")
+            elif rtype == "MX":
+                for rec in structured:
+                    exch = rec.get("exchange", "")
+                    if exch:
+                        self._add_subdomain(exch, "MX record", _rec_file)
+            elif rtype == "NS":
+                for rec in structured:
+                    ns = rec.get("nameserver", "")
+                    if ns and ns.endswith("." + self.domain):
+                        self._add_subdomain(ns, "NS record", _rec_file)
+            elif rtype == "CNAME":
+                for rec in structured:
+                    tgt = rec.get("target", "")
+                    if tgt and tgt.endswith("." + self.domain):
+                        self._add_subdomain(tgt, "CNAME record", _rec_file)
+            elif rtype == "SRV":
+                for rec in structured:
+                    tgt = rec.get("target", "")
+                    if tgt and tgt not in (".", ""):
+                        self._add_subdomain(tgt, "SRV record", _rec_file)
+
+        # ── DMARC (_dmarc.<domain>) ────────────────────────────────────────────
+        dmarc_recs = self._query_structured(f"_dmarc.{self.domain}", "TXT")
+        if dmarc_recs:
+            records["DMARC"] = dmarc_recs
+            self.log.info(f"[DNS] DMARC record found for {self.domain}")
+            _dm_policy = dmarc_recs[0].get("dmarc_policy", "")
+            _dm_detail = (
+                f"DMARC record found: p={_dm_policy}" if _dm_policy
+                else "DMARC record found"
+            )
+            _dm_raw = dmarc_recs[0].get("dmarc_raw", "")
+            add_finding(
+                self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
+                _dm_detail,
+                domain=self.domain, host=self.domain,
+                affected=_dm_raw or self.domain,
+                output_file=_rec_file,
+            )
+
+        # ── MTA-STS (_smtp._tls.<domain>) ─────────────────────────────────────
+        mta_sts_recs = self._query_structured(f"_smtp._tls.{self.domain}", "TXT")
+        if mta_sts_recs:
+            records["MTA-STS"] = mta_sts_recs
+
+        # ── TLS-RPT (_smtp._tls.<domain>) — same record as MTA-STS txt ────────
+        tlsrpt_recs = self._query_structured(f"_smtp._tls.{self.domain}", "TXT")
+        if tlsrpt_recs:
+            for r in tlsrpt_recs:
+                if r.get("txt_type") == "TLS-RPT":
+                    records.setdefault("TLS-RPT", []).append(r)
+
+        # ── DKIM — probe common selectors ─────────────────────────────────────
+        dkim_recs = self._probe_dkim_selectors(self.domain)
+        if dkim_recs:
+            records["DKIM"] = dkim_recs
+            selectors_found = [r.get("selector", "?") for r in dkim_recs]
+            self.log.info(
+                f"[DNS] DKIM selectors found: {', '.join(selectors_found)}"
+            )
+            add_finding(
+                self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
+                f"DKIM selectors found: {', '.join(selectors_found)}",
+                domain=self.domain, host=self.domain,
+                affected="\n".join(selectors_found),
+                output_file=_rec_file,
+            )
+
+        # ── BIMI (default._bimi.<domain>) ─────────────────────────────────────
+        bimi_recs = self._query_structured(f"default._bimi.{self.domain}", "TXT")
+        if bimi_recs:
+            records["BIMI"] = bimi_recs
+            self.log.info(f"[DNS] BIMI record found for {self.domain}")
+
+        # ── Well-known SRV services ────────────────────────────────────────────
+        srv_results: List[Dict] = []
+        for svc in self._SRV_SERVICES:
+            qname = f"{svc}.{self.domain}"
+            recs  = self._query_structured(qname, "SRV")
+            for rec in recs:
+                rec["service"] = svc
+                rec["qname"]   = qname
+                tgt = rec.get("target", "")
+                if tgt and tgt not in (".", ""):
+                    self._add_subdomain(tgt, f"SRV/{svc}", _rec_file)
+                srv_results.append(rec)
+        if srv_results:
+            records["SRV_SERVICES"] = srv_results
+            self.log.info(
+                f"[DNS] SRV services found: "
+                f"{', '.join(sorted({r['service'] for r in srv_results}))}"
+            )
+
+        # ── DNSSEC summary ─────────────────────────────────────────────────────
+        has_dnskey = bool(records.get("DNSKEY"))
+        has_ds     = bool(records.get("DS"))
+        records["DNSSEC"] = {
+            "dnskey_present": has_dnskey,
+            "ds_present":     has_ds,
+            "signed":         has_dnskey or has_ds,
+        }
+
+        # ── Security posture summary (SPF / DMARC / CAA) ──────────────────────
+        spf_recs   = [
+            r for r in records.get("TXT", [])
+            if r.get("txt_type") == "SPF"
+        ]
+        dmarc_list = records.get("DMARC", [])
+        caa_list   = records.get("CAA",   [])
+
+        records["security_summary"] = {
+            "spf_present":   bool(spf_recs),
+            "spf_policy":    spf_recs[0].get("spf_policy", "") if spf_recs else "absent",
+            "dmarc_present": bool(dmarc_list),
+            "dmarc_policy":  dmarc_list[0].get("dmarc_policy", "") if dmarc_list else "absent",
+            "caa_present":   bool(caa_list),
+            "caa_issuers":   [r.get("value", "") for r in caa_list if r.get("tag") == "issue"],
+            "dkim_selectors": [r.get("selector", "") for r in records.get("DKIM", [])],
+            "bimi_present":  bool(records.get("BIMI")),
+            "dnssec_signed": has_dnskey or has_ds,
+            "mta_sts":       bool(records.get("MTA-STS")),
+            "tls_rpt":       bool(records.get("TLS-RPT")),
+        }
+
+        # ── Emit security findings for missing / weak email-security controls ──
+        ss = records["security_summary"]
+
+        if not ss["spf_present"]:
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "MEDIUM",
+                        "Missing SPF Record",
+                        domain=self.domain, affected=self.domain,
+                        description="No SPF record found. Without SPF, attackers can spoof email from this domain.",
+                        output_file=_rec_file)
+        elif ss.get("spf_policy", "").lower() == "+all":
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "HIGH",
+                        "Permissive SPF Record (+all)",
+                        domain=self.domain, affected=self.domain,
+                        description="SPF record uses '+all', which permits any host to send mail on behalf of this domain.",
+                        output_file=_rec_file)
+
+        if not ss["dmarc_present"]:
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "MEDIUM",
+                        "Missing DMARC Record",
+                        domain=self.domain, affected=self.domain,
+                        description="No DMARC record found. Without DMARC, spoofed emails are not rejected or quarantined.",
+                        output_file=_rec_file)
+        elif ss.get("dmarc_policy", "").lower() == "none":
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "LOW",
+                        "DMARC Policy: Monitor Only",
+                        domain=self.domain, affected=self.domain,
+                        description="DMARC policy is 'p=none' (monitor only). Spoofed emails are reported but not blocked.",
+                        output_file=_rec_file)
+
+        if not ss["caa_present"]:
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "INFO",
+                        "Missing CAA Record",
+                        domain=self.domain, affected=self.domain,
+                        description="No CAA record found. Any CA can issue TLS certificates for this domain.",
+                        output_file=_rec_file)
+
+        self.data.dns_records[self.domain] = records
+        out = self.output_dir / "records" / f"{_safe_filename(self.domain)}_records.json"
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
+        except OSError as e:
+            self.log.error(f"[DNS] Failed to write DNS records file: {e}", exc=e)
+
+        # Log a concise summary of what was found
+        found_types = [t for t in records if t not in ("DNSSEC", "security_summary")
+                       and records[t]]
+        if not found_types:
+            self.log.info("[DNS] No DNS records found for this domain")
+            _write_placeholder(
+                self.output_dir / "records",
+                f"{_safe_filename(self.domain)}_records.json",
+                f"DNS queries for {self.domain} (all record types)",
+                "(DNS enumeration returned no records for this domain)",
+            )
+        _collected_types = ', '.join(sorted(found_types)) if found_types else 'none'
+        self.log.success(f"[DNS] Records collected: {_collected_types}")
+        if found_types:
+            add_finding(
+                self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
+                f"DNS Records collected: {_collected_types}",
+                domain=self.domain, host=self.domain,
+                affected=_collected_types,
+                output_file=_rec_file,
+            )
+
+    def _attempt_zone_transfer(self):
+        if not DNS_AVAILABLE:
+            return
+        for ns in self._query(self.domain, "NS"):
+            ns = ns.rstrip(".")
+            self.log.info(f"[DNS] Attempting zone transfer from {ns}")
+            try:
+                z = dns.zone.from_xfr(dns.query.xfr(ns, self.domain, timeout=5))
+                entries = []
+                _zt_file = str(self.output_dir / "zone_transfers" / f"{_safe_filename(ns)}_zone.json")
+                for name, node in z.nodes.items():
+                    fqdn = f"{name}.{self.domain}".strip(".")
+                    for rdataset in node.rdatasets:
+                        for rdata in rdataset:
+                            entries.append({
+                                "name": fqdn,
+                                "type": dns.rdatatype.to_text(rdataset.rdtype),
+                                "value": str(rdata),
+                            })
+                            self._add_subdomain(fqdn, "zone transfer", _zt_file)
+                if entries:
+                    self.log.success(f"[DNS] Zone transfer SUCCESS from {ns}: {len(entries)} entries")
+                    out = Path(_zt_file)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    add_finding(self.data, "OSift-DNS", "zone_transfer", CAT_DNS, "HIGH",
+                                f"DNS zone transfer succeeded: {len(entries)} DNS entries exposed. "
+                                f"Zone transfers should be restricted to authorised secondary nameservers only.",
+                                host=ns, domain=self.domain, affected=ns,
+                                output_file=str(out))
+                    self.data.zone_transfers.append({"ns": ns, "entries": entries})
+                    out.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+            except Exception as e:
+                self.log.debug(f"[DNS] Zone transfer from {ns} failed: {e}")
+
+    def _brute_force_subdomains(self):
+        self.log.info(f"[DNS] Brute forcing {len(DEFAULT_WORDLIST)} subdomains")
+        found: List[str] = []
+        _wc_ips = set(self.data.wildcard_ips.get(self.domain) or [])
+        bf_out = self.output_dir / "subdomains" / f"brute_force_{_safe_filename(self.domain)}.txt"
+        _bf_file = str(bf_out)
+
+        def check(word: str):
+            fqdn  = f"{word}.{self.domain}"
+            ips   = self._query(fqdn, "A") + self._query(fqdn, "AAAA")
+            cname = self._query(fqdn, "CNAME")
+            if not (ips or cname):
+                return None
+            # Discard if all IPs are wildcard IPs (false positive)
+            if ips and _wc_ips and all(ip in _wc_ips for ip in ips):
+                return None
+            return fqdn, ips
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+            futures = {ex.submit(check, w): w for w in DEFAULT_WORDLIST}
+            for fut in concurrent.futures.as_completed(futures):
+                result = fut.result()
+                if result:
+                    fqdn, ips = result
+                    self._add_subdomain(fqdn, "brute force", _bf_file)
+                    for ip in ips:
+                        self._add_ip(ip, fqdn, "brute force A record")
+                    found.append(fqdn)
+
+        self.log.success(f"[DNS] Brute force found {len(found)} subdomains")
+        try:
+            bf_out.parent.mkdir(parents=True, exist_ok=True)
+            bf_out.write_text("\n".join(sorted(found)), encoding="utf-8")
+        except OSError as e:
+            self.log.error(f"[DNS] Failed to write brute force output: {e}", exc=e)
+        if not found:
+            _write_placeholder(
+                self.output_dir / "subdomains",
+                f"brute_force_{_safe_filename(self.domain)}.txt",
+                f"DNS A/AAAA/CNAME brute force against {self.domain} ({len(DEFAULT_WORDLIST)} words)",
+                "(DNS brute force found no live subdomains)",
+            )
+
+    def _enumerate_from_search_engines(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        self.log.info("[DNS] Querying passive DNS sources")
+        session = make_session()
+        passive_dir = self.output_dir / "passive"
+        passive_dir.mkdir(parents=True, exist_ok=True)
+        _sfn = _safe_filename(self.domain)
+
+        # HackerTarget
+        _ht_file = passive_dir / f"hackertarget_{_sfn}.txt"
+        try:
+            resp = session.get(f"https://api.hackertarget.com/hostsearch/?q={self.domain}", timeout=15)
+            if resp.status_code == 200 and "error" not in resp.text.lower():
+                _ht_lines = resp.text.strip().splitlines()
+                _ht_file.write_text("\n".join(_ht_lines), encoding="utf-8")
+                for line in _ht_lines:
+                    parts = line.split(",")
+                    fqdn = parts[0].strip()
+                    ip   = parts[1].strip() if len(parts) > 1 else ""
+                    self._add_subdomain(fqdn, "hackertarget", str(_ht_file))
+                    if ip: self._add_ip(ip, fqdn, "hackertarget")
+            else:
+                _write_placeholder(passive_dir, f"hackertarget_{_sfn}.txt",
+                                   f"HackerTarget hostsearch for {self.domain}",
+                                   f"(no results or API error — status {resp.status_code})")
+        except Exception as e:
+            self.log.debug(f"[DNS] HackerTarget: {e}")
+
+        # RapidDNS
+        _rd_file = passive_dir / f"rapiddns_{_sfn}.txt"
+        try:
+            resp = session.get(f"https://rapiddns.io/subdomain/{self.domain}?full=1", timeout=15)
+            if resp.status_code == 200 and BS4_AVAILABLE:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                _rd_hosts: List[str] = []
+                for td in soup.find_all("td"):
+                    txt = td.get_text(strip=True)
+                    if txt.endswith(f".{self.domain}") or txt == self.domain:
+                        _rd_hosts.append(txt)
+                if _rd_hosts:
+                    _rd_file.write_text("\n".join(sorted(set(_rd_hosts))), encoding="utf-8")
+                    for fqdn in _rd_hosts:
+                        self._add_subdomain(fqdn, "rapiddns", str(_rd_file))
+                else:
+                    _write_placeholder(passive_dir, f"rapiddns_{_sfn}.txt",
+                                       f"RapidDNS subdomain lookup for {self.domain}",
+                                       "(no subdomains found)")
+            else:
+                _write_placeholder(passive_dir, f"rapiddns_{_sfn}.txt",
+                                   f"RapidDNS subdomain lookup for {self.domain}",
+                                   f"(status {resp.status_code})")
+        except Exception as e:
+            self.log.debug(f"[DNS] RapidDNS: {e}")
+
+        # ThreatCrowd
+        _tc_file = passive_dir / f"threatcrowd_{_sfn}.json"
+        try:
+            resp = session.get(
+                f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={self.domain}",
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                _tc_data = resp.json()
+                _tc_subs = _tc_data.get("subdomains", [])
+                _tc_file.write_text(json.dumps(_tc_data, indent=2), encoding="utf-8")
+                for sub in _tc_subs:
+                    self._add_subdomain(sub, "threatcrowd", str(_tc_file))
+            else:
+                _write_placeholder(passive_dir, f"threatcrowd_{_sfn}.json",
+                                   f"ThreatCrowd domain report for {self.domain}",
+                                   f"(status {resp.status_code})")
+        except Exception as e:
+            self.log.debug(f"[DNS] ThreatCrowd: {e}")
+
+        # AlienVault OTX (passive DNS — separate from the full OTX API client)
+        _av_file = passive_dir / f"alienvault_{_sfn}.json"
+        try:
+            resp = session.get(
+                f"https://otx.alienvault.com/api/v1/indicators/domain/{self.domain}/passive_dns",
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                _av_data = resp.json()
+                _av_entries = _av_data.get("passive_dns", [])
+                _av_file.write_text(json.dumps(_av_data, indent=2), encoding="utf-8")
+                for entry in _av_entries:
+                    hostname = entry.get("hostname", "")
+                    if hostname.endswith(f".{self.domain}") or hostname == self.domain:
+                        self._add_subdomain(hostname, "alienvault", str(_av_file))
+                    address = entry.get("address", "")
+                    if address and self._is_valid_ip(address):
+                        self._add_ip(address, hostname, "alienvault passive dns")
+            else:
+                _write_placeholder(passive_dir, f"alienvault_{_sfn}.json",
+                                   f"AlienVault OTX passive DNS for {self.domain}",
+                                   f"(status {resp.status_code})")
+        except Exception as e:
+            self.log.debug(f"[DNS] AlienVault OTX: {e}")
+
+    def _dnsdumpster_lookup(self):
+        if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+            return
+        self.log.info("[DNS] Querying DNSDumpster")
+        session = make_session()
+        passive_dir = self.output_dir / "passive"
+        passive_dir.mkdir(parents=True, exist_ok=True)
+        _sfn = _safe_filename(self.domain)
+        _dd_file = passive_dir / f"dnsdumpster_{_sfn}.txt"
+        try:
+            resp = session.get("https://dnsdumpster.com/", timeout=10)
+            csrf = ""
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                inp  = soup.find("input", {"name": "csrfmiddlewaretoken"})
+                if inp:
+                    csrf = inp.get("value", "")
+            if csrf:
+                resp2 = session.post(
+                    "https://dnsdumpster.com/",
+                    data={"csrfmiddlewaretoken": csrf, "targetip": self.domain, "user": "free"},
+                    headers={"Referer": "https://dnsdumpster.com/"},
+                    timeout=30,
+                )
+                if resp2.status_code == 200:
+                    _dd_hosts: List[str] = []
+                    for td in BeautifulSoup(resp2.text, "html.parser").find_all("td", class_="col-md-4"):
+                        txt = td.get_text(strip=True).split("\n")[0]
+                        if self.domain in txt:
+                            _dd_hosts.append(txt)
+                    if _dd_hosts:
+                        _dd_file.write_text("\n".join(sorted(set(_dd_hosts))), encoding="utf-8")
+                        for fqdn in _dd_hosts:
+                            self._add_subdomain(fqdn, "dnsdumpster", str(_dd_file))
+                    else:
+                        _write_placeholder(passive_dir, f"dnsdumpster_{_sfn}.txt",
+                                           f"DNSDumpster lookup for {self.domain}",
+                                           "(no subdomains found in response)")
+                    self.log.success("[DNS] DNSDumpster scraped successfully")
+            else:
+                _write_placeholder(passive_dir, f"dnsdumpster_{_sfn}.txt",
+                                   f"DNSDumpster lookup for {self.domain}",
+                                   "(could not obtain CSRF token — site may have changed)")
+        except Exception as e:
+            self.log.debug(f"[DNS] DNSDumpster: {e}")
+
+    # ── nslookup ──────────────────────────────────────────────────────────────
+
+    # Record types queried in forward lookups
+    _NSLOOKUP_QTYPES: List[str] = ["A", "AAAA", "MX", "NS", "TXT", "SOA", "CNAME"]
+    # Maximum IPs to reverse-lookup (prevents runaway on large IP sets)
+    _NSLOOKUP_MAX_REVERSE: int = 50
+
+    def _run_nslookup(self) -> None:
+        """
+        Run nslookup forward lookups for the target domain and reverse (PTR)
+        lookups for IPs collected so far.  Writes structured output to
+        dns/nslookup/ and enriches data.subdomains / data.ip_addresses.
+        """
+        nslookup_path = shutil.which("nslookup")
+        if not nslookup_path:
+            self.log.warning("[nslookup] nslookup not found — skipping")
+            return
+
+        TOOL_REGISTRY.query_and_register(nslookup_path, "nslookup")
+        out_dir = self.output_dir / "nslookup"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self.log.info(f"[nslookup] Starting lookups for {self.domain}")
+
+        # ── Forward lookups ───────────────────────────────────────────────────
+        fwd_path = out_dir / f"{_safe_filename(self.domain)}_forward.json"
+        _fwd_file = str(fwd_path)
+        forward: Dict[str, List[Dict]] = {}
+        for qtype in self._NSLOOKUP_QTYPES:
+            cmd    = f'"{nslookup_path}" -type={qtype} {self.domain}'
+            stdout, _, _ = _shell(cmd)
+            parsed = self._parse_nslookup_forward(stdout, qtype)
+            if parsed:
+                forward[qtype] = parsed
+                self._enrich_nslookup_forward(parsed, qtype, _fwd_file)
+
+        if forward:
+            fwd_path.write_text(
+                json.dumps({"domain": self.domain, "records": forward}, indent=2),
+                encoding="utf-8",
+            )
+            rec_summary = ", ".join(
+                f"{rt}({len(recs)})" for rt, recs in forward.items()
+            )
+            add_finding(
+                self.data, "OSift-DNS", "nslookup_forward", CAT_DNS, "INFO",
+                f"nslookup forward lookup: {rec_summary}",
+                host=self.domain, domain=self.domain, affected=self.domain,
+                output_file=str(fwd_path),
+            )
+            self.log.success(f"[nslookup] Forward: {rec_summary}")
+        else:
+            self.log.warning(f"[nslookup] No forward records returned for {self.domain}")
+
+        # ── Reverse (PTR) lookups ─────────────────────────────────────────────
+        _rev_file = str(out_dir / "nslookup_summary.json")
+        ips_to_probe = list(self.data.ip_addresses.keys())[: self._NSLOOKUP_MAX_REVERSE]
+        reverse: Dict[str, List[str]] = {}
+
+        for ip in ips_to_probe:
+            cmd    = f'"{nslookup_path}" {ip}'
+            stdout, _, _ = _shell(cmd)
+            hostnames = self._parse_nslookup_reverse(stdout)
+            if hostnames:
+                reverse[ip] = hostnames
+                for hostname in hostnames:
+                    hostname = hostname.rstrip(".")
+                    if hostname.endswith(self.domain):
+                        self._add_subdomain(hostname, "nslookup-reverse", _rev_file)
+                    # Any PTR result enriches the IP record with known hostnames
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip,
+                        {"fqdns": [], "context": "nslookup-reverse",
+                         "asn": None, "org": None, "geo": None},
+                    )
+                    if hostname not in ip_rec["fqdns"]:
+                        ip_rec["fqdns"].append(hostname)
+
+        # ── Write summary ─────────────────────────────────────────────────────
+        summary = {
+            "domain":          self.domain,
+            "forward_lookups": forward,
+            "reverse_lookups": reverse,
+        }
+        (out_dir / "nslookup_summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8",
+        )
+        if reverse:
+            self.log.success(
+                f"[nslookup] Reverse: {len(reverse)}/{len(ips_to_probe)} IPs resolved"
+            )
+
+    # ── nslookup parsing helpers ──────────────────────────────────────────────
+
+    # Compiled once at class level for performance
+    _RE_NS_NAME    = re.compile(r'^Name:\s+(.+)$',             re.IGNORECASE)
+    _RE_NS_ADDR    = re.compile(r'^Addresses?:\s+(.+)$',       re.IGNORECASE)
+    _RE_NS_HAS_A   = re.compile(r'^(\S+)\s+has\s+address\s+(.+)$',         re.IGNORECASE)
+    _RE_NS_HAS_AAA = re.compile(r'^(\S+)\s+has\s+IPv6\s+address\s+(.+)$',  re.IGNORECASE)
+    _RE_NS_MX      = re.compile(r'^(\S+)\s+mail\s+exchanger\s*=\s*(.+)$',  re.IGNORECASE)
+    _RE_NS_NS      = re.compile(r'^(\S+)\s+nameserver\s*=\s*(.+)$',        re.IGNORECASE)
+    _RE_NS_CNAME   = re.compile(r'^(\S+)\s+canonical\s+name\s*=\s*(.+)$',  re.IGNORECASE)
+    _RE_NS_TXT     = re.compile(r'^(\S+)\s+text\s*=\s*"?(.*?)"?\s*$',      re.IGNORECASE)
+    _RE_NS_SOA_KV  = re.compile(r'(\w[\w\s]+?)\s*=\s*(.+)',                re.IGNORECASE)
+    _RE_NS_PTR     = re.compile(r'(?:in-addr|ip6)\.arpa\s+name\s*=\s*(\S+)', re.IGNORECASE)
+    _RE_NS_SKIP    = re.compile(
+        r'^(?:Server:|Address:|Non-authoritative|Authoritative|>\s)',
+        re.IGNORECASE,
+    )
+
+    def _parse_nslookup_forward(self, stdout: str, qtype: str) -> List[Dict]:
+        """Return structured records parsed from nslookup forward lookup output."""
+        if not stdout:
+            return []
+        results: List[Dict] = []
+        current_name = self.domain
+
+        lines = [ln.rstrip() for ln in stdout.splitlines()]
+
+        if qtype in ("A", "AAAA"):
+            for line in lines:
+                if self._RE_NS_SKIP.match(line) or not line.strip():
+                    continue
+                m = self._RE_NS_NAME.match(line.strip())
+                if m:
+                    current_name = m.group(1).strip().rstrip(".")
+                    continue
+                m = self._RE_NS_ADDR.match(line.strip())
+                if m:
+                    for ip in m.group(1).split(","):
+                        ip = ip.strip()
+                        if ip:
+                            results.append({"type": qtype, "name": current_name, "value": ip})
+                    continue
+                m = self._RE_NS_HAS_AAA.match(line.strip())
+                if m:
+                    results.append({"type": "AAAA", "name": m.group(1).rstrip("."), "value": m.group(2).strip()})
+                    continue
+                m = self._RE_NS_HAS_A.match(line.strip())
+                if m:
+                    results.append({"type": "A", "name": m.group(1).rstrip("."), "value": m.group(2).strip()})
+
+        elif qtype == "MX":
+            for line in lines:
+                m = self._RE_NS_MX.match(line.strip())
+                if m:
+                    results.append({
+                        "type": "MX", "name": m.group(1).rstrip("."),
+                        "value": m.group(2).strip().rstrip("."),
+                    })
+
+        elif qtype == "NS":
+            for line in lines:
+                m = self._RE_NS_NS.match(line.strip())
+                if m:
+                    results.append({
+                        "type": "NS", "name": m.group(1).rstrip("."),
+                        "value": m.group(2).strip().rstrip("."),
+                    })
+
+        elif qtype == "CNAME":
+            for line in lines:
+                m = self._RE_NS_CNAME.match(line.strip())
+                if m:
+                    results.append({
+                        "type": "CNAME", "name": m.group(1).rstrip("."),
+                        "value": m.group(2).strip().rstrip("."),
+                    })
+
+        elif qtype == "TXT":
+            for line in lines:
+                m = self._RE_NS_TXT.match(line.strip())
+                if m:
+                    results.append({
+                        "type": "TXT", "name": m.group(1).rstrip("."),
+                        "value": m.group(2).strip(),
+                    })
+
+        elif qtype == "SOA":
+            soa: Dict = {"type": "SOA", "name": self.domain}
+            in_soa = False
+            for line in lines:
+                stripped = line.strip()
+                if self._RE_NS_SKIP.match(line) or not stripped:
+                    continue
+                # SOA block starts when domain name appears at line start
+                if stripped.startswith(self.domain) and "origin" in stripped.lower():
+                    in_soa = True
+                if in_soa:
+                    m = self._RE_NS_SOA_KV.search(stripped)
+                    if m:
+                        soa[m.group(1).strip().lower().replace(" ", "_")] = (
+                            m.group(2).strip().rstrip(".")
+                        )
+            if len(soa) > 2:
+                results.append(soa)
+
+        return results
+
+    def _parse_nslookup_reverse(self, stdout: str) -> List[str]:
+        """Return PTR hostnames from nslookup reverse lookup output."""
+        hostnames: List[str] = []
+        if not stdout:
+            return hostnames
+        for line in stdout.splitlines():
+            m = self._RE_NS_PTR.search(line)
+            if m:
+                hostname = m.group(1).strip().rstrip(".")
+                if hostname and hostname not in hostnames:
+                    hostnames.append(hostname)
+        return hostnames
+
+    def _enrich_nslookup_forward(self, records: List[Dict], qtype: str, output_file: str = "") -> None:
+        """Propagate nslookup forward lookup results into data structures."""
+        for rec in records:
+            name  = (rec.get("name")  or "").strip().rstrip(".")
+            value = (rec.get("value") or "").strip().rstrip(".")
+            if not value:
+                continue
+
+            if qtype == "A":
+                self._add_ip(value, name, "nslookup")
+                if name != self.domain and name.endswith(self.domain):
+                    self._add_subdomain(name, "nslookup", output_file)
+
+            elif qtype == "AAAA":
+                self._add_ip(value, name, "nslookup-aaaa")
+                if name != self.domain and name.endswith(self.domain):
+                    self._add_subdomain(name, "nslookup", output_file)
+
+            elif qtype == "NS":
+                if value.endswith(self.domain):
+                    self._add_subdomain(value, "nslookup-ns", output_file)
+
+            elif qtype == "MX":
+                # Value may be "10 mail.example.com" — strip the priority
+                mx_host = value.split()[-1] if value.split() else value
+                if mx_host.endswith(self.domain):
+                    self._add_subdomain(mx_host, "nslookup-mx", output_file)
+
+            elif qtype == "CNAME":
+                if value.endswith(self.domain):
+                    self._add_subdomain(value, "nslookup-cname", output_file)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _add_subdomain(self, fqdn: str, source: str, output_file: str = ""):
+        fqdn = fqdn.strip().lower().rstrip(".")
+        if not fqdn or not fqdn.endswith(self.domain):
+            return
+        rec = self.data.subdomains.setdefault(fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None})
+        if source not in rec["sources"]:
+            rec["sources"].append(source)
+        # Normalise dynamic "SRV/..." sources to the static "SRV record" key so
+        # _SOURCE_TO_TOOL resolves them to "OSift-DNS" for canonical pill display.
+        _tool = source if not source.startswith("SRV/") else "SRV record"
+        add_finding(
+            self.data, _tool, "subdomain_identified", "DNS", "INFO",
+            "Subdomain Identified",
+            host=self.domain, affected=fqdn,
+            output_file=output_file,
+        )
+
+    def _add_ip(self, ip: str, source_fqdn: str, context: str):
+        if not self._is_valid_ip(ip):
+            return
+        rec = self.data.ip_addresses.setdefault(ip, {"fqdns": [], "sources": [], "context": context, "asn": None, "org": None, "geo": None})
+        if source_fqdn not in rec["fqdns"]:
+            rec["fqdns"].append(source_fqdn)
+        src_list = rec.setdefault("sources", [])
+        if context not in src_list:
+            src_list.append(context)
+
+    @staticmethod
+    def _is_valid_ip(ip: str) -> bool:
+        try:
+            ipaddress.ip_address(ip)
+            return True
+        except ValueError:
+            return False
+
+
+# ─── Amass ────────────────────────────────────────────────────────────────────
+
+class AmassEnumerator:
+    # amass — OWASP Amass by Jeff Foley @caffix (https://github.com/owasp-amass/amass)
+    def __init__(self, domain: str, output_dir: Path, log: ReconLogger, data: ReconData):
+        self.domain     = domain
+        self.output_dir = output_dir / "amass"
+        self.log        = log
+        self.data       = data
+
+    def run(self):
+        if not check_tool("amass"):
+            self.log.warning("[Amass] Not available, skipping")
+            return
+        self.log.set_tool_context("amass")
+
+        out_file  = self.output_dir / f"{_safe_filename(self.domain)}_amass.txt"
+        json_file = self.output_dir / f"{_safe_filename(self.domain)}_amass.json"
+
+        # Quote paths for Windows compatibility
+        if IS_WINDOWS:
+            cmd = f'amass enum -passive -d {self.domain} -o "{out_file}" -json "{json_file}" -timeout 10'
+        else:
+            cmd = f"amass enum -passive -d {self.domain} -o '{out_file}' -json '{json_file}' -timeout 10"
+
+        self.log.info(f"[Amass] Running: {cmd}")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        has_output = out_file.exists() and out_file.stat().st_size > 0
+
+        if rc != 0:
+            if has_output:
+                # Amass prints its ASCII art banner to stderr even on success; with output
+                # this is expected — log at debug level without the banner noise.
+                self.log.warning(f"[Amass] Command exited with code {rc} — output produced (amass banner on stderr is normal)")
+            else:
+                self.log.error(f"[Amass] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
+                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.txt",
+                                   cmd, f"(Amass exited with code {rc})")
+                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.json",
+                                   cmd, f"(Amass exited with code {rc})")
+
+        if has_output:
+            for line in out_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                sub = line.strip().lower().rstrip(".")
+                if sub and sub.endswith(self.domain):
+                    rec = self.data.subdomains.setdefault(sub, {"sources": [], "ips": [], "ports": [], "http_status": None})
+                    if "amass" not in rec["sources"]:
+                        rec["sources"].append("amass")
+                    add_finding(
+                        self.data, "amass", "subdomain_identified", "DNS", "INFO",
+                        "Subdomain Identified",
+                        host=self.domain, affected=sub,
+                        output_file=str(out_file),
+                    )
+            self.log.success(f"[Amass] Done. Total subdomains: {len(self.data.subdomains)}")
+        else:
+            self.log.info("[Amass] Output file missing or empty — no subdomains ingested")
+            if rc == 0:
+                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.txt",
+                                   cmd, "(Amass produced no subdomain output)")
+                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.json",
+                                   cmd, "(Amass produced no JSON output)")
+
+
+# ─── Certificate Collector ────────────────────────────────────────────────────
+
+class CertificateCollector:
+    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
+        self.output_dir = output_dir / "certificates"
+        self.log        = log
+        self.data       = data
+
+    # Per-host TCP connect + TLS handshake timeout (seconds)
+    _CERT_TIMEOUT = 5
+
+    def run(self):
+        self.log.set_tool_context("OSift-Certs")
+        self.log.info("[CERT] Collecting TLS certificates")
+        hosts = set(self.data.subdomains.keys()) | {self.data.domain}
+
+        # Pre-resolve all hostnames using the timeout-bounded dnspython resolver
+        # before spawning TLS workers.  socket.create_connection() calls
+        # socket.getaddrinfo() internally with NO timeout — on slow or dead DNS
+        # each call can block for 30-60 s, exhausting all worker threads and
+        # stalling the entire phase.  Connecting by IP + SNI avoids that.
+        host_ips: dict[str, str] = {}
+        if DNS_AVAILABLE:
+            _res = dns.resolver.Resolver()
+            _res.timeout     = 2
+            _res.lifetime    = 3
+            _res.nameservers = ["8.8.8.8", "1.1.1.1"]
+
+            def _pre_resolve(h: str):
+                try:
+                    return h, str(_res.resolve(h.rstrip("."), "A")[0])
+                except Exception:
+                    return h, ""
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=40) as rx:
+                for f in concurrent.futures.as_completed(
+                        {rx.submit(_pre_resolve, h): h for h in hosts}):
+                    h, ip = f.result()
+                    if ip:
+                        host_ips[h] = ip
+        else:
+            host_ips = {h: h for h in hosts}
+
+        if not host_ips:
+            self.log.info("[CERT] No resolvable hosts — skipping cert collection")
+            return
+
+        self.log.info(f"[CERT] Resolved {len(host_ips)}/{len(hosts)} hosts — fetching certs")
+        phase_timeout = max(30, min(120, len(host_ips) * 2 + 15))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+            futures = {ex.submit(self._get_cert, h, ip): h
+                       for h, ip in host_ips.items()}
+            done, not_done = concurrent.futures.wait(futures, timeout=phase_timeout)
+            for fut in done:
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+            if not_done:
+                self.log.warning(
+                    f"[CERT] {len(not_done)} host(s) did not complete within "
+                    f"{phase_timeout}s — skipping remainder"
+                )
+                for fut in not_done:
+                    fut.cancel()
+
+        self.log.success(f"[CERT] Collected {len(self.data.certificates)} certificates")
+        self._extract_alt_names()
+
+    def _get_cert(self, hostname: str, ip: str):
+        hostname = hostname.rstrip(".")
+        # Connect by pre-resolved IP to skip getaddrinfo; pass hostname as SNI
+        # so the server presents the correct certificate for that vhost.
+        connect_to = ip if (ip and ip != hostname) else hostname
+        der_cert = None
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode    = ssl.CERT_NONE
+            with socket.create_connection((connect_to, 443),
+                                          timeout=self._CERT_TIMEOUT) as sock:
+                sock.settimeout(self._CERT_TIMEOUT)
+                with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+                    ssock.settimeout(self._CERT_TIMEOUT)
+                    der_cert = ssock.getpeercert(binary_form=True)
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            pass
+        except Exception as e:
+            self.log.debug(f"[CERT] {hostname}: {e}")
+        if not der_cert:
+            return
+
+        raw_path = self.output_dir / "raw" / f"{_safe_filename(hostname)}.der"
+        raw_path.write_bytes(der_cert)
+
+        cert_info: Dict[str, Any] = {"hostname": hostname, "source": "direct_tls", "alt_names": []}
+
+        if CRYPTO_AVAILABLE:
+            cert = x509.load_der_x509_certificate(der_cert, default_backend())
+            try:
+                cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+                cert_info["common_name"] = cn[0].value if cn else ""
+            except Exception:
+                pass
+            try:
+                ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                _alt_names = []
+                for _n in ext.value:
+                    try:
+                        _v = _n.value
+                        _alt_names.append(str(_v) if not isinstance(_v, str) else _v)
+                    except Exception:
+                        pass
+                cert_info["alt_names"] = _alt_names
+            except Exception:
+                pass
+            nbf = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before
+            nat = getattr(cert, "not_valid_after_utc",  None) or cert.not_valid_after
+            cert_info["not_before"] = str(nbf)
+            cert_info["not_after"]  = str(nat)
+            cert_info["serial"]     = str(cert.serial_number)
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    issuer_cn = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
+                cert_info["issuer"] = issuer_cn[0].value if issuer_cn else ""
+            except Exception:
+                cert_info["issuer"] = ""
+
+        self.data.certificates.append(cert_info)
+        out = self.output_dir / "parsed" / f"{_safe_filename(hostname)}.json"
+        out.write_text(json.dumps(cert_info, indent=2, default=str), encoding="utf-8")
+
+    def _extract_alt_names(self):
+        domain    = self.data.domain
+        new_count = 0
+        for cert in self.data.certificates:
+            _cert_host = cert.get("hostname", "")
+            _cert_file = str(
+                self.output_dir / "parsed" / f"{_safe_filename(_cert_host)}.json"
+            ) if _cert_host else ""
+            for alt in cert.get("alt_names", []):
+                if not isinstance(alt, str):
+                    continue
+                alt = alt.lstrip("*.").lower()
+                if alt.endswith(domain) and alt not in self.data.subdomains:
+                    self.data.subdomains[alt] = {"sources": ["certificate_san"], "ips": [], "ports": [], "http_status": None}
+                    self.data.cert_subjects.add(alt)
+                    add_finding(
+                        self.data, "certificate_san", "subdomain_identified", "DNS", "INFO",
+                        "Subdomain Identified", host=domain, affected=alt,
+                        output_file=_cert_file,
+                    )
+                    new_count += 1
+        if new_count:
+            self.log.success(f"[CERT] {new_count} new subdomains from certificate SANs")
+
+
+# ─── IP Intelligence ──────────────────────────────────────────────────────────
+
+class IPIntelligence:
+    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
+        self.output_dir = output_dir / "ip_addresses"
+        self.log        = log
+        self.data       = data
+
+    def run(self):
+        self.log.set_tool_context("OSift-IP")
+        self._resolve_subdomains()
+        self._enrich_ips()
+        out = self.output_dir / "ip_summary.json"
+        out.write_text(json.dumps(self.data.ip_addresses, indent=2, default=str), encoding="utf-8")
+        self.log.success(f"[IP] Collected info on {len(self.data.ip_addresses)} IPs")
+
+    def _resolve_subdomains(self):
+        if not DNS_AVAILABLE:
+            return
+        resolver = dns.resolver.Resolver()
+        resolver.timeout     = 3
+        resolver.lifetime    = 5
+        resolver.nameservers = ["8.8.8.8", "1.1.1.1"]
+
+        def resolve(fqdn: str):
+            try:
+                return fqdn, [str(r) for r in resolver.resolve(fqdn, "A")]
+            except Exception:
+                return fqdn, []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+            for fut in concurrent.futures.as_completed({ex.submit(resolve, f): f for f in self.data.subdomains}):
+                fqdn, ips = fut.result()
+                sub_rec = self.data.subdomains[fqdn]
+                for ip in ips:
+                    if ip not in sub_rec["ips"]:
+                        sub_rec["ips"].append(ip)
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip, {"fqdns": [], "context": "subdomain resolve", "asn": None, "org": None, "geo": None}
+                    )
+                    if fqdn not in ip_rec["fqdns"]:
+                        ip_rec["fqdns"].append(fqdn)
+
+    def _enrich_ips(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        ips = list(self.data.ip_addresses.keys())
+        if not ips:
+            return
+        self.log.info(f"[IP] Enriching {len(ips)} IPs via ipinfo.io")
+
+        def _enrich_one(ip: str):
+            try:
+                session = make_session()
+                resp = session.get(f"https://ipinfo.io/{ip}/json", timeout=5)
+                if resp.status_code == 200:
+                    d = resp.json()
+                    self.data.ip_addresses[ip].update({
+                        "org":      d.get("org"),
+                        "asn":      (d.get("org") or "").split()[0] or None,
+                        "country":  d.get("country"),
+                        "region":   d.get("region"),
+                        "city":     d.get("city"),
+                        "geo":      d.get("loc", ""),
+                        "hostname": d.get("hostname"),
+                        "abuse":    (d.get("abuse") or {}).get("email"),
+                    })
+            except Exception:
+                pass
+            out = self.output_dir / f"{ip.replace('.', '_').replace(':', '_')}.json"
+            out.write_text(
+                json.dumps(self.data.ip_addresses[ip], indent=2, default=str),
+                encoding="utf-8",
+            )
+
+        # ipinfo.io free tier: ~50k req/month, no strict per-second rate limit.
+        # 10 workers with 5 s timeout each is fast without triggering throttling.
+        phase_timeout = max(30, min(120, len(ips) * 6 + 10))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            futs = {ex.submit(_enrich_one, ip): ip for ip in ips}
+            done, not_done = concurrent.futures.wait(futs, timeout=phase_timeout)
+            for fut in done:
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+            if not_done:
+                self.log.warning(
+                    f"[IP] {len(not_done)} IP(s) did not complete within "
+                    f"{phase_timeout}s — skipping remainder"
+                )
+                for fut in not_done:
+                    fut.cancel()
+
+
+# ─── Whois Collector ─────────────────────────────────────────────────────────
+
+class WhoisCollector:
+    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
+        self.output_dir = output_dir / "whois"
+        self.log        = log
+        self.data       = data
+        self._lock      = threading.Lock()
+
+    def run(self):
+        self.log.set_tool_context("OSift-WHOIS")
+        domains = list(set([self.data.domain] + list(self.data.associated_domains.keys())))
+        workers = min(len(domains), 10)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(self._whois, d): d for d in domains}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as exc:
+                    self.log.warning(f"[WHOIS] Unexpected error: {exc}")
+        self.log.success(f"[WHOIS] Collected WHOIS for {len(self.data.whois_data)} domains")
+
+    def _whois(self, domain: str):
+        self.log.info(f"[WHOIS] Querying {domain}")
+        result: Dict[str, Any] = {}
+
+        if WHOIS_AVAILABLE:
+            try:
+                w = whois.whois(domain)
+                result = {
+                    "registrar":       str(w.registrar)       if w.registrar       else None,
+                    "creation_date":   str(w.creation_date)   if w.creation_date   else None,
+                    "expiration_date": str(w.expiration_date) if w.expiration_date else None,
+                    "updated_date":    str(w.updated_date)    if w.updated_date    else None,
+                    "name_servers":    list(w.name_servers)   if w.name_servers    else [],
+                    "emails":          list(w.emails)         if w.emails          else [],
+                    "org":             str(w.org)             if w.org             else None,
+                    "address":         str(w.address)         if hasattr(w, "address") else None,
+                    "city":            str(w.city)            if hasattr(w, "city")    else None,
+                    "country":         str(w.country)         if hasattr(w, "country") else None,
+                    "registrant":      str(w.name)            if getattr(w, "name", None) else None,
+                    "source":          "python-whois",
+                }
+                for email in (w.emails or []):
+                    self._add_email(str(email), "whois", domain)
+                addr_parts = {k: result[k] for k in ["address", "city", "country", "org"] if result.get(k)}
+                if addr_parts:
+                    addr_parts.update({"source": "whois", "domain": domain})
+                    with self._lock:
+                        if addr_parts not in self.data.physical_addresses:
+                            self.data.physical_addresses.append(addr_parts)
+            except Exception as e:
+                self.log.debug(f"[WHOIS] python-whois failed for {domain}: {e}")
+
+        # Fallback: system whois command (not available natively on Windows)
+        if not result and check_tool("whois"):
+            stdout, stderr, rc = _shell(f"whois {domain}")
+            self.log.log_command(f"whois {domain}", stdout, stderr, rc)
+            result["raw"]    = stdout[:5000]
+            result["source"] = "whois_command"
+            for email in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', stdout):
+                self._add_email(email, "whois_raw", domain)
+
+        self.data.whois_data[domain] = result
+        out = self.output_dir / f"{_safe_filename(domain)}_whois.json"
+        out.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+
+    def _add_email(self, email: str, source: str, context: str = ""):
+        email = email.lower().strip()
+        if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+            return
+        _, _dom = email.rsplit("@", 1)
+        if _dom in ("example.com", "exemple.com", "example.org", "exemple.org",
+                    "example.net", "exemple.net", "localhost", "sentry.io",
+                    "openssh.com"):
+            return
+        with self._lock:
+            rec = self.data.email_addresses.setdefault(email, {"sources": [], "context": context, "breach": False})
+            if source not in rec["sources"]:
+                rec["sources"].append(source)
+
+
+# ─── Email & People OSINT ─────────────────────────────────────────────────────
+
+class EmailAndPeopleOSINT:
+    def __init__(self, domain: str, company: str, output_dir: Path,
+                 log: ReconLogger, data: ReconData,
+                 hibp_key: str = "", dehashed_user: str = "", dehashed_key: str = ""):
+        self.domain        = domain
+        self.company       = company
+        self.output_dir    = output_dir
+        self.log           = log
+        self.data          = data
+        self.hibp_key      = hibp_key
+        self.dehashed_user = dehashed_user
+        self.dehashed_key  = dehashed_key
+
+    def run(self):
+        self.log.set_tool_context("OSift-Email")
+        self._hunter_io()
+        self._email_format_guess()
+        self._search_engine_email_harvest()
+        self._linkedin_scrape()
+        if self.hibp_key:
+            self._check_hibp()
+        if self.dehashed_user and self.dehashed_key:
+            self._check_dehashed()
+        else:
+            self.log.info("[EMAIL] Dehashed/HIBP skipped — no API keys. Use --hibp-key / --dehashed-user / --dehashed-key")
+        self._save_emails()
+        self.log.success(f"[EMAIL] Found {len(self.data.email_addresses)} unique email addresses")
+
+    def _hunter_io(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        self.log.info("[EMAIL] Querying hunter.io (unauthenticated)")
+        try:
+            resp = make_session().get(
+                f"https://api.hunter.io/v2/domain-search?domain={self.domain}&limit=100&api_key=",
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                for person in resp.json().get("data", {}).get("emails", []):
+                    email = person.get("value", "")
+                    if email:
+                        self._add_email(email, "hunter.io")
+                        if person.get("first_name") or person.get("last_name"):
+                            self._add_employee({
+                                "first_name": person.get("first_name"),
+                                "last_name":  person.get("last_name"),
+                                "email":      email,
+                                "position":   person.get("position"),
+                                "phone":      person.get("phone_number"),
+                                "linkedin":   person.get("linkedin"),
+                                "source":     "hunter.io",
+                            })
+        except Exception as e:
+            self.log.debug(f"[EMAIL] hunter.io: {e}")
+
+    def _email_format_guess(self):
+        formats = [
+            "{first}.{last}@{domain}", "{first}{last}@{domain}",
+            "{f}{last}@{domain}",      "{first}@{domain}",
+            "{first}_{last}@{domain}", "{last}.{first}@{domain}",
+        ]
+        for emp in self.data.employees:
+            first = (emp.get("first_name") or "").lower()
+            last  = (emp.get("last_name")  or "").lower()
+            if not first and not last:
+                continue
+            f = first[0] if first else ""
+            for fmt in formats:
+                try:
+                    email = fmt.format(first=first, last=last, f=f, domain=self.domain)
+                    if "@" in email:
+                        self._add_email(email, "format_guess")
+                except Exception:
+                    pass
+
+    def _search_engine_email_harvest(self):
+        if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+            return
+        session = make_session()
+        queries = [
+            f'site:{self.domain} email OR contact',
+            f'"{self.domain}" email address',
+            f'"@{self.domain}" employees',
+        ]
+        found: Set[str] = set()
+        for query in queries:
+            try:
+                resp = session.get("https://html.duckduckgo.com/html/", params={"q": query}, timeout=15)
+                if resp.status_code == 200:
+                    for email in re.findall(r'[a-zA-Z0-9._%+\-]+@' + re.escape(self.domain), resp.text):
+                        email = email.lower()
+                        if email not in found:
+                            found.add(email)
+                            self._add_email(email, "search_engine")
+                time.sleep(1)
+            except Exception as e:
+                self.log.debug(f"[EMAIL] Search engine harvest: {e}")
+
+    def _linkedin_scrape(self):
+        if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+            return
+        self.log.info("[EMAIL] Attempting LinkedIn public scrape")
+        slug = self.company.lower().replace(" ", "-")
+        try:
+            resp = make_session().get(f"https://www.linkedin.com/company/{slug}/", timeout=10)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for tag in soup.find_all(["h3", "h4", "span"], class_=re.compile(r"name|person|employee", re.I)):
+                    name = tag.get_text(strip=True)
+                    if 2 < len(name) < 60 and " " in name:
+                        parts = name.split()
+                        self._add_employee({"first_name": parts[0], "last_name": parts[-1], "source": "linkedin_public"})
+        except Exception as e:
+            self.log.debug(f"[EMAIL] LinkedIn: {e}")
+
+    def _check_hibp(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        self.log.info("[HIBP] Checking Have I Been Pwned")
+        session = make_session()
+        session.headers["hibp-api-key"] = self.hibp_key
+        session.headers["User-Agent"]   = "OSift/2.0"
+        for email in list(self.data.email_addresses.keys()):
+            try:
+                resp = session.get(
+                    f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}",
+                    params={"truncateResponse": "false"},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    breaches = resp.json()
+                    self.data.email_addresses[email]["breach"]   = True
+                    self.data.email_addresses[email]["breaches"] = [b.get("Name") for b in breaches]
+                    for b in breaches:
+                        self.data.breach_data.append({
+                            "email":        email,
+                            "breach_name":  b.get("Name"),
+                            "breach_sources": [b.get("Name")],
+                            "domain":       b.get("Domain"),
+                            "breach_date":  b.get("BreachDate"),
+                            "data_classes": b.get("DataClasses"),
+                            "source":       "hibp",
+                            "tool":         "hibp",
+                            "tool_version": TOOL_REGISTRY.get_version("hibp"),
+                            "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+                            "output_file":  str(self.output_dir / "breach_data" / "hibp_results.json"),
+                        })
+                time.sleep(1.6)
+            except Exception as e:
+                self.log.error(f"[HIBP] Per-email check error for {email}: {e}", exc=e)
+        out = self.output_dir / "breach_data" / "hibp_results.json"
+        out.write_text(json.dumps(self.data.breach_data, indent=2), encoding="utf-8")
+
+    def _check_dehashed(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        self.log.info("[DEHASHED] Querying Dehashed API")
+        session = make_session()
+        session.auth = (self.dehashed_user, self.dehashed_key)
+        for field_name, value in [("domain", self.domain), ("email", f"@{self.domain}")]:
+            try:
+                resp = session.get(
+                    "https://api.dehashed.com/search",
+                    params={"query": f"{field_name}:{value}", "size": 100},
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    for entry in (resp.json().get("entries") or []):
+                        email = entry.get("email", "")
+                        if email:
+                            self._add_email(email, "dehashed")
+                        self.data.breach_data.append({
+                            **entry,
+                            "source":       "dehashed",
+                            "tool":         "dehashed",
+                            "tool_version": TOOL_REGISTRY.get_version("dehashed"),
+                            "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+                            "output_file":  str(self.output_dir / "breach_data" / "dehashed_results.json"),
+                        })
+            except Exception as e:
+                self.log.error(f"[DEHASHED] Query failed", exc=e)
+        out = self.output_dir / "breach_data" / "dehashed_results.json"
+        dh  = [b for b in self.data.breach_data if b.get("source") == "dehashed"]
+        out.write_text(json.dumps(dh, indent=2), encoding="utf-8")
+
+    def _add_email(self, email: str, source: str):
+        email = email.lower().strip()
+        if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+            return
+        _, _dom = email.rsplit("@", 1)
+        if _dom in ("example.com", "exemple.com", "example.org", "exemple.org",
+                    "example.net", "exemple.net", "localhost", "sentry.io",
+                    "openssh.com"):
+            return
+        rec = self.data.email_addresses.setdefault(email, {"sources": [], "context": "", "breach": False})
+        if source not in rec["sources"]:
+            rec["sources"].append(source)
+
+    def _add_employee(self, emp: Dict):
+        for existing in self.data.employees:
+            if existing.get("first_name") == emp.get("first_name") and existing.get("last_name") == emp.get("last_name"):
+                return
+        self.data.employees.append(emp)
+
+    def _save_emails(self):
+        emails_dir = self.output_dir / "emails"
+        (emails_dir / "all_emails.json").write_text(json.dumps(self.data.email_addresses, indent=2), encoding="utf-8")
+        (emails_dir / "all_emails.txt").write_text("\n".join(sorted(self.data.email_addresses.keys())), encoding="utf-8")
+        (self.output_dir / "employees" / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
+
+
+# ─── Company Intelligence ─────────────────────────────────────────────────────
+
+# ─── SEC EDGAR 8-K M&A Intelligence ──────────────────────────────────────────
+
+class EdgarIntelligence:
+    """
+    Uses edgartools to query SEC EDGAR for Form 8-K filings filed by the
+    target company and performs M&A intelligence extraction.
+
+    Pipeline
+    --------
+    Step 1 — Locate the company on EDGAR.
+             Tries Company(name) first (works for tickers and exact names).
+             Falls back to find(name) fuzzy search.
+             If still not found → logs that the company does not appear to
+             be publicly traded and returns gracefully.
+
+    Step 2 — Extract the company's own website/domain directly from the
+             Company object (edgartools exposes company.website).
+             This is recorded as a primary-scope domain.
+
+    Step 3 — Fetch all Form 8-K filings (up to max_filings).
+
+    Step 4 — Parse each 8-K for M&A-relevant items:
+               Item 1.01 — Entry into a Material Definitive Agreement
+               Item 2.01 — Completion of Acquisition or Disposition of Assets
+               Item 7.01 — Regulation FD Disclosure   (sometimes M&A)
+               Item 8.01 — Other Events               (catch-all)
+             Text is extracted via three fallback strategies:
+               a) eightk.items structured object (preferred)
+               b) eightk.press_releases — attached press releases (often
+                  contain the most readable M&A announcement text)
+               c) filing.text() / filing.markdown() raw text with heuristic
+                  item-section splitting
+
+    Step 5 — Extract company names from item text using a suite of 7
+             contextual regex patterns covering:
+               • "acquisition of Foo Corp"  • "acquired by/merged with"
+               • "the acquisition of …"     • "to acquire/merge with …"
+               • "merger agreement with …"  • "Foo Corp (the Target)"
+               • "Foo Corp, Inc." legal form patterns
+             Extracted names are deduplicated and filtered against a noise
+             list (generic legal terms, SEC boilerplate, etc.).
+
+    Step 6 — Resolve the domain for each M&A target company using four
+             strategies in confidence order:
+               A. Direct EDGAR company lookup for the M&A target's own
+                  Company object → company.website (highest confidence)
+               B. SEC EDGAR full-text search (EFTS) for the target's 10-K/10-Q
+                  cover-page website field
+               C. DNS probing of name-derived candidate domains
+               D. Unverified name-guess recorded as low-confidence
+
+    Step 7 — Register every confirmed M&A entity in:
+               data.associated_companies  — relationship = "acquired" | "merged"
+               data.associated_domains    — same relationship
+             DomainClassifier will automatically promote these to PRIMARY scope
+             so all subdomains/emails matching them are treated as first-party.
+
+    Step 8 — Write artefacts to <output_dir>/company_info/edgar/:
+               company_profile.json
+               8k_filings_summary.json
+               ma_targets.json
+               filings/<accession>_8k.json  (one per parsed filing)
+
+    Graceful degradation
+    --------------------
+    • edgartools not installed → logs install hint and returns.
+    • Company not found on EDGAR → logs "does not appear to be publicly traded".
+    • No 8-K filings found → logs notice and returns (company found but no 8-Ks).
+    • Individual filing parse failure → that filing is skipped (debug-logged).
+    • DNS failure / domain not found → domain recorded as unverified guess.
+    • All network errors are caught; the run() method never raises.
+
+    Identity / rate limits
+    ----------------------
+    SEC EDGAR requires a name + email in the User-Agent header (EDGAR policy).
+    We use a compliant default.  Pass --edgar-email to supply a real address.
+    edgartools already handles SEC rate limits internally.
+    """
+
+    # ── 8-K items relevant to M&A ─────────────────────────────────────────────
+    _MA_ITEMS = frozenset({
+        "1.01",   # Entry into a Material Definitive Agreement
+        "2.01",   # Completion of Acquisition or Disposition of Assets
+        "7.01",   # Regulation FD Disclosure
+        "8.01",   # Other Events
+    })
+
+    # ── Regex patterns (named group is "n" to keep them short) ────────────────
+    # Each pattern must capture the acquired/merged company name in group "n".
+    _MA_PATTERNS: List[re.Pattern] = [
+        # "acquisition of Foo Corp" / "acquire Foo Corp" in various tenses
+        re.compile(
+            r'(?:completed?|consummated?|closing\s+of|announced?|entered?\s+into|signed?)'
+            r'\s+(?:a\s+|the\s+)?(?:definitive\s+)?(?:agreement\s+(?:to|for)\s+)?'
+            r'(?:acquire|acquisition\s+of|purchase\s+of|merger\s+(?:with|of)|'
+            r'combination\s+with|takeover\s+of)\s+'
+            r'(?:all\s+(?:of\s+)?(?:the\s+)?(?:outstanding\s+)?(?:shares\s+(?:of\s+)?)?)?'
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'(?:\s*[\(\",]|\s+(?:for|in|at|by|pursuant|under|LLC|Inc|Corp|Ltd|plc|AG|SA|NV|BV|GmbH))',
+            re.IGNORECASE,
+        ),
+        # "<name> was/were/has been acquired/merged by/with"
+        re.compile(
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'\s+(?:was|were|has\s+been|have\s+been)'
+            r'\s+(?:acquired|purchased|merged|combined|absorbed)\s+'
+            r'(?:by|with|into)\s+',
+            re.IGNORECASE,
+        ),
+        # "the acquisition/purchase/merger of Foo Corp"
+        re.compile(
+            r'\bthe\s+(?:acquisition|purchase|merger)\s+of\s+'
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'(?:\s*[,\("]|\s+(?:LLC|Inc|Corp|Ltd|plc|AG|SA|NV|BV|GmbH|\(the\b))',
+            re.IGNORECASE,
+        ),
+        # "to acquire/purchase/merge with Foo Corp"
+        re.compile(
+            r'\bto\s+(?:acquire|purchase|merge\s+with|combine\s+with|take\s+(?:over|private))\s+'
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'(?:\s*[,\("]|\s+(?:LLC|Inc|Corp|Ltd|plc|AG|SA|NV|BV|GmbH))',
+            re.IGNORECASE,
+        ),
+        # "merger/acquisition/purchase agreement with Foo Corp"
+        re.compile(
+            r'\b(?:merger|acquisition|purchase)\s+agreement\s+with\s+'
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'(?:\s*[,\("]|\s+(?:LLC|Inc|Corp|Ltd|plc|AG|SA|NV|BV|GmbH))',
+            re.IGNORECASE,
+        ),
+        # "merged with / acquired by / absorbed by <name>"
+        re.compile(
+            r'\b(?:merged?\s+with|acquired?\s+by|combined?\s+with|absorbed?\s+by)\s+'
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'(?:\s*[,\("]|\s+(?:LLC|Inc|Corp|Ltd|plc|AG|SA|NV|BV|GmbH'
+            r'|\bfor\b|\bpursuant\b|\bin\b|\bat\b))',
+            re.IGNORECASE,
+        ),
+        # "Foo Corp (the "Target")" / "Foo Corp, the Acquiree"
+        re.compile(
+            r'(?P<n>[A-Z][A-Za-z0-9\s\.,&\'\-]{2,60}?)'
+            r'\s*[,\s]+(?:the\s+)?["\(]?(?:Target|Acquiree|Acquired\s+Compan)',
+            re.IGNORECASE,
+        ),
+    ]
+
+    # ── Names to discard as noise ─────────────────────────────────────────────
+    _NAME_NOISE = frozenset({
+        "the company", "company", "the corporation", "corporation",
+        "registrant", "the registrant", "issuer", "the issuer",
+        "acquiror", "acquirer", "the acquiror", "the acquirer",
+        "parent", "merger sub", "surviving corporation",
+        "common stock", "shares", "stockholders", "shareholders",
+        "board of directors", "board", "sec",
+        "securities and exchange commission", "commission",
+        "united states", "delaware", "new york", "nevada", "california",
+        "management", "officers", "employees", "parties",
+        "agreement", "transaction", "closing", "announcement",
+    })
+
+    # ── TLDs to probe for domain resolution ──────────────────────────────────
+    _PROBE_TLDS = ["com", "net", "org", "io", "co", "biz", "us"]
+
+    def __init__(
+        self,
+        company: str,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        edgar_email: str = "",
+        max_filings: int = 200,
+    ) -> None:
+        self.company      = company
+        self.domain       = domain
+        self.output_dir   = output_dir / "company_info" / "edgar"
+        self.log          = log
+        self.data         = data
+        self.edgar_email  = edgar_email or "osift-scanner@example.com"
+        self.max_filings  = max_filings
+        self._session: Optional[Any] = None   # lazy requests session
+
+    # ─── Public entry point ──────────────────────────────────────────────────
+
+    def run(self) -> None:
+        """Execute the full EDGAR 8-K M&A analysis pipeline."""
+        self.log.set_tool_context("edgartools")
+
+        if not EDGAR_AVAILABLE:
+            self.log.warning(
+                "[EDGAR] edgartools not installed — skipping SEC 8-K M&A analysis.\n"
+                "        Install with:  pip install edgartools"
+            )
+            return
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Register version
+        try:
+            ver = getattr(_edgar_mod, "__version__", "unknown")
+            TOOL_REGISTRY.register("edgartools", ver)
+        except Exception:
+            pass
+
+        # Set SEC-required User-Agent identity
+        try:
+            _edgar_set_identity(self.edgar_email)
+        except Exception:
+            try:
+                _edgar_mod.set_identity(self.edgar_email)
+            except Exception:
+                pass
+
+        # ── Step 1: locate company ───────────────────────────────────────────
+        edgar_company = self._find_edgar_company()
+        if edgar_company is None:
+            return   # not publicly traded — already logged
+
+        # ── Step 2: extract company's own website/domain from EDGAR profile ──
+        self._extract_own_domain(edgar_company)
+
+        # ── Step 3: fetch 8-K filings ────────────────────────────────────────
+        filings = self._fetch_8k_filings(edgar_company)
+        if not filings:
+            self.log.info(
+                f"[EDGAR] {self.company}: registered with SEC but no 8-K filings found "
+                f"(may have filed under a different name or have no public reports)"
+            )
+            self._write_artefacts(edgar_company, [], [])
+            return
+
+        self.log.info(
+            f"[EDGAR] {self.company}: {len(filings)} 8-K filing(s) — "
+            f"scanning for M&A events"
+        )
+
+        # ── Step 4+5: parse filings, extract M&A target names ────────────────
+        ma_targets = self._extract_ma_targets(edgar_company, filings)
+
+        # ── Step 6+7: resolve domains, register in ReconData ─────────────────
+        if ma_targets:
+            self.log.info(
+                f"[EDGAR] Identified {len(ma_targets)} M&A target(s) — "
+                f"resolving domains"
+            )
+            self._resolve_and_register(ma_targets)
+        else:
+            self.log.info(
+                f"[EDGAR] No M&A events identified in {len(filings)} 8-K filing(s)"
+            )
+
+        # ── Step 8: write artefacts ───────────────────────────────────────────
+        self._write_artefacts(edgar_company, filings, ma_targets)
+
+        total_with_domains = sum(1 for t in ma_targets if t.get("domains"))
+        self.log.success(
+            f"[EDGAR] 8-K analysis complete: "
+            f"{len(ma_targets)} M&A target(s), "
+            f"{total_with_domains} with resolved domain(s)"
+        )
+        self.log.reset_tool_context()
+
+    # ─── Step 1: locate company ──────────────────────────────────────────────
+
+    def _find_edgar_company(self) -> Optional[Any]:
+        """
+        Attempt to locate the company in EDGAR.
+        Strategy:
+          1. Company(name)  — works for tickers and exact names
+          2. find(name)     — fuzzy search, returns EntitySearchResults
+          3. Not found      — log "does not appear to be publicly traded"
+        Returns an edgartools Company object or None.
+        """
+        # Strategy 1: direct Company() constructor
+        try:
+            company = EdgarCompany(self.company)
+            # Verify the object actually resolved — a bad lookup may return
+            # an object whose .cik raises or is None
+            cik = company.cik
+            if cik is None:
+                raise ValueError("resolved CIK is None")
+            name = getattr(company, "name", self.company)
+            self.log.info(
+                f"[EDGAR] Matched: {name!r}  (CIK: {cik})"
+            )
+            return company
+        except Exception as direct_exc:
+            self.log.debug(f"[EDGAR] Direct Company() lookup failed: {direct_exc}")
+
+        # Strategy 2: fuzzy find()
+        try:
+            results = _edgar_find(self.company)
+            if results is None:
+                raise ValueError("find() returned None")
+
+            # edgartools find() returns an EntitySearchResults / iterable
+            # Each result has .name, .cik (and usually .ticker)
+            matches: List[Any] = []
+            if hasattr(results, "__iter__"):
+                for r in results:
+                    matches.append(r)
+                    if len(matches) >= 5:   # only need the top few
+                        break
+
+            if not matches:
+                raise ValueError("find() returned no results")
+
+            best = matches[0]
+            cik  = getattr(best, "cik",  None)
+            name = getattr(best, "name", self.company)
+            if cik is None:
+                raise ValueError("first match has no CIK")
+
+            # Promote to full Company object for filing access
+            company = EdgarCompany(cik)
+            actual_name = getattr(company, "name", name)
+            self.log.info(
+                f"[EDGAR] Fuzzy match: {actual_name!r}  "
+                f"(searched: {self.company!r}, CIK: {cik})"
+            )
+            return company
+
+        except Exception as fuzzy_exc:
+            self.log.warning(
+                f"[EDGAR] '{self.company}' could not be located on SEC EDGAR.\n"
+                f"        The company does not appear to be publicly traded, or may\n"
+                f"        be registered under a different legal name.\n"
+                f"        (errors: {fuzzy_exc})"
+            )
+            return None
+
+    # ─── Step 2: extract company's own domain from EDGAR profile ─────────────
+
+    def _extract_own_domain(self, company: Any) -> None:
+        """
+        edgartools Company objects expose a .website attribute populated
+        from the SEC's company submission data.  Use it to record the
+        authoritative domain for the target company.
+        """
+        try:
+            website = getattr(company, "website", None) or ""
+            if not website:
+                return
+            dom = self._extract_domain_from_url(str(website))
+            if dom and dom != self.domain and dom not in self.data.associated_domains:
+                # Record as an explicitly confirmed domain for this company
+                self.data.associated_domains[dom] = {
+                    "relationship": "official_website",
+                    "source":       "edgar_profile",
+                    "ips":          [],
+                    "verified":     True,
+                    "method":       "edgar_company_website",
+                    "company_name": getattr(company, "name", self.company),
+                }
+                self.log.info(
+                    f"[EDGAR] Official website from EDGAR profile: {dom}"
+                )
+        except Exception as exc:
+            self.log.debug(f"[EDGAR] Could not extract own domain: {exc}")
+
+    # ─── Step 3: fetch 8-K filings ───────────────────────────────────────────
+
+    def _fetch_8k_filings(self, company: Any) -> List[Any]:
+        """
+        Retrieve Form 8-K filings via edgartools CompanyFilings.
+        Returns a list of Filing objects (may be empty).
+        """
+        try:
+            filings_obj = company.get_filings(form="8-K")
+            if filings_obj is None:
+                return []
+            collected: List[Any] = []
+            # CompanyFilings supports both iteration and [] indexing
+            try:
+                for filing in filings_obj:
+                    collected.append(filing)
+                    if len(collected) >= self.max_filings:
+                        break
+            except TypeError:
+                # Not iterable — try index access
+                for i in range(min(self.max_filings, 1000)):
+                    try:
+                        collected.append(filings_obj[i])
+                    except (IndexError, KeyError):
+                        break
+            return collected
+        except Exception as exc:
+            self.log.debug(f"[EDGAR] get_filings(8-K) error: {exc}")
+            return []
+
+    # ─── Steps 4+5: parse filings, extract M&A target names ─────────────────
+
+    def _extract_ma_targets(
+        self, company: Any, filings: List[Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Iterate over filings, parse each for M&A items, extract company names.
+        Returns a deduplicated list of M&A target dicts.
+        """
+        seen_names: Set[str] = set()
+        ma_targets: List[Dict[str, Any]] = []
+        filings_dir = self.output_dir / "filings"
+        filings_dir.mkdir(parents=True, exist_ok=True)
+
+        for filing in filings:
+            accession = str(getattr(filing, "accession_no",
+                                    getattr(filing, "accession_number", id(filing))))
+            date = str(getattr(filing, "date",
+                               getattr(filing, "filing_date", "")))
+            try:
+                names_from_filing = self._parse_single_filing(
+                    filing, accession, date, filings_dir
+                )
+            except Exception as exc:
+                self.log.debug(f"[EDGAR] Skipping filing {accession}: {exc}")
+                continue
+
+            for entry in names_from_filing:
+                norm = entry["name"].lower().strip()
+                if norm not in seen_names and norm not in self._NAME_NOISE:
+                    seen_names.add(norm)
+                    ma_targets.append(entry)
+
+        return ma_targets
+
+    def _parse_single_filing(
+        self,
+        filing: Any,
+        accession: str,
+        date: str,
+        filings_dir: Path,
+    ) -> List[Dict[str, Any]]:
+        """
+        Parse one 8-K filing and return a list of M&A target dicts.
+        Three text-extraction strategies are tried in order.
+        """
+        results:    List[Dict[str, Any]]      = []
+        item_texts: List[Tuple[str, str, str]] = []  # (item_num, text, source)
+
+        # ── Strategy A: structured EightK object ─────────────────────────────
+        try:
+            eightk = filing.obj()
+            if eightk is not None:
+                # A1. eightk.items — list of item objects or item code strings
+                if hasattr(eightk, "items"):
+                    raw_items = eightk.items
+                    if raw_items:
+                        for item in raw_items:
+                            # item may be a string code ("1.01") or an object
+                            if isinstance(item, str):
+                                item_num = item.replace("Item ", "").strip()
+                                text     = ""
+                            else:
+                                item_num = str(
+                                    getattr(item, "name",
+                                    getattr(item, "item_number",
+                                    getattr(item, "number", "")))
+                                ).replace("Item ", "").strip()
+                                text = str(
+                                    getattr(item, "text",
+                                    getattr(item, "content",
+                                    getattr(item, "body", ""))) or ""
+                                )
+                            if item_num in self._MA_ITEMS and text.strip():
+                                item_texts.append((item_num, text, "eightk.items"))
+
+                # A2. eightk.press_releases — often contains the richest text
+                if hasattr(eightk, "press_releases"):
+                    try:
+                        prs = eightk.press_releases
+                        if prs:
+                            pr_list = prs if hasattr(prs, "__iter__") else [prs]
+                            for pr in pr_list:
+                                pr_text = ""
+                                if hasattr(pr, "text"):
+                                    pr_text = str(pr.text() if callable(pr.text) else pr.text)
+                                elif hasattr(pr, "content"):
+                                    pr_text = str(pr.content)
+                                elif hasattr(pr, "markdown"):
+                                    pr_text = str(pr.markdown() if callable(pr.markdown) else pr.markdown)
+                                if pr_text.strip():
+                                    # Press releases are not item-tagged; search all
+                                    item_texts.append(("press_release", pr_text, "press_release"))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # ── Strategy B: raw filing text ───────────────────────────────────────
+        if not item_texts:
+            try:
+                raw = (
+                    filing.text()     if callable(getattr(filing, "text", None))
+                    else getattr(filing, "text", "")
+                ) or ""
+                if raw:
+                    for num, body in self._extract_item_sections_from_text(raw):
+                        item_texts.append((num, body, "raw_text"))
+            except Exception:
+                pass
+
+        # ── Strategy C: markdown text ─────────────────────────────────────────
+        if not item_texts:
+            try:
+                md = (
+                    filing.markdown() if callable(getattr(filing, "markdown", None))
+                    else ""
+                ) or ""
+                if md:
+                    for num, body in self._extract_item_sections_from_text(md):
+                        item_texts.append((num, body, "markdown"))
+            except Exception:
+                pass
+
+        # ── Extract company names from gathered text ──────────────────────────
+        filing_record: Dict[str, Any] = {
+            "accession_no": accession,
+            "date":         date,
+            "form":         "8-K",
+            "strategies_used": list({src for _, _, src in item_texts}),
+            "ma_items":     [],
+        }
+
+        for item_num, text, _src in item_texts:
+            rel = "acquired" if "2.01" in item_num else "merged_or_acquired"
+            names = self._extract_names_from_text(text)
+            for name, excerpt in names:
+                results.append({
+                    "name":         name,
+                    "item":         item_num,
+                    "filing_date":  date,
+                    "accession_no": accession,
+                    "relationship": rel,
+                    "excerpt":      excerpt[:300],
+                })
+            filing_record["ma_items"].append({
+                "item":       item_num,
+                "excerpt":    text[:500],
+                "names_found": [n for n, _ in names],
+            })
+
+        safe_acc = re.sub(r"[^A-Za-z0-9\-]", "_", accession)
+        (filings_dir / f"{safe_acc}_8k.json").write_text(
+            json.dumps(filing_record, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        return results
+
+    def _extract_item_sections_from_text(
+        self, text: str
+    ) -> List[Tuple[str, str]]:
+        """Split raw 8-K text into per-item sections; return only M&A items."""
+        item_hdr = re.compile(r'(?:^|\n)\s*(?:ITEM|Item)\s+(\d+\.\d+)[.\s]')
+        matches  = list(item_hdr.finditer(text))
+        sections: List[Tuple[str, str]] = []
+        for i, m in enumerate(matches):
+            num   = m.group(1)
+            start = m.end()
+            end   = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            body  = text[start:end].strip()
+            if num in self._MA_ITEMS and len(body) > 30:
+                sections.append((num, body))
+        return sections
+
+    def _extract_names_from_text(
+        self, text: str
+    ) -> List[Tuple[str, str]]:
+        """
+        Run all M&A patterns against *text*.
+        Returns de-duplicated list of (company_name, excerpt) tuples.
+        """
+        found: Dict[str, Tuple[str, str]] = {}   # name_lower → (name, excerpt)
+        for pat in self._MA_PATTERNS:
+            for m in pat.finditer(text):
+                try:
+                    raw_name = m.group("n").strip().rstrip(",. ")
+                except IndexError:
+                    continue
+                # Clean up surrounding punctuation and excess whitespace
+                raw_name = raw_name.strip('"\'()')
+                raw_name = re.sub(r'\s{2,}', ' ', raw_name)
+                if len(raw_name) < 3 or len(raw_name) > 80:
+                    continue
+                if not raw_name[0].isupper():
+                    continue
+                norm = raw_name.lower()
+                if norm in self._NAME_NOISE:
+                    continue
+                # Surrounding context as excerpt
+                start   = max(0, m.start() - 40)
+                end     = min(len(text), m.end() + 80)
+                excerpt = text[start:end].replace("\n", " ").strip()
+                if norm not in found:
+                    found[norm] = (raw_name, excerpt)
+        return list(found.values())
+
+    # ─── Steps 6+7: domain resolution and ReconData registration ─────────────
+
+    def _resolve_and_register(self, ma_targets: List[Dict[str, Any]]) -> None:
+        """
+        For each M&A target, resolve its domain(s) and register them
+        as primary-scope associations in ReconData.
+        """
+        if self._session is None and REQUESTS_AVAILABLE:
+            self._session = make_session()
+
+        for target in ma_targets:
+            name    = target["name"]
+            rel     = target["relationship"]
+            domains = self._resolve_domains_for_company(name)
+            target["domains"]        = [d["domain"] for d in domains]
+            target["domain_details"] = domains
+
+            # Register in associated_companies (DomainClassifier reads this)
+            company_entry: Dict[str, Any] = {
+                "name":         name,
+                "relationship": rel,
+                "source":       "edgar_8k",
+                "filing_date":  target.get("filing_date", ""),
+                "accession_no": target.get("accession_no", ""),
+                "excerpt":      target.get("excerpt", ""),
+                "domains":      [d["domain"] for d in domains],
+            }
+            if domains:
+                company_entry["domain"]  = domains[0]["domain"]
+                company_entry["website"] = "https://" + domains[0]["domain"]
+            self.data.associated_companies.append(company_entry)
+
+            # Register each domain directly in associated_domains
+            for dom_info in domains:
+                dom = dom_info["domain"]
+                if dom and dom not in self.data.associated_domains:
+                    self.data.associated_domains[dom] = {
+                        "relationship": rel,
+                        "source":       "edgar_8k",
+                        "ips":          dom_info.get("ips", []),
+                        "verified":     dom_info.get("verified", False),
+                        "method":       dom_info.get("method", "guess"),
+                        "company_name": name,
+                    }
+                    self.log.info(
+                        f"[EDGAR] M&A domain → primary scope: "
+                        f"{dom!r}  ({name}, rel={rel}, "
+                        f"method={dom_info.get('method', '?')}, "
+                        f"verified={dom_info.get('verified', False)})"
+                    )
+
+            # Add a finding to the FindingStore
+            domain_list = ", ".join(target["domains"]) or "domain unknown"
+            add_finding(
+                self.data,
+                "edgartools",
+                "ma_acquisition",
+                CAT_RECON,
+                "info",
+                f"SEC 8-K M&A: {name} ({rel})",
+                domain=target["domains"][0] if target["domains"] else "",
+                affected=domain_list,
+                timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                filing_date=target.get("filing_date", ""),
+                accession_no=target.get("accession_no", ""),
+                acquired_company=name,
+                relationship=rel,
+            )
+
+    def _resolve_domains_for_company(
+        self, company_name: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Multi-strategy domain resolver.  Returns list of dicts:
+          { domain, verified, method, ips }
+        Strategies in confidence order:
+          A. EDGAR Company lookup → company.website  (highest confidence)
+          B. SEC EFTS full-text search
+          C. DNS probing of name-derived candidates
+          D. Unverified name guess                   (lowest confidence)
+        """
+        results: List[Dict[str, Any]] = []
+        seen:    Set[str]             = set()
+
+        def _record(dom: str, verified: bool, method: str,
+                    ips: Optional[List] = None) -> None:
+            d = dom.lower().strip()
+            if d and d not in seen:
+                seen.add(d)
+                results.append({
+                    "domain":   d,
+                    "verified": verified,
+                    "method":   method,
+                    "ips":      ips or [],
+                })
+
+        # A — EDGAR Company object (company.website is most authoritative)
+        try:
+            target_co = EdgarCompany(company_name)
+            website   = getattr(target_co, "website", None) or ""
+            if website:
+                dom = self._extract_domain_from_url(str(website))
+                if dom:
+                    ips = self._dns_resolve(dom)
+                    _record(dom, bool(ips) or True, "edgar_company_website", ips)
+        except Exception:
+            pass
+
+        # B — SEC EFTS full-text search
+        sec_dom = self._sec_efts_domain_lookup(company_name)
+        if sec_dom:
+            ips = self._dns_resolve(sec_dom)
+            _record(sec_dom, bool(ips), "sec_efts", ips)
+
+        # C — DNS probing of name-derived candidates
+        for cand in self._generate_domain_candidates(company_name):
+            ips = self._dns_resolve(cand)
+            if ips:
+                _record(cand, True, "dns_probe", ips)
+
+        # D — Unverified guess if nothing resolved
+        if not results:
+            candidates = self._generate_domain_candidates(company_name)
+            if candidates:
+                _record(candidates[0], False, "name_guess")
+
+        return results[:5]   # cap at 5 per company
+
+    def _sec_efts_domain_lookup(self, company_name: str) -> Optional[str]:
+        """
+        Query SEC's EDGAR full-text search API for the company's own filings
+        and look for a website URL in the cover-page structured fields.
+        """
+        if not (REQUESTS_AVAILABLE and self._session is not None):
+            return None
+        try:
+            resp = self._session.get(
+                "https://efts.sec.gov/LATEST/search-index",
+                params={
+                    "q":         f'"{company_name}"',
+                    "forms":     "10-K,10-Q,S-1",
+                    "dateRange": "custom",
+                    "startdt":   "2000-01-01",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return None
+            hits = resp.json().get("hits", {}).get("hits", [])
+            for hit in hits[:5]:
+                src = hit.get("_source", {})
+                for key in ("website", "businessWebsite", "businessAddress",
+                            "mailing_address", "website_url"):
+                    val = str(src.get(key, "") or "")
+                    if "." in val and len(val) > 4:
+                        dom = self._extract_domain_from_url(val)
+                        if dom:
+                            return dom
+        except Exception as exc:
+            self.log.debug(f"[EDGAR] EFTS lookup for {company_name!r}: {exc}")
+        return None
+
+    def _generate_domain_candidates(self, company_name: str) -> List[str]:
+        """
+        Derive plausible domain candidates from a company name.
+        Most-likely first.
+        """
+        slug = company_name.lower()
+        # Strip common legal suffixes (longest first to avoid partial matches)
+        for suffix in (
+            ", incorporated", " incorporated",
+            ", corporation", " corporation",
+            ", limited", " limited",
+            ", inc.", " inc.", ", inc", " inc",
+            ", llc", " llc",
+            ", ltd.", " ltd.", ", ltd", " ltd",
+            ", corp.", " corp.", ", corp", " corp",
+            " plc", " ag", " sa", " nv", " bv", " gmbh",
+            ", co.", " co.", " & co", " company",
+            " holdings", " group", " technologies", " technology",
+        ):
+            slug = slug.replace(suffix, "")
+        slug    = re.sub(r"[^a-z0-9\s\-]", "", slug).strip()
+        compact = re.sub(r"[\s\-]+", "", slug)
+        hyphen  = re.sub(r"\s+", "-", slug.replace("-", " ")).strip("-")
+
+        candidates: List[str] = []
+        if compact:
+            for tld in self._PROBE_TLDS:
+                candidates.append(f"{compact}.{tld}")
+        if hyphen and hyphen != compact:
+            for tld in self._PROBE_TLDS[:3]:
+                candidates.append(f"{hyphen}.{tld}")
+
+        # Deduplicate preserving order
+        seen: Set[str] = set()
+        result: List[str] = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                result.append(c)
+        return result[:20]
+
+    def _dns_resolve(self, domain: str) -> List[str]:
+        """A-record lookup.  Returns IP list or [] on failure."""
+        if not DNS_AVAILABLE:
+            return []
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = resolver.lifetime = 3
+            return [str(r) for r in resolver.resolve(domain, "A")]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _extract_domain_from_url(url_or_domain: str) -> Optional[str]:
+        """Extract the registrable domain from a URL or bare hostname."""
+        s = url_or_domain.strip().lower()
+        if not s:
+            return None
+        if "://" not in s:
+            s = "https://" + s
+        try:
+            host = urllib.parse.urlparse(s).hostname or ""
+            # Strip leading www.
+            host = re.sub(r'^www\.', '', host)
+            if "." in host and len(host) > 3:
+                return host
+        except Exception:
+            pass
+        return None
+
+    # ─── Step 8: write artefacts ─────────────────────────────────────────────
+
+    def _write_artefacts(
+        self,
+        company: Any,
+        filings: List[Any],
+        ma_targets: List[Dict[str, Any]],
+    ) -> None:
+        """Write JSON artefact files under the edgar output directory."""
+        ts = datetime.datetime.now(datetime.UTC).isoformat()
+
+        # Company profile — includes website if available
+        profile = {
+            "cik":       str(getattr(company, "cik",      "")),
+            "name":      str(getattr(company, "name",     self.company)),
+            "tickers":   list(getattr(company, "tickers", []) or []),
+            "ticker":    str(getattr(company, "ticker",   "") or ""),
+            "exchange":  str(getattr(company, "exchange", "") or ""),
+            "sic":       str(getattr(company, "sic",      "") or ""),
+            "industry":  str(getattr(company, "industry", "") or ""),
+            "state":     str(getattr(company, "state",    "") or ""),
+            "website":   str(getattr(company, "website",  "") or ""),
+            "city":      str(getattr(company, "city",     "") or ""),
+            "queried_at": ts,
+        }
+        (self.output_dir / "company_profile.json").write_text(
+            json.dumps(profile, indent=2, default=str), encoding="utf-8"
+        )
+
+        # 8-K filings summary
+        summary: List[Dict] = []
+        for f in filings:
+            summary.append({
+                "accession_no": str(getattr(f, "accession_no",
+                                            getattr(f, "accession_number", ""))),
+                "date":         str(getattr(f, "date",
+                                            getattr(f, "filing_date", ""))),
+                "form":         "8-K",
+                "description":  str(getattr(f, "description", "") or ""),
+            })
+        (self.output_dir / "8k_filings_summary.json").write_text(
+            json.dumps({
+                "company":           self.company,
+                "total_8k_filings":  len(filings),
+                "generated_at":      ts,
+                "filings":           summary,
+            }, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        # M&A targets summary
+        (self.output_dir / "ma_targets.json").write_text(
+            json.dumps({
+                "company":       self.company,
+                "generated_at":  ts,
+                "total_targets": len(ma_targets),
+                "targets":       ma_targets,
+            }, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+
+# ─── Company Intelligence ─────────────────────────────────────────────────────
+
+class CompanyIntelligence:
+    def __init__(self, company: str, domain: str, output_dir: Path,
+                 log: ReconLogger, data: ReconData,
+                 edgar_email: str = ""):
+        self.company      = company
+        self.domain       = domain
+        self.output_dir   = output_dir
+        self.log          = log
+        self.data         = data
+        self.edgar_email  = edgar_email
+
+    def run(self):
+        self.log.set_tool_context("OSift-Company")
+        self._get_company_info()
+        self._find_associated_domains()
+        self._search_subsidiaries()
+
+        # SEC EDGAR 8-K M&A analysis — runs after basic company data is gathered
+        EdgarIntelligence(
+            company     = self.company,
+            domain      = self.domain,
+            output_dir  = self.output_dir,
+            log         = self.log,
+            data        = self.data,
+            edgar_email = self.edgar_email,
+        ).run()
+
+        self.log.set_tool_context("OSift-Company")
+        self.log.success(
+            f"[COMPANY] Found {len(self.data.associated_companies)} associated companies/entities"
+        )
+
+    def _get_company_info(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        session = make_session()
+        self.log.info("[COMPANY] Querying company info sources")
+
+        # OpenCorporates
+        try:
+            resp = session.get(
+                f"https://api.opencorporates.com/v0.4/companies/search?q={urllib.parse.quote(self.company)}&format=json",
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                for r in resp.json().get("results", {}).get("companies", [])[:5]:
+                    comp = r.get("company", {})
+                    self.data.associated_companies.append({
+                        "name":               comp.get("name"),
+                        "jurisdiction":       comp.get("jurisdiction_code"),
+                        "company_number":     comp.get("company_number"),
+                        "registered_address": comp.get("registered_address_in_full"),
+                        "status":             comp.get("current_status"),
+                        "type":               comp.get("company_type"),
+                        "source":             "opencorporates",
+                    })
+                    if comp.get("registered_address_in_full"):
+                        self.data.physical_addresses.append({
+                            "address": comp["registered_address_in_full"],
+                            "source":  "opencorporates",
+                            "company": comp.get("name"),
+                        })
+        except Exception as e:
+            self.log.debug(f"[COMPANY] OpenCorporates: {e}")
+
+        # SEC EDGAR
+        try:
+            resp = session.get(
+                f"https://efts.sec.gov/LATEST/search-index?q=%22{urllib.parse.quote(self.company)}%22"
+                f"&dateRange=custom&startdt=2000-01-01&forms=10-K",
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                out = self.output_dir / "company_info" / "sec_edgar.json"
+                out.write_text(json.dumps(resp.json(), indent=2), encoding="utf-8")
+        except Exception as e:
+            self.log.debug(f"[COMPANY] SEC EDGAR: {e}")
+
+    def _find_associated_domains(self):
+        if not REQUESTS_AVAILABLE or not DNS_AVAILABLE:
+            return
+        self.log.info("[COMPANY] Enumerating associated domains")
+        base = self.domain.rsplit(".", 1)[0]
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = resolver.lifetime = 3
+
+        for tld in ["com", "net", "org", "io", "co", "info", "biz", "us", "co.uk", "de", "fr", "ca", "au"]:
+            alt = f"{base}.{tld}"
+            if alt == self.domain:
+                continue
+            try:
+                ips = [str(r) for r in resolver.resolve(alt, "A")]
+                self.data.associated_domains[alt] = {"ips": ips, "relationship": "alt_tld", "source": "tld_enumeration"}
+                self.log.info(f"[COMPANY] Alt domain: {alt} -> {ips}")
+            except Exception:
+                pass
+
+        for term in [f"{base}-inc", f"{base}-llc", f"{base}-corp", f"{base}inc",
+                     f"my{base}", f"the{base}", f"get{base}", f"{base}app", f"{base}api"]:
+            for tld in ["com", "net", "org"]:
+                variant = f"{term}.{tld}"
+                try:
+                    ips = [str(r) for r in resolver.resolve(variant, "A")]
+                    self.data.associated_domains[variant] = {"ips": ips, "relationship": "brand_variant", "source": "brand_enumeration"}
+                    self.log.info(f"[COMPANY] Brand variant: {variant}")
+                except Exception:
+                    pass
+
+        out = self.output_dir / "company_info" / "associated" / "domains.json"
+        out.write_text(json.dumps(self.data.associated_domains, indent=2), encoding="utf-8")
+
+    def _search_subsidiaries(self):
+        if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+            return
+        try:
+            resp = make_session().get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": f'"{self.company}" subsidiary OR acquisition OR acquired site:wikipedia.org OR site:crunchbase.com'},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                for a in BeautifulSoup(resp.text, "html.parser").find_all("a", class_="result__a")[:10]:
+                    self.data.associated_companies.append({
+                        "name":         a.get_text(strip=True),
+                        "url":          a.get("href"),
+                        "relationship": "search_result",
+                        "source":       "duckduckgo",
+                    })
+        except Exception as e:
+            self.log.debug(f"[COMPANY] Subsidiaries: {e}")
+        out = self.output_dir / "company_info" / "associated" / "companies.json"
+        out.write_text(json.dumps(self.data.associated_companies, indent=2), encoding="utf-8")
+
+
+# ─── Web Crawler ──────────────────────────────────────────────────────────────
+
+class WebCrawler:
+    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData,
+                 max_pages: int = 200, max_depth: int = 3):
+        self.output_dir = output_dir / "web_crawl"
+        self.log        = log
+        self.data       = data
+        self.max_pages  = max_pages
+        self.max_depth  = max_depth
+        self._visited: Set[str] = set()
+        self._queue:   queue.Queue = queue.Queue()
+        self._lock     = threading.Lock()
+        self._sw_seen:  Set[Tuple[str, str, str]] = set()   # (software_lower, version, host)
+
+    def run(self):
+        self.log.set_tool_context("OSift-Crawl")
+        seeds = set()
+        for fqdn in list(self.data.subdomains.keys()) + [self.data.domain]:
+            for scheme in ["https", "http"]:
+                seeds.add(f"{scheme}://{fqdn}")
+        for url in list(seeds)[:50]:
+            self._queue.put((url, 0))
+        self.log.info(f"[CRAWL] Starting crawl with {self._queue.qsize()} seed URLs")
+        self._crawl()
+        self.log.success(f"[CRAWL] Crawled {len(self.data.crawled_urls)} URLs, {len(self.data.sensitive_findings)} sensitive items")
+
+    def _crawl(self):
+        session = make_session()
+        count   = 0
+        while not self._queue.empty() and count < self.max_pages:
+            try:
+                url, depth = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if url in self._visited or depth > self.max_depth:
+                continue
+            with self._lock:
+                if url in self._visited:
+                    continue
+                self._visited.add(url)
+            try:
+                resp = session.get(url, timeout=10, allow_redirects=True,
+                                   headers={"Accept": "text/html,application/xhtml+xml"})
+                count += 1
+                if count % 20 == 0:
+                    self.log.info(f"[CRAWL] Progress: {count}/{self.max_pages}")
+
+                page_data: Dict[str, Any] = {
+                    "url": url, "status_code": resp.status_code,
+                    "content_type": resp.headers.get("content-type", ""),
+                    "server":       resp.headers.get("server", ""),
+                    "x_powered_by": resp.headers.get("x-powered-by", ""),
+                    "headers":      dict(resp.headers),
+                    "size":         len(resp.content), "depth": depth,
+                    "links": [], "forms": [],
+                }
+
+                hostname = urllib.parse.urlparse(url).netloc
+                if hostname in self.data.subdomains:
+                    self.data.subdomains[hostname]["http_status"] = resp.status_code
+                self._detect_technologies(url, resp.headers)
+
+                # Save raw response body so Evidence can show the actual file
+                safe_fn = re.sub(r'[^\w\-]', '_', url)[:100]
+                _ct = resp.headers.get("content-type", "").lower()
+                if "javascript" in _ct or url.endswith((".js", ".mjs")):
+                    _ext = "js"
+                elif "css" in _ct or url.endswith(".css"):
+                    _ext = "css"
+                elif "xml" in _ct:
+                    _ext = "xml"
+                elif "json" in _ct:
+                    _ext = "json"
+                else:
+                    _ext = "html"
+                _content_dir = self.output_dir / "pages" / "content"
+                _content_dir.mkdir(parents=True, exist_ok=True)
+                _content_file = _content_dir / f"{safe_fn}.{_ext}"
+                try:
+                    _content_file.write_text(resp.text, encoding="utf-8", errors="replace")
+                except OSError:
+                    _content_file = None
+                _content_file_str = str(_content_file) if _content_file else ""
+
+                self._scan_software_versions(url, resp.headers, resp.text, _content_file_str)
+
+                if "text/html" in resp.headers.get("content-type", "") and BS4_AVAILABLE:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    page_data["links"]  = self._extract_links(soup, url, depth)[:100]
+                    page_data["forms"]  = self._extract_forms(soup)
+                    page_data["title"]  = soup.title.string if soup.title else ""
+                    page_data["meta"]   = self._extract_meta(soup)
+
+                findings = self._scan_sensitive(resp.text, url, _content_file_str)
+                page_data["sensitive_count"] = len(findings)
+
+                out = self.output_dir / "pages" / f"{safe_fn}.json"
+                out.write_text(json.dumps(page_data, indent=2, default=str), encoding="utf-8")
+
+                self.data.crawled_urls[url] = {
+                    "status":        resp.status_code,
+                    "content_type":  page_data["content_type"],
+                    "server":        page_data["server"],
+                    "size":          page_data["size"],
+                    "sensitive_count": len(findings),
+                }
+            except Exception as e:
+                self.log.debug(f"[CRAWL] {url}: {type(e).__name__}")
+
+    def _extract_links(self, soup, base_url: str, depth: int) -> List[str]:
+        links: List[str] = []
+        for tag in soup.find_all(["a", "link", "script", "img", "iframe", "form"]):
+            href = tag.get("href") or tag.get("src") or tag.get("action") or ""
+            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                continue
+            try:
+                full = urllib.parse.urljoin(base_url, href)
+                if urllib.parse.urlparse(full).netloc in (list(self.data.subdomains.keys()) + [self.data.domain]):
+                    if full not in self._visited:
+                        self._queue.put((full, depth + 1))
+                    links.append(full)
+            except Exception:
+                pass
+        return links
+
+    def _extract_forms(self, soup) -> List[Dict]:
+        forms = []
+        for form in soup.find_all("form"):
+            forms.append({
+                "action": form.get("action", ""),
+                "method": form.get("method", "GET").upper(),
+                "inputs": [{"name": i.get("name"), "type": i.get("type", "text"), "id": i.get("id")}
+                           for i in form.find_all(["input", "textarea", "select"])],
+            })
+        return forms
+
+    def _extract_meta(self, soup) -> Dict:
+        meta: Dict[str, str] = {}
+        for tag in soup.find_all("meta"):
+            name    = tag.get("name") or tag.get("property") or ""
+            content = tag.get("content") or ""
+            if name and content:
+                meta[name] = content
+        return meta
+
+    def _scan_sensitive(self, text: str, url: str, content_file: str = "") -> List[Dict]:
+        findings: List[Dict] = []
+        _url_host = urllib.parse.urlparse(url).hostname or ""
+        _domain   = self.data.domain
+
+        # Per-page evidence file: each URL's data is saved here by the caller.
+        # Using this as output_file means Evidence for a finding only links to
+        # files that actually contain the matched value (not a shared category JSONL).
+        _safe_fn  = re.sub(r'[^\w\-]', '_', url)[:100]
+        page_file = self.output_dir / "pages" / f"{_safe_fn}.json"
+
+        for category, patterns in SENSITIVE_PATTERNS.items():
+            for pattern in patterns:
+                for match in re.findall(pattern, text, re.IGNORECASE | re.DOTALL):
+                    val = match if isinstance(match, str) else str(match)
+
+                    # Per-category validation and field assignment.
+                    # _confirmed_source: if not None, a second "Confirmed" finding is
+                    # created with this source after the primary finding.
+                    _confirmed_source: Optional[str] = None
+                    _email_arg: str = ""           # unique fingerprint for email findings
+                    _phone_arg: str = ""           # unique fingerprint for phone findings
+                    _confirmed_type: str = "sensitive_data"  # override for phone_confirmed
+                    # Generator-comment secondary finding fields (Comments branch only)
+                    _gen_sw_affected: str = ""
+                    _gen_sw_name:     str = ""
+                    _gen_sw_ver:      str = ""
+
+                    # ── IP Addresses ──────────────────────────────────────────
+                    if category == "IP Addresses":
+                        if val in ("127.0.0.1", "0.0.0.0", "255.255.255.255"):
+                            continue
+                        _title    = "IP Address Identified"
+                        _affected = val
+                        _url_arg  = ""
+                        _host_arg = _url_host
+                        _source   = "OSift-Crawl"
+
+                    # ── Email Addresses ───────────────────────────────────────
+                    elif category == "Email Addresses":
+                        self._add_email_crawl(val, url)
+                        _ea_dom_c = val.split("@", 1)[1].lower() if "@" in val else ""
+                        _scope_c  = set(self.data.domains if self.data.domains else [_domain])
+                        _inscope_c = any(
+                            _ea_dom_c == _sd or _ea_dom_c.endswith("." + _sd)
+                            for _sd in _scope_c
+                        )
+                        _title    = "Email Address Identified" if _inscope_c else "Email Address Identified (Unknown)"
+                        _affected = val
+                        _email_arg = val          # unique fingerprint per email address
+                        _url_arg  = ""
+                        _host_arg = _domain       # originating domain, not crawled hostname
+                        _source   = "OSift-Crawl"
+
+                    # ── Phone Numbers ─────────────────────────────────────────
+                    elif category == "Phone Numbers":
+                        _ph_digits = re.sub(r"\D", "", val)
+                        # Hard pre-filter: 10-digit NANP numbers cannot start with 1
+                        if len(_ph_digits) == 10 and _ph_digits[0] == "1":
+                            continue
+                        # Heuristic pre-filter: UTC offsets, timestamps, etc.
+                        _ph_valid, _ph_reason = _validate_phone_number(val)
+                        if not _ph_valid:
+                            continue
+                        # Structural validation + E.164/geo enrichment via PhoneValidator
+                        _ph_full = PhoneValidator.validate(val)
+                        if not _ph_full.get("valid"):
+                            continue
+                        _ph_e164 = _ph_full.get("e164") or val
+                        if val not in self.data.phone_numbers:
+                            self.data.phone_numbers.append(val)
+                        # "Unconfirmed" = pattern spotted and both validators passed;
+                        # analyst may still want to verify.  A separate "Confirmed"
+                        # finding (type=phone_confirmed, source=phone-validator) is
+                        # created alongside with the same enriched affected string.
+                        _ph_affected      = _build_phone_affected(_ph_full)
+                        _title            = "Phone Number Pattern Spotted - Unconfirmed"
+                        _affected         = _ph_affected
+                        _phone_arg        = _ph_e164
+                        _confirmed_type   = "phone_confirmed"
+                        _url_arg          = ""
+                        _host_arg         = _domain   # originating domain, not crawled hostname
+                        _source           = "OSift-Crawl"
+                        _confirmed_source = "phone-validator"
+
+                    # ── Social Security Numbers ───────────────────────────────
+                    elif category == "Social Security":
+                        _ssn_valid, _ssn_reason = _validate_ssn(val)
+                        if not _ssn_valid:
+                            continue
+                        _title    = "Social Security pattern detected:"
+                        _affected = val
+                        _url_arg  = ""
+                        _host_arg = _domain   # originating domain
+                        _source   = "ssn-validator"
+
+                    # ── Internal Paths ───────────────────────────────────────
+                    elif category == "Internal Paths":
+                        _title    = "Internal Server Directory Structure Revealed"
+                        _affected = f"{url} - {val}"
+                        _url_arg  = url
+                        _host_arg = _domain   # originating domain, not crawled hostname
+                        _source   = "OSift-Crawl"
+
+                    # ── HTML/JS Comments ─────────────────────────────────────
+                    elif category == "Comments":
+                        # Skip trivial section-label HTML comments such as
+                        # <!-- Fonts -->, <!-- Scripts -->, <!-- Styles -->, etc.
+                        # These are purely structural markers with no intel value.
+                        _inner = re.sub(r'^<!--\s*|\s*-->$', '', val).strip()
+                        if re.fullmatch(r'[\w\s/.\-]+', _inner) and len(_inner) <= 40:
+                            continue
+                        _title    = f"{category} pattern detected: {val[:80]}"
+                        _affected = url
+                        _url_arg  = url
+                        _host_arg = ""
+                        _source   = "OSift-Crawl"
+
+                        # ── Generator: comment → Software Version Identified ──
+                        # "<!-- Generator: Adobe Illustrator 25.4.1, SVG ..." →
+                        # extract "Adobe Illustrator 25.4.1" into a secondary finding.
+                        _gen_re = re.match(
+                            r'^<!--\s*[Gg]enerator:\s*([^,;\(]+?)(?:\s*,.*)?(?:\s*-->)?$',
+                            val.strip(), re.DOTALL,
+                        )
+                        if _gen_re:
+                            _gen_content = _gen_re.group(1).strip()
+                            _gm = _META_GEN_VER_RE.match(_gen_content)
+                            if _gm:
+                                _gsw  = _gm.group(1).strip()
+                                _gver = _gm.group(2).strip()
+                                _gsw_key = (_gsw.lower(), _gver, _url_host.lower())
+                                if (len(_gver) <= 20 and len(_gsw) <= 60
+                                        and _gsw_key not in self._sw_seen):
+                                    self._sw_seen.add(_gsw_key)
+                                    _gen_sw_name     = _gsw
+                                    _gen_sw_ver      = _gver
+                                    _gen_sw_affected = f"{_gsw} {_gver}"
+
+                        # ── Plugin comment → Software Version Identified ──────
+                        # "<!-- This site is optimized with the Yoast SEO plugin v27.2 ... -->"
+                        # Extract "Yoast SEO plugin v27.2" into a secondary finding.
+                        elif "plugin" in _inner.lower():
+                            _pm = _PLUGIN_VER_RE.search(_inner)
+                            if _pm:
+                                _plug_words = _pm.group(1).strip().split()
+                                # Strip leading noise words (articles, prepositions, etc.)
+                                while _plug_words and _plug_words[0].lower() in _PLUGIN_STOP:
+                                    _plug_words.pop(0)
+                                if _plug_words:
+                                    _plug_name = " ".join(_plug_words)   # "Yoast SEO plugin"
+                                    _plug_ver  = _pm.group(2)            # "v27.2" (preserved)
+                                    _plug_ver_clean = _plug_ver.lstrip("vV")  # "27.2" for dedup
+                                    _sw_key = (_plug_name.lower(), _plug_ver_clean, _url_host.lower())
+                                    if _sw_key not in self._sw_seen:
+                                        self._sw_seen.add(_sw_key)
+                                        _gen_sw_name     = _plug_name
+                                        _gen_sw_ver      = _plug_ver_clean
+                                        _gen_sw_affected = f"{_plug_name} {_plug_ver}"
+
+                    # ── All other categories ──────────────────────────────────
+                    else:
+                        _title    = f"{category} pattern detected: {val[:80]}"
+                        _affected = url
+                        _url_arg  = url
+                        _host_arg = ""
+                        _source   = "OSift-Crawl"
+
+                    ts       = datetime.datetime.now(datetime.UTC).isoformat()
+                    safe_cat = re.sub(r'[^\w]', '_', category).lower()
+                    cat_file = self.output_dir.parent / "sensitive_data" / f"{safe_cat}.jsonl"
+
+                    fid = add_finding(
+                        self.data, _source,
+                        "sensitive_data", category, "high",
+                        _title,
+                        url=_url_arg, affected=_affected,
+                        host=_host_arg,
+                        email=_email_arg,
+                        phone=_phone_arg,
+                        timestamp=ts,
+                        matched_value=val[:200],
+                        pattern=pattern,
+                        output_file=content_file or str(page_file),
+                    )
+
+                    # Phone-number confirmation: a separate finding with type
+                    # "phone_confirmed" so it can merge with the classifier path.
+                    # Different type_ from the Unconfirmed ensures they stay separate.
+                    if _confirmed_source:
+                        add_finding(
+                            self.data, _confirmed_source,
+                            _confirmed_type, category, "high",
+                            "Phone Number Pattern Spotted - Confirmed",
+                            url="", affected=_affected,
+                            host=_host_arg,
+                            phone=_phone_arg,
+                            timestamp=ts,
+                            matched_value=val[:200],
+                            pattern=pattern,
+                            output_file=content_file or str(page_file),
+                        )
+
+                    # Generator/plugin-comment secondary: "Software Version Identified"
+                    # Emitted when a <!-- Generator: Name Ver --> or plugin ver comment parsed.
+                    if _gen_sw_affected:
+                        add_finding(
+                            self.data, "OSift-Crawl",
+                            "software_version", CAT_WEB, "info",
+                            "Software Version Identified",
+                            host=_url_host,
+                            url=url,
+                            affected=f"{_gen_sw_name} {_gen_sw_ver} - {url}",
+                            timestamp=ts,
+                            software=_gen_sw_name,
+                            version=_gen_sw_ver,
+                            output_file=content_file or str(page_file),
+                        )
+
+                    finding = {
+                        "finding_id":   fid,
+                        "url":          url,
+                        "category":     category,
+                        "value":        val[:200],
+                        "pattern":      pattern,
+                        "tool":         _source,
+                        "tool_version": VERSION,
+                        "timestamp":    ts,
+                        "validated":    bool(_confirmed_source) or _source in ("phone-validator", "ssn-validator"),
+                    }
+                    findings.append(finding)
+                    with open(cat_file, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(finding) + "\n")
+        return findings
+
+    def _add_email_crawl(self, email: str, url: str):
+        email = email.lower().strip()
+        if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+            return
+        _, _dom = email.rsplit("@", 1)
+        if _dom in ("example.com", "exemple.com", "example.org", "exemple.org",
+                    "example.net", "exemple.net", "localhost", "sentry.io",
+                    "openssh.com"):
+            return
+        rec = self.data.email_addresses.setdefault(email, {"sources": [], "context": url, "breach": False})
+        if "web_crawl" not in rec["sources"]:
+            rec["sources"].append("web_crawl")
+
+    def _detect_technologies(self, url: str, headers):
+        server  = headers.get("server", "").lower()
+        powered = headers.get("x-powered-by", "").lower()
+        via     = headers.get("via", "").lower()
+        tech_map = {
+            "nginx": "Nginx", "apache": "Apache", "iis": "IIS", "cloudflare": "Cloudflare",
+            "php": "PHP", "asp.net": "ASP.NET", "express": "Express.js", "tomcat": "Apache Tomcat",
+            "wordpress": "WordPress", "drupal": "Drupal", "joomla": "Joomla",
+        }
+        domain = urllib.parse.urlparse(url).netloc
+        techs  = self.data.technologies.setdefault(domain, [])
+        for key, name in tech_map.items():
+            if (key in server or key in powered or key in via) and name not in techs:
+                techs.append(name)
+
+    def _scan_software_versions(self, url: str, headers, text: str,
+                               content_file: str = "") -> None:
+        """
+        Detect (software, version) pairs from HTTP response headers and page body.
+        Creates one deduplicated "Software Version Identified" finding per unique
+        (software, version, host) tuple — one finding per subdomain per package.
+        """
+        _parsed   = urllib.parse.urlparse(url)
+        _host     = (_parsed.hostname or self.data.domain).lower().rstrip(".")
+        _ts       = datetime.datetime.now(datetime.UTC).isoformat()
+        _ev_file  = content_file or str(
+            self.output_dir / "pages" / f"{re.sub(r'[^\w-]', '_', url)[:100]}.json"
+        )
+
+        def _emit(software: str, version: str) -> None:
+            software = software.strip()
+            version  = version.strip()
+            if not software or not version:
+                return
+            # Reject implausible version strings (e.g. pure dates, very long strings)
+            if len(version) > 20 or len(software) > 60:
+                return
+            key = (software.lower(), version, _host)
+            if key in self._sw_seen:
+                return
+            self._sw_seen.add(key)
+            add_finding(
+                self.data, "OSift-Crawl",
+                "software_version", CAT_WEB, "info",
+                "Software Version Identified",
+                host=_host,
+                url=url,
+                affected=f"{software} {version} - {url}",
+                timestamp=_ts,
+                software=software,
+                version=version,
+                output_file=_ev_file,
+            )
+
+        # ── HTTP response headers ─────────────────────────────────────────────
+        for hdr in ("server", "x-powered-by", "x-generator", "x-cms", "x-aspnet-version",
+                    "x-aspnetmvc-version", "x-drupal-cache", "x-wp-total"):
+            val = headers.get(hdr, "").strip()
+            if not val:
+                continue
+            # x-aspnet-version and x-aspnetmvc-version carry the version directly
+            if hdr in ("x-aspnet-version", "x-aspnetmvc-version"):
+                sw_name = "ASP.NET" if "mvc" not in hdr else "ASP.NET MVC"
+                _emit(sw_name, val.split(";")[0].strip())
+                continue
+            m = _SW_HDR_RE.match(val)
+            if m:
+                _emit(m.group(1).strip(), m.group(2))
+
+        # ── HTML meta generator tag ───────────────────────────────────────────
+        for m in _META_GEN_RE.finditer(text):
+            content = (m.group(1) or m.group(2) or "").strip()
+            if content:
+                gm = _META_GEN_VER_RE.match(content)
+                if gm:
+                    _emit(gm.group(1).strip(), gm.group(2))
+
+        # ── HTML / JS body patterns ───────────────────────────────────────────
+        for pat, ng, vg in _SW_BODY_PATS:
+            for match in re.findall(pat, text, re.IGNORECASE):
+                name_raw = match[ng - 1] if isinstance(match, tuple) else match
+                ver_raw  = match[vg - 1] if isinstance(match, tuple) else ""
+                if name_raw and ver_raw:
+                    _emit(name_raw, ver_raw)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 1.5 — PASSIVE OSINT TOOL SUITE
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Five tools integrated in this phase:
+#
+#   theHarvester   — emails, subdomains, IPs, URLs from 40+ passive sources
+#                    Earliest possible: domain is all that is needed.
+#                    Runs concurrently with DNS Phase 1 / PD Wave A.
+#
+#   xurlfind3r     — passive URL discovery (Wayback, CommonCrawl, OTX, GitHub…)
+#                    Earliest possible: domain is all that is needed.
+#                    Runs concurrently with theHarvester in Phase 1.5 Wave A.
+#
+#   EmailHarvester — email-focused multi-engine search scraping (maldevel tool)
+#                    Needs domain only; runs concurrently with Phase 7.
+#
+#   Maltego        — GUI-only link-analysis platform, no true headless CLI mode.
+#                    Integration: generates a Maltego-ready seed file + install
+#                    notice so the operator can import it into the Maltego GUI
+#                    for further visual pivoting.  Called at Phase 6 alongside
+#                    CompanyIntelligence.
+#
+# Concurrency design
+# ──────────────────
+#   Phase 1.5 Wave A  (immediately after Phase 1 DNS enumeration, concurrent):
+#       theHarvester + xurlfind3r
+#
+#   Phase 7 Wave (concurrent workers added to EmailAndPeopleOSINT's pool):
+#       EmailHarvester + maigret + TruffleHog
+#
+#   Phase 6 (alongside CompanyIntelligence):
+#       MaltegoSeedExporter (instant — no subprocess)
+#
+# All classes follow the same OSift tool contract:
+#   • __init__ receives (domain, company, output_dir, log, data, …extra_opts)
+#   • run() is thread-safe (writes to its own output subdirectory)
+#   • Results are merged into ReconData immediately after subprocess completes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ─── theHarvester ─────────────────────────────────────────────────────────────
+
+class TheHarvesterRunner:
+    """
+    theHarvester — passive multi-source OSINT harvester.
+    theHarvester by Christian Martorella @laramies (https://github.com/laramies/theHarvester)
+
+    Collects emails, subdomains, IPs, and URLs from 40+ sources without
+    directly contacting the target (pure OSINT/passive).
+
+    CLI flags used:
+      -d DOMAIN          target domain
+      -l 500             result limit per source
+      -b all             use all available sources
+      -f FILE            save results to JSON + XML (stem; extensions appended)
+      -q                 suppress API-key-missing warnings (cleaner output)
+
+    Output:
+      osint/theharvester/
+        theharvester.json   — full JSON result (parsed for ingestion)
+        theharvester.xml    — XML result (kept for RawOutputParser)
+
+    Placement: Phase 1.5 Wave A — runs immediately after Phase 1 DNS
+    enumeration, concurrently with xurlfind3r.
+
+    Availability note:
+      theHarvester is a Python tool.  It is typically available as the
+      'theHarvester' binary (Kali / Parrot) or 'theHarvester.py'.  If
+      neither is found, the class logs a friendly install hint and exits.
+    """
+
+    # Sources that are reliable without API keys
+    _FREE_SOURCES = (
+        "baidu,bing,certspotter,dnsdumpster,duckduckgo,"
+        "hackertarget,otx,rapiddns,sitedossier,subdomaincenter,"
+        "threatminer,urlscan,yahoo"
+    )
+    # With key: add shodan, securityTrails, hunter, fullhunt, etc.
+    # We pass 'all' so theHarvester itself skips sources whose keys are absent.
+    _SOURCES_ALL = "all"
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        limit: int = 500,
+        use_all_sources: bool = True,
+    ):
+        self.domain    = domain
+        self.company   = company
+        self.out       = output_dir / "osint" / "theharvester"
+        self.log       = log
+        self.data      = data
+        self.limit     = limit
+        self.sources   = self._SOURCES_ALL if use_all_sources else self._FREE_SOURCES
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    # ── binary discovery ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        """Return the theHarvester binary path, or None if not installed."""
+        # On macOS, brew installs as 'theharvester' (lowercase) — check first.
+        # On Linux/Kali, 'theHarvester' (mixed-case) is common.
+        for candidate in ("theharvester", "theHarvester", "theHarvester.py"):
+            path = shutil.which(candidate)
+            if path:
+                return path
+        # Common non-PATH locations on Kali / custom installs
+        for candidate in [
+            "/opt/homebrew/bin/theharvester",
+            "/usr/local/bin/theharvester",
+            "/usr/bin/theHarvester",
+            "/usr/local/bin/theHarvester",
+            os.path.expanduser("~/theHarvester/theHarvester.py"),
+            os.path.expanduser("~/tools/theHarvester/theHarvester.py"),
+        ]:
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    # ── main entry point ──────────────────────────────────────────────────────
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[theHarvester] Binary not found — skipping.\n"
+                "        macOS  : brew install theharvester\n"
+                "        Linux  : apt install theharvester  or  pip install theHarvester\n"
+                "        GitHub : https://github.com/laramies/theHarvester"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "theHarvester")
+        self.log.set_tool_context("theHarvester")
+
+        safe_domain = re.sub(r'[^\w\-.]', '_', self.domain)
+        out_stem = str(self.out / f"theharvester_{safe_domain}")
+        # -f accepts a file stem; theHarvester appends .json and .xml itself
+        cmd = (
+            f'"{binary}" '
+            f"-d {self.domain} "
+            f"-l {self.limit} "
+            f"-b {self.sources} "
+            f'-f "{out_stem}" '
+            f"-q"
+        )
+        self.log.info(
+            f"[theHarvester] Passive harvest: domain={self.domain}, "
+            f"sources={self.sources}, limit={self.limit}"
+        )
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        # Save terminal output to .txt alongside the .json and .xml files
+        txt_path = Path(out_stem + ".txt")
+        txt_path.write_text(
+            _strip_ansi(stdout) if stdout else "",
+            encoding="utf-8", errors="replace",
+        )
+
+        if rc != 0:
+            self.log.error(f"[theHarvester] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
+            _write_placeholder(self.out, f"theharvester_{safe_domain}.json",
+                               cmd, f"(theHarvester exited with code {rc})")
+
+        # Always attempt to parse even if rc != 0 (partial results)
+        ingested = self._ingest_json(Path(out_stem + ".json"), txt_path, cmd)
+        ingested += self._ingest_stdout(stdout, txt_path, cmd)
+
+        if not ingested:
+            self.log.info("[theHarvester] No intelligence items ingested")
+            _write_placeholder(self.out, f"theharvester_{safe_domain}.json",
+                               cmd, "(theHarvester returned no results)")
+
+        self.log.success(
+            f"[theHarvester] Complete — {ingested} new intelligence items ingested"
+        )
+        return ingested
+
+    # ── result ingestion ──────────────────────────────────────────────────────
+
+    def _ingest_json(self, json_path: Path, txt_path: Path, cmd_str: str) -> int:
+        """Parse theHarvester JSON output and merge into ReconData."""
+        if not json_path.exists():
+            return 0
+        try:
+            raw = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            return 0
+
+        count      = 0
+        _new_hosts: List[str] = []
+        _new_ips:   List[str] = []
+
+        # Emails
+        for email in raw.get("emails", []):
+            email = str(email).strip().lower()
+            if "@" in email and email not in self.data.email_addresses:
+                self.data.email_addresses[email] = {
+                    "sources": ["theHarvester"], "verified": False,
+                }
+                count += 1
+
+        # Hosts / subdomains
+        for host_entry in raw.get("hosts", []):
+            # Entry may be "hostname:IP" or just "hostname"
+            host = str(host_entry).split(":")[0].strip().lower().rstrip(".")
+            if host and host.endswith(self.domain):
+                rec = self.data.subdomains.setdefault(
+                    host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                )
+                if "theHarvester" not in rec["sources"]:
+                    rec["sources"].append("theHarvester")
+                    count += 1
+                if host not in _new_hosts:
+                    _new_hosts.append(host)
+            # Capture IPs from "host:IP" form and link bidirectionally
+            if ":" in str(host_entry):
+                ip_part = str(host_entry).split(":", 1)[1].strip()
+                try:
+                    ipaddress.ip_address(ip_part)
+                    _ip_new = ip_part not in self.data.ip_addresses
+                    ip_rec = self.data.ip_addresses.setdefault(ip_part, {
+                        "fqdns": [], "sources": [], "context": "theHarvester",
+                        "asn": None, "org": None, "geo": None,
+                    })
+                    if "theHarvester" not in ip_rec.setdefault("sources", []):
+                        ip_rec["sources"].append("theHarvester")
+                    # Link FQDN → IP (in ip_addresses) and IP → FQDN (in subdomains)
+                    if host and host.endswith(self.domain):
+                        if host not in ip_rec.setdefault("fqdns", []):
+                            ip_rec["fqdns"].append(host)
+                        sub_rec = self.data.subdomains.get(host)
+                        if sub_rec is not None and ip_part not in sub_rec.setdefault("ips", []):
+                            sub_rec["ips"].append(ip_part)
+                    if _ip_new:
+                        count += 1
+                    if ip_part not in _new_ips:
+                        _new_ips.append(ip_part)
+                except ValueError:
+                    pass
+
+        # IPs (dedicated field — standalone IPs without a hostname)
+        for ip in raw.get("ips", []):
+            ip = str(ip).strip()
+            try:
+                ipaddress.ip_address(ip)
+                if ip not in self.data.ip_addresses:
+                    self.data.ip_addresses[ip] = {
+                        "fqdns": [], "sources": ["theHarvester"], "context": "theHarvester",
+                        "asn": None, "org": None, "geo": None,
+                    }
+                    count += 1
+                else:
+                    ip_rec = self.data.ip_addresses[ip]
+                    if "theHarvester" not in ip_rec.setdefault("sources", []):
+                        ip_rec["sources"].append("theHarvester")
+                if ip not in _new_ips:
+                    _new_ips.append(ip)
+            except ValueError:
+                pass
+
+        # Interesting URLs
+        for url in raw.get("urls", []):
+            url = str(url).strip()
+            if url and url not in self.data.crawled_urls:
+                self.data.crawled_urls[url] = {
+                    "status": None, "source": "theHarvester",
+                }
+                count += 1
+
+        _ev_file = str(txt_path) if txt_path.exists() else (
+            str(json_path) if json_path.exists() else ""
+        )
+
+        # One "Subdomain Identified" finding accumulating all discovered hosts
+        if _new_hosts:
+            add_finding(
+                self.data,
+                tool="theHarvester",
+                type_="subdomain_identified",
+                category="DNS",
+                severity="INFO",
+                detail="Subdomain Identified",
+                host=self.domain,
+                affected="\n".join(sorted(set(_new_hosts))),
+                output_file=_ev_file,
+                raw_command=cmd_str,
+            )
+
+        # One "IP Identified" finding accumulating all discovered IPs
+        if _new_ips:
+            add_finding(
+                self.data,
+                tool="theHarvester",
+                type_="ip_identified",
+                category=CAT_RECON,
+                severity="INFO",
+                detail="IP Identified",
+                host=self.domain,
+                affected="\n".join(sorted(set(_new_ips))),
+                output_file=_ev_file,
+                raw_command=cmd_str,
+            )
+
+        return count
+
+    def _ingest_stdout(self, stdout: str, txt_path: Path, cmd_str: str) -> int:
+        """
+        Fallback: parse plain-text stdout for emails and subdomains
+        when the JSON file is absent or empty.
+        """
+        if not stdout:
+            return 0
+        count = 0
+        _new_hosts: List[str] = []
+        email_re = re.compile(
+            r"[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}", re.I
+        )
+        for email in email_re.findall(stdout):
+            email = email.lower()
+            if self.domain in email and email not in self.data.email_addresses:
+                self.data.email_addresses[email] = {
+                    "sources": ["theHarvester"], "verified": False,
+                }
+                count += 1
+        for line in stdout.splitlines():
+            host = line.strip().lower().rstrip(".")
+            if host.endswith("." + self.domain) and " " not in host:
+                rec = self.data.subdomains.setdefault(
+                    host,
+                    {"sources": [], "ips": [], "ports": [], "http_status": None},
+                )
+                if "theHarvester" not in rec["sources"]:
+                    rec["sources"].append("theHarvester")
+                    count += 1
+                if host not in _new_hosts:
+                    _new_hosts.append(host)
+        if _new_hosts:
+            _ev_file = str(txt_path) if txt_path.exists() else ""
+            add_finding(
+                self.data,
+                tool="theHarvester",
+                type_="subdomain_identified",
+                category="DNS",
+                severity="INFO",
+                detail="Subdomain Identified",
+                host=self.domain,
+                affected="\n".join(sorted(set(_new_hosts))),
+                output_file=_ev_file,
+                raw_command=cmd_str,
+            )
+        return count
+
+
+# ─── xurlfind3r ───────────────────────────────────────────────────────────────
+
+class XurlFind3rRunner:
+    """
+    xurlfind3r — passive URL discovery from archived/indexed sources.
+
+    Sources used: Wayback Machine, Common Crawl, OTX, URLScan, GitHub,
+    BeVigil, IntelX (API key optional).  No direct contact with target.
+
+    CLI flags used (v1.x):
+      -d DOMAIN              target domain
+      --include-subdomains   also match URLs for all subdomains
+      -o FILE                write discovered URLs (one per line)
+      --no-color             suppress ANSI codes in output
+      -v silent              suppress non-URL output
+
+    Output:
+      osint/xurlfind3r/
+        urls.txt    — one URL per line (ingested into data.crawled_urls)
+
+    Placement: Phase 1.5 Wave A — concurrent with theHarvester.
+
+    Install: go install -v github.com/hueristiq/xurlfind3r/cmd/xurlfind3r@latest
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "osint" / "xurlfind3r"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = shutil.which("xurlfind3r")
+        if not binary:
+            # Also check GOPATH/bin
+            gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
+            candidate = os.path.join(gopath, "bin", "xurlfind3r")
+            if os.path.isfile(candidate):
+                binary = candidate
+        if not binary:
+            self.log.warning(
+                "[xurlfind3r] Binary not found — skipping.\n"
+                "        Install: go install -v "
+                "github.com/hueristiq/xurlfind3r/cmd/xurlfind3r@latest"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "xurlfind3r")
+        self.log.set_tool_context("xurlfind3r")
+
+        out_file = self.out / "urls.txt"
+        cmd = (
+            f'"{binary}" '
+            f"-d {self.domain} "
+            f"--include-subdomains "
+            f"-m "                   # --monochrome: no colour codes in output
+            f'-o "{out_file}" '
+            f"-s"                    # --silent: suppress banner/logging, only results
+        )
+        self.log.info(f"[xurlfind3r] Passive URL discovery for {self.domain}")
+        stdout, stderr, rc = _shell(cmd, timeout=300)  # 5 min — partial results ingested on timeout
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if rc != 0:
+            if rc == -1:
+                self.log.warning("[xurlfind3r] Timed out — ingesting partial results from output file")
+            else:
+                self.log.warning(f"[xurlfind3r] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
+            if not (self.out / "urls.txt").exists():
+                _write_placeholder(self.out, "urls.txt",
+                                   cmd, f"(xurlfind3r exited with code {rc})")
+
+        # Ingest from file (preferred — cleaner than stdout with -v silent)
+        count = self._ingest_file(out_file)
+        # Fallback: stdout may still contain URLs when -o fails
+        if not count:
+            count = self._ingest_stdout(stdout)
+
+        if not count:
+            self.log.info("[xurlfind3r] No URLs discovered")
+            _write_placeholder(self.out, "urls.txt",
+                               cmd, "(xurlfind3r found no archived/indexed URLs)")
+
+        self.log.success(f"[xurlfind3r] Complete — {count} new URLs ingested")
+        return count
+
+    def _ingest_file(self, path: Path) -> int:
+        if not path.exists():
+            return 0
+        count = 0
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            url = line.strip()
+            if url and url.startswith(("http://", "https://")):
+                if url not in self.data.crawled_urls:
+                    self.data.crawled_urls[url] = {
+                        "status": None, "source": "xurlfind3r",
+                    }
+                    count += 1
+                # Also extract any subdomains referenced in the URL
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(url).hostname or ""
+                    host = host.lower().rstrip(".")
+                    if host.endswith(self.domain) and host != self.domain:
+                        rec = self.data.subdomains.setdefault(
+                            host,
+                            {"sources": [], "ips": [], "ports": [], "http_status": None},
+                        )
+                        if "xurlfind3r" not in rec["sources"]:
+                            rec["sources"].append("xurlfind3r")
+                        add_finding(
+                            self.data, "xurlfind3r", "subdomain_identified", "DNS", "INFO",
+                            "Subdomain Identified",
+                            host=self.domain, affected=host,
+                            output_file=str(path),
+                        )
+                except Exception:
+                    pass
+        if count:
+            add_finding(
+                self.data,
+                tool="xurlfind3r",
+                type_="passive_url_discovery",
+                category=CAT_RECON,
+                severity="info",
+                detail=(
+                    f"xurlfind3r discovered {count} archived/indexed URLs "
+                    f"from passive sources (Wayback, CommonCrawl, OTX…)"
+                ),
+                domain=self.domain, affected=self.domain,
+            )
+        return count
+
+    def _ingest_stdout(self, stdout: str) -> int:
+        count = 0
+        _urls: List[str] = []
+        for line in stdout.splitlines():
+            url = line.strip()
+            if url.startswith(("http://", "https://")):
+                _urls.append(url)
+                if url not in self.data.crawled_urls:
+                    self.data.crawled_urls[url] = {
+                        "status": None, "source": "xurlfind3r",
+                    }
+                    count += 1
+        # Write URLs to file so Evidence has something to reference
+        _stdout_file = self.out / "urls.txt"
+        if _urls and not _stdout_file.exists():
+            try:
+                _stdout_file.write_text("\n".join(_urls), encoding="utf-8")
+            except OSError:
+                pass
+        _out_file_str = str(_stdout_file) if _stdout_file.exists() else ""
+        for url in _urls:
+            try:
+                from urllib.parse import urlparse as _up
+                _h = (_up(url).hostname or "").lower().rstrip(".")
+                if _h and _h.endswith(self.domain) and _h != self.domain:
+                    rec = self.data.subdomains.setdefault(
+                        _h, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "xurlfind3r" not in rec["sources"]:
+                        rec["sources"].append("xurlfind3r")
+                    add_finding(
+                        self.data, "xurlfind3r", "subdomain_identified", "DNS", "INFO",
+                        "Subdomain Identified",
+                        host=self.domain, affected=_h,
+                        output_file=_out_file_str,
+                    )
+            except Exception:
+                pass
+        return count
+
+
+# ─── EmailHarvester ───────────────────────────────────────────────────────────
+
+
+class EmailHarvesterRunner:
+    """
+    EmailHarvester (maldevel/EmailHarvester) — email-focused multi-engine
+    search engine scraping.
+
+    Queries Google, Bing, Yahoo, ASK, Baidu, Dogpile, Exalead for
+    email addresses associated with the target domain.
+
+    CLI flags used:
+      -d DOMAIN          target domain
+      -e all             search all engines
+      -l 200             result limit
+      -s FILE            save output (TXT + XML, stem without extension)
+
+    Output:
+      osint/emailharvester/
+        emails.txt    — plain-text results (one email per line)
+        emails.xml    — XML results (kept for RawOutputParser)
+
+    Placement: Phase 7 — runs concurrently with EmailAndPeopleOSINT.
+
+    Install:
+      pip install EmailHarvester
+      or: git clone https://github.com/maldevel/EmailHarvester
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        limit: int = 200,
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "osint" / "emailharvester"
+        self.log     = log
+        self.data    = data
+        self.limit   = limit
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        for candidate in (
+            "EmailHarvester",
+            "emailharvester",
+            "EmailHarvester.py",
+        ):
+            path = shutil.which(candidate)
+            if path:
+                return path
+        for candidate in [
+            os.path.expanduser("~/EmailHarvester/EmailHarvester.py"),
+            os.path.expanduser("~/tools/EmailHarvester/EmailHarvester.py"),
+            "/opt/EmailHarvester/EmailHarvester.py",
+        ]:
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[EmailHarvester] Binary not found — skipping.\n"
+                "        Install: pip install EmailHarvester\n"
+                "        GitHub : https://github.com/maldevel/EmailHarvester"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "EmailHarvester")
+        self.log.set_tool_context("EmailHarvester")
+
+        out_stem = str(self.out / "emails")
+        cmd = (
+            f'"{binary}" '
+            f"-d {self.domain} "
+            f"-e all "
+            f"-l {self.limit} "
+            f'--noprint '
+            f'-s "{out_stem}"'
+        )
+        self.log.info(
+            f"[EmailHarvester] Multi-engine email harvest for {self.domain}"
+        )
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if rc != 0:
+            # EmailHarvester crashes on Python 3.14+ with a traceback — downgrade to warning
+            # and strip the traceback noise, keeping only the first meaningful error line.
+            _eh_err = ""
+            if stderr:
+                _eh_lines = [l for l in _strip_ansi(stderr).splitlines()
+                             if l.strip() and not l.strip().startswith(("Traceback", "File ", "  File", "    "))]
+                _eh_err = ": " + _eh_lines[0][:200] if _eh_lines else ""
+            self.log.warning(f"[EmailHarvester] Command exited with code {rc}{_eh_err}")
+            _write_placeholder(self.out, "emails.txt",
+                               cmd, f"(EmailHarvester exited with code {rc})")
+
+        count = self._ingest(Path(out_stem + ".txt"), stdout)
+
+        if not count:
+            self.log.info("[EmailHarvester] No email addresses harvested")
+            _write_placeholder(self.out, "emails.txt",
+                               cmd, "(EmailHarvester found no email addresses)")
+
+        self.log.success(f"[EmailHarvester] Complete — {count} new emails ingested")
+        return count
+
+    def _ingest(self, txt_path: Path, stdout: str) -> int:
+        count = 0
+        email_re = re.compile(
+            r"[a-zA-Z0-9_.+\-]+@" + re.escape(self.domain), re.I
+        )
+        sources: List[str] = []
+
+        # Primary: saved TXT file
+        if txt_path.exists():
+            sources.append(
+                txt_path.read_text(encoding="utf-8", errors="replace")
+            )
+        # Fallback: stdout
+        if stdout:
+            sources.append(stdout)
+
+        for text in sources:
+            for email in email_re.findall(text):
+                email = email.lower()
+                if email not in self.data.email_addresses:
+                    self.data.email_addresses[email] = {
+                        "sources": ["EmailHarvester"], "verified": False,
+                    }
+                    count += 1
+
+        if count:
+            add_finding(
+                self.data,
+                tool="EmailHarvester",
+                type_="email_discovery",
+                category=CAT_RECON,
+                severity="info",
+                detail=(
+                    f"EmailHarvester found {count} email addresses via multi-engine search scraping"
+                ),
+                domain=self.domain, affected=self.domain,
+            )
+        return count
+
+
+# ─── PureDNSRunner ───────────────────────────────────────────────────────────
+
+class PureDNSRunner:
+    """
+    puredns — high-accuracy DNS brute-force and mass resolution.
+
+    Two modes:
+      bruteforce  — enumerate subdomains using a wordlist; validates each
+                    result through trusted public resolvers to eliminate
+                    wildcard false-positives.
+      resolve     — bulk-resolve all already-known subdomains to confirm
+                    liveness and map A/AAAA records.
+
+    CLI flags:
+      bruteforce WORDLIST DOMAIN --resolvers FILE --write output.txt --quiet
+      resolve    LIST_FILE       --resolvers FILE --write output.txt --quiet
+
+    Resolvers file: a built-in list of reliable public DNS resolvers is
+    written to the output directory on first use.
+
+    Output:
+      dns/puredns/
+        puredns_bruteforce.txt   — validated subdomains from wordlist
+        puredns_resolved.txt     — confirmed-live subdomains (resolve pass)
+        resolvers.txt            — resolvers used
+
+    Placement: Phase 1.5 Wave B — after passive subdomain collection (Wave A +
+    pd_wave_a) so puredns can brute the full combined subdomain surface and
+    cross-validate.
+    """
+
+    # A curated list of reliable public resolvers (IPv4 only for compatibility)
+    _PUBLIC_RESOLVERS = [
+        "1.1.1.1", "1.0.0.1",     # Cloudflare
+        "8.8.8.8", "8.8.4.4",     # Google
+        "9.9.9.9", "149.112.112.112",  # Quad9
+        "208.67.222.222", "208.67.220.220",  # OpenDNS
+        "64.6.64.6", "64.6.65.6",  # Verisign
+        "198.101.242.72", "23.253.163.53",   # Alternate
+        "77.88.8.8", "77.88.8.1",  # Yandex
+        "4.2.2.1", "4.2.2.2",
+    ]
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "dns" / "puredns"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def _write_resolvers(self) -> Path:
+        """Write public resolvers file if it doesn't exist."""
+        rf = self.out / "resolvers.txt"
+        if not rf.exists():
+            rf.write_text("\n".join(self._PUBLIC_RESOLVERS), encoding="utf-8")
+        return rf
+
+    def _write_wordlist(self) -> Path:
+        """Write the current DEFAULT_WORDLIST to disk for puredns."""
+        wl = self.out / "wordlist.txt"
+        wl.write_text("\n".join(DEFAULT_WORDLIST), encoding="utf-8")
+        return wl
+
+    def _write_known_hosts(self) -> Path:
+        """Write all currently known subdomains to a file for resolve pass."""
+        hf = self.out / "known_hosts.txt"
+        hf.write_text("\n".join(sorted(self.data.subdomains.keys())), encoding="utf-8")
+        return hf
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        p = shutil.which("puredns")
+        if p:
+            return p
+        gobin = os.path.join(
+            os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin"
+        )
+        candidate = os.path.join(gobin, "puredns")
+        return candidate if os.path.isfile(candidate) else None
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[puredns] Binary not found — skipping.\n"
+                "        Install: go install github.com/d3mondev/puredns/v2@latest"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "puredns")
+        self.log.set_tool_context("puredns")
+
+        resolvers_file = self._write_resolvers()
+        total = 0
+
+        # ── 1. Bruteforce pass ────────────────────────────────────────────────
+        wordlist_file = self._write_wordlist()
+        brute_out     = self.out / "puredns_bruteforce.txt"
+        cmd_brute = (
+            f'"{binary}" bruteforce "{wordlist_file}" {self.domain} '
+            f'-r "{resolvers_file}" --write "{brute_out}" --quiet'
+        )
+        self.log.info(
+            f"[puredns] Bruteforce: {len(DEFAULT_WORDLIST)} words against {self.domain}"
+        )
+        stdout, stderr, rc = _shell(cmd_brute)
+        self.log.log_command(cmd_brute, stdout, stderr, rc)
+        n = _ingest_subdomain_list(brute_out, self.data, "puredns", self.domain, self.log)
+        total += n
+        if n:
+            self.log.success(f"[puredns] Bruteforce: +{n} validated subdomains")
+
+        # ── 2. Resolve pass (bulk-validate all known subs) ────────────────────
+        if self.data.subdomains:
+            known_file = self._write_known_hosts()
+            resolve_out = self.out / "puredns_resolved.txt"
+            cmd_resolve = (
+                f'"{binary}" resolve "{known_file}" '
+                f'-r "{resolvers_file}" --write "{resolve_out}" --quiet'
+            )
+            self.log.info(
+                f"[puredns] Resolve pass: {len(self.data.subdomains)} known subdomains"
+            )
+            stdout2, stderr2, rc2 = _shell(cmd_resolve)
+            self.log.log_command(cmd_resolve, stdout2, stderr2, rc2)
+            # Mark resolved subdomains with puredns source
+            if resolve_out.exists():
+                for line in resolve_out.read_text(encoding="utf-8", errors="replace").splitlines():
+                    host = line.strip().lower().rstrip(".")
+                    if host and host in self.data.subdomains:
+                        rec = self.data.subdomains[host]
+                        if "puredns_resolved" not in rec["sources"]:
+                            rec["sources"].append("puredns_resolved")
+
+        if total:
+            add_finding(
+                self.data,
+                tool="puredns",
+                type_="subdomain_brute_force",
+                category=CAT_DNS,
+                severity="info",
+                detail=(
+                    f"puredns bruteforce discovered {total} new validated subdomains "
+                    f"(wildcard-filtered via public DNS resolvers)"
+                ),
+                domain=self.domain, affected=self.domain,
+            )
+        self.log.success(f"[puredns] Complete — {total} new subdomains discovered")
+        return total
+
+
+# ─── WaybackURLsRunner ────────────────────────────────────────────────────────
+
+class WaybackURLsRunner:
+    """
+    waybackurls — mine the Wayback Machine (CDX API) for all historical URLs.
+    waybackurls by Tom Hudson @tomnomnom (https://github.com/tomnomnom/waybackurls)
+
+    Retrieves every URL the Wayback Machine has ever crawled for the target
+    domain, including subdomains.  Historical URLs often expose decommissioned
+    endpoints, legacy API paths, hidden admin panels, and sensitive parameter
+    names that are no longer visible in current crawls.
+
+    CLI usage:
+      echo "example.com" | waybackurls > urls.txt
+
+    Output:
+      osint/waybackurls/
+        wayback_urls_{domain}.txt     — all historical URLs (one per line)
+        wayback_endpoints_{domain}.txt — deduplicated path+parameter patterns
+
+    Placement: Phase 1.5 Wave B — after passive subdomain collection.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "osint" / "waybackurls"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        p = shutil.which("waybackurls")
+        if p:
+            return p
+        gobin = os.path.join(
+            os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin"
+        )
+        candidate = os.path.join(gobin, "waybackurls")
+        return candidate if os.path.isfile(candidate) else None
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[waybackurls] Binary not found — skipping.\n"
+                "        Install: go install github.com/tomnomnom/waybackurls@latest"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "waybackurls")
+        self.log.set_tool_context("waybackurls")
+
+        _safe_dom  = _safe_filename(self.domain)
+        out_file   = self.out / f"wayback_urls_{_safe_dom}.txt"
+        # waybackurls reads the domain from stdin
+        cmd = f'echo "{self.domain}" | "{binary}" -no-subs=false'
+        self.log.info(f"[waybackurls] Mining Wayback Machine CDX for {self.domain}")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if stdout.strip():
+            out_file.write_text(stdout, encoding="utf-8")
+        elif rc != 0:
+            _write_placeholder(
+                self.out, f"wayback_urls_{_safe_dom}.txt", cmd,
+                f"(waybackurls exited with code {rc})"
+            )
+
+        count = self._ingest(out_file, stdout)
+
+        if count:
+            # Write deduplicated endpoint patterns (path + query key skeleton)
+            self._write_endpoint_summary(out_file, _safe_dom)
+            add_finding(
+                self.data,
+                tool="waybackurls",
+                type_="historical_url_discovery",
+                category=CAT_RECON,
+                severity="info",
+                detail=(
+                    f"Wayback Machine CDX returned {count} historical URLs — "
+                    f"review for legacy endpoints and exposed params"
+                ),
+                domain=self.domain, affected=self.domain,
+                output_file=str(out_file),
+            )
+        else:
+            self.log.info("[waybackurls] No historical URLs returned")
+            _write_placeholder(
+                self.out, f"wayback_urls_{_safe_dom}.txt", cmd,
+                "(no Wayback Machine entries found for this domain)"
+            )
+
+        self.log.success(f"[waybackurls] Complete — {count} new historical URLs ingested")
+        return count
+
+    # ── Compiled patterns for URL analysis ───────────────────────────────────
+
+    # Query param names that suggest embedded credentials
+    _CRED_PARAM_RE = re.compile(
+        r'^(?:api[_-]?key|apikey|token|access[_-]?token|secret[_-]?key|'
+        r'secret|password|passwd|pwd|auth|authorization|private[_-]?key|'
+        r'client[_-]?secret|oauth[_-]?token|refresh[_-]?token|bearer)$',
+        re.I,
+    )
+    # File extensions that indicate sensitive/backup files
+    _SENSITIVE_EXT_RE = re.compile(
+        r'(?i)\.(sql|bak|backup|dump|db|sqlite3?|mdb|env|cfg|conf|ini|log|'
+        r'key|pem|crt|pfx|p12|jks|keystore|secret|tar(?:\.gz)?|tgz|zip|rar|'
+        r'7z|gz|dmp|swp)(?:[?#]|$)'
+    )
+    # Path segments that suggest admin / internal / config access
+    _SENSITIVE_PATH_RE = re.compile(
+        r'(?i)/(?:admin(?:istrat(?:or|ion))?|phpmyadmin|phpinfo\.php|'
+        r'wp-(?:login|admin|config)|\.env|\.git(?:/|$)|\.htaccess|\.htpasswd|'
+        r'web\.config|config\.(?:php|yml|yaml|json)|settings\.(?:php|py)|'
+        r'database\.php|db\.php|install\.php|setup\.php|backup[s]?/|'
+        r'dump[s]?/|export[s]?/|temp/|tmp/|upload[s]?/)'
+    )
+    # High-value token/key patterns to match against full URL strings
+    _TOKEN_PATTERNS: List[tuple] = [
+        ("AWS Access Key",      re.compile(r'(?:AKIA|AIPA|ABIA|ACCA)[0-9A-Z]{16}')),
+        ("JWT Token",           re.compile(r'eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+')),
+        ("GitHub Token",        re.compile(r'gh[pousr]_[A-Za-z0-9]{36}')),
+        ("Slack Token",         re.compile(r'xox[baprs]-[0-9A-Za-z]{10,48}')),
+        ("Google API Key",      re.compile(r'AIza[0-9A-Za-z\-_]{35}')),
+    ]
+    _EMAIL_IN_URL_RE = re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
+    _EMAIL_NOISE_DOMAINS = frozenset({
+        "example.com", "example.org", "example.net", "sentry.io",
+        "w3.org", "schema.org", "foo.bar", "openssh.com",
+    })
+
+    def _ingest(self, file_path: Path, stdout_fallback: str) -> int:
+        """Ingest URLs from file (preferred) or stdout fallback.
+
+        Beyond storing URLs, also:
+        - Emits subdomain_identified findings for unique hostnames
+        - Extracts email addresses embedded in URL components
+        - Scans for credentials in query params, sensitive paths/extensions,
+          and high-value token patterns; emits findings per category
+        """
+        lines: List[str] = []
+        if file_path.exists():
+            lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        elif stdout_fallback.strip():
+            lines = stdout_fallback.splitlines()
+
+        count = 0
+        # category → list of (url, match_detail); capped at 20 per category
+        _sensitive_hits: Dict[str, List[tuple]] = {}
+
+        for raw in lines:
+            url = raw.strip()
+            if not url or not url.startswith(("http://", "https://")):
+                continue
+            if url not in self.data.crawled_urls:
+                self.data.crawled_urls[url] = {"status": None, "source": "waybackurls"}
+                count += 1
+
+            try:
+                parsed = urllib.parse.urlparse(url)
+                host   = (parsed.hostname or "").lower().rstrip(".")
+
+                # ── Subdomain extraction ──────────────────────────────────
+                if host and host.endswith(self.domain) and host != self.domain:
+                    rec = self.data.subdomains.setdefault(
+                        host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "waybackurls" not in rec["sources"]:
+                        rec["sources"].append("waybackurls")
+                    add_finding(
+                        self.data, "waybackurls", "subdomain_identified", "DNS", "INFO",
+                        "Subdomain Identified",
+                        host=self.domain, affected=host,
+                        output_file=str(file_path) if file_path.exists() else "",
+                    )
+
+                # ── Credential query params ───────────────────────────────
+                if parsed.query:
+                    for param, vals in urllib.parse.parse_qs(
+                        parsed.query, keep_blank_values=False
+                    ).items():
+                        if self._CRED_PARAM_RE.match(param):
+                            val = vals[0] if vals else ""
+                            if val and len(val) > 4:
+                                hits = _sensitive_hits.setdefault(
+                                    "Credential in URL Parameter", []
+                                )
+                                if len(hits) < 20:
+                                    hits.append((url, f"{param}=<value>"))
+
+                # ── Sensitive file extension ──────────────────────────────
+                ext_m = self._SENSITIVE_EXT_RE.search(parsed.path)
+                if ext_m:
+                    hits = _sensitive_hits.setdefault("Sensitive File in URL", [])
+                    if len(hits) < 20:
+                        hits.append((url, ext_m.group(0).lstrip(".")))
+
+                # ── Sensitive path pattern ────────────────────────────────
+                path_m = self._SENSITIVE_PATH_RE.search(parsed.path)
+                if path_m:
+                    hits = _sensitive_hits.setdefault("Sensitive Path in URL", [])
+                    if len(hits) < 20:
+                        hits.append((url, path_m.group(0)[:60]))
+
+                # ── High-value token patterns ─────────────────────────────
+                for _label, _pattern in self._TOKEN_PATTERNS:
+                    if _pattern.search(url):
+                        hits = _sensitive_hits.setdefault(_label, [])
+                        if len(hits) < 20:
+                            hits.append((url, _label))
+
+                # ── Email addresses in URL ────────────────────────────────
+                for _em in self._EMAIL_IN_URL_RE.findall(url):
+                    _em = _em.lower()
+                    _em_dom = _em.rsplit("@", 1)[1] if "@" in _em else ""
+                    if _em_dom and _em_dom not in self._EMAIL_NOISE_DOMAINS:
+                        rec = self.data.email_addresses.setdefault(
+                            _em, {"sources": [], "context": url, "breach": False}
+                        )
+                        if "waybackurls" not in rec.get("sources", []):
+                            rec.setdefault("sources", []).append("waybackurls")
+
+            except Exception:
+                pass
+
+        # ── Emit sensitive findings (one per unique URL, grouped) ─────────
+        _SEV = {
+            "Credential in URL Parameter": "HIGH",
+            "AWS Access Key": "CRITICAL",
+            "JWT Token": "HIGH",
+            "GitHub Token": "HIGH",
+            "Slack Token": "HIGH",
+            "Google API Key": "HIGH",
+            "Sensitive File in URL": "MEDIUM",
+            "Sensitive Path in URL": "LOW",
+        }
+        for _cat, _hits in _sensitive_hits.items():
+            _sev = _SEV.get(_cat, "MEDIUM")
+            for _url, _detail in _hits:
+                if _cat == "Sensitive Path in URL":
+                    _wb_host = urllib.parse.urlparse(_url).hostname or ""
+                    add_finding(
+                        self.data, "waybackurls",
+                        "sensitive_data", CAT_SENSITIVE, _sev,
+                        "Sensitive URL Identified",
+                        url=_url, affected=_url, host=_wb_host,
+                    )
+                else:
+                    add_finding(
+                        self.data, "waybackurls",
+                        "sensitive_data", CAT_SENSITIVE, _sev,
+                        f"{_cat}: {_detail}",
+                        url=_url, affected=_url,
+                    )
+
+        return count
+
+    def _write_endpoint_summary(self, url_file: Path, safe_dom: str = "") -> None:
+        """Deduplicate URL paths+query-key skeletons and write a summary."""
+        if not url_file.exists():
+            return
+        seen: set = set()
+        patterns: List[str] = []
+        for raw in url_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            url = raw.strip()
+            if not url:
+                continue
+            try:
+                parsed = urllib.parse.urlparse(url)
+                q_keys = sorted(urllib.parse.parse_qs(parsed.query).keys())
+                skeleton = parsed.path
+                if q_keys:
+                    skeleton += "?" + "&".join(f"{k}=" for k in q_keys)
+                key = f"{parsed.netloc}{skeleton}"
+                if key not in seen:
+                    seen.add(key)
+                    patterns.append(f"{parsed.scheme}://{key}")
+            except Exception:
+                continue
+        _suffix  = f"_{safe_dom}" if safe_dom else ""
+        ep_file  = self.out / f"wayback_endpoints{_suffix}.txt"
+        ep_file.write_text("\n".join(sorted(patterns)[:5000]), encoding="utf-8")
+
+
+# ─── WappalyzerScanner ────────────────────────────────────────────────────────
+
+class WappalyzerScanner:
+    """
+    Wappalyzer (s0md3v / python-native) — technology fingerprinting.
+
+    Identifies 3,000+ technologies (frameworks, CMSes, analytics, CDNs, server
+    software, SaaS, security products) from HTTP response headers, HTML meta
+    tags, cookies, script paths, and JS variable names — without a headless
+    browser.
+
+    Runs against all live web hosts discovered during previous phases:
+      • data.subdomains where http_status is not None
+      • Additional hosts derived from data.crawled_urls
+
+    Results are merged into data.technologies and produce per-host findings.
+
+    Output:
+      web/wappalyzer/
+        wappalyzer_results.json  — per-host technology breakdown
+
+    Placement: Phase 1.5 Wave C — after Phase 8 web crawl so the full set of
+    live hosts is known.
+    """
+
+    _REQUEST_TIMEOUT = 10
+    _MAX_HOSTS       = 100   # cap to avoid runaway requests on large scopes
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "web" / "wappalyzer"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        try:
+            from wappalyzer import Wappalyzer  # type: ignore
+        except ImportError:
+            self.log.warning(
+                "[wappalyzer] Python package not available — skipping.\n"
+                "        Install: pip install wappalyzer"
+            )
+            return 0
+
+        # Collect live web hosts
+        targets: List[str] = self._collect_targets()
+        if not targets:
+            self.log.info("[wappalyzer] No live web hosts found to fingerprint")
+            return 0
+
+        try:
+            import importlib.metadata as _imm
+            _wap_ver = _imm.version("wappalyzer")
+        except Exception:
+            _wap_ver = "unknown"
+        TOOL_REGISTRY.register("wappalyzer", _wap_ver)
+        self.log.set_tool_context("wappalyzer")
+        self.log.info(f"[wappalyzer] Fingerprinting {len(targets)} web targets")
+
+        wap = Wappalyzer()
+        results: Dict[str, Any] = {}
+        found_count = 0
+
+        for url in targets[:self._MAX_HOSTS]:
+            try:
+                detected = wap.analyze(url)
+                techs = detected.get("technologies", [])
+                if not techs:
+                    continue
+                host = urllib.parse.urlparse(url).hostname or url
+                results[url] = techs
+                found_count += len(techs)
+
+                # Merge into data.technologies
+                for tech in techs:
+                    name = tech.get("name", "")
+                    cats = tech.get("categories", [])
+                    if not name:
+                        continue
+                    cat_key = cats[0] if cats else "Other"
+                    tech_list = self.data.technologies.setdefault(cat_key, [])
+                    entry = {"name": name, "host": host, "source": "wappalyzer"}
+                    if entry not in tech_list:
+                        tech_list.append(entry)
+
+                    # Create finding for notable technologies
+                    if any(c in str(cats) for c in
+                           ["CMS", "E-commerce", "Security", "Authentication",
+                            "Web frameworks", "JavaScript frameworks", "Database"]):
+                        add_finding(
+                            self.data,
+                            tool="wappalyzer",
+                            type_="technology_fingerprint",
+                            category=CAT_WEB,
+                            severity="info",
+                            detail=(
+                                f"Wappalyzer identified {name} "
+                                f"({', '.join(str(c) for c in cats)})"
+                            ),
+                            host=host, url=url, affected=host,
+                            technology=name,
+                            categories=cats,
+                        )
+
+                self.log.info(f"[wappalyzer] {host}: {', '.join(t['name'] for t in techs[:5])}")
+
+            except Exception as exc:
+                self.log.debug(f"[wappalyzer] {url}: {exc}")
+                continue
+
+        # Write results
+        out_json = self.out / "wappalyzer_results.json"
+        out_json.write_text(
+            json.dumps(results, indent=2, default=str), encoding="utf-8"
+        )
+
+        if found_count:
+            add_finding(
+                self.data,
+                tool="wappalyzer",
+                type_="technology_fingerprint_summary",
+                category=CAT_WEB,
+                severity="info",
+                detail=(
+                    f"Wappalyzer identified {found_count} technologies across {len(results)} web targets"
+                ),
+                domain=self.domain, affected=self.domain,
+            )
+
+        self.log.success(
+            f"[wappalyzer] Complete — {found_count} tech detections across {len(results)} hosts"
+        )
+        return found_count
+
+    def _collect_targets(self) -> List[str]:
+        """Build a list of HTTP URLs for fingerprinting from ReconData."""
+        urls: List[str] = []
+        seen_hosts: set = set()
+
+        # Primary domain
+        for scheme in ("https", "http"):
+            urls.append(f"{scheme}://{self.domain}")
+        seen_hosts.add(self.domain)
+
+        # Subdomains with confirmed HTTP response
+        for host, meta in self.data.subdomains.items():
+            if host in seen_hosts:
+                continue
+            status = meta.get("http_status")
+            if status and str(status).startswith(("1", "2", "3", "4")):
+                urls.append(f"https://{host}")
+                seen_hosts.add(host)
+
+        # Extract unique hosts from crawled URLs
+        for url in list(self.data.crawled_urls.keys())[:500]:
+            try:
+                host = urllib.parse.urlparse(url).hostname or ""
+                host = host.lower().rstrip(".")
+                if host and host.endswith(self.domain) and host not in seen_hosts:
+                    urls.append(f"https://{host}")
+                    seen_hosts.add(host)
+            except Exception:
+                continue
+
+        return urls
+
+
+# ─── MaigretRunner ────────────────────────────────────────────────────────────
+
+class MaigretRunner:
+    """
+    maigret — social media username enumeration across 3,000+ platforms.
+
+    Searches for employee names and email-derived usernames across social
+    networks, developer platforms, forums, and professional networks to build
+    an employee digital footprint.
+
+    Username candidates are derived from:
+      • Email addresses in data.email_addresses (local part before @)
+      • Employee names in data.employees (first.last, firstlast, first_last)
+
+    CLI flags:
+      maigret USERNAME --output-type json -o OUTPUT_FILE
+                       --timeout 30 --no-color --retries 1
+                       --ignore-ids unknown  --top-sites 500
+
+    Output:
+      osint/maigret/
+        <username>.json   — per-username profile results
+        maigret_summary.json — aggregated results
+
+    Placement: Phase 7 (concurrent with EmailAndPeopleOSINT).
+    """
+
+    _MAX_USERNAMES = 15   # cap to avoid multi-hour runs
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "osint" / "maigret"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        for candidate in ("maigret",):
+            p = shutil.which(candidate)
+            if p:
+                return p
+        return None
+
+    def _collect_usernames(self) -> List[str]:
+        """Extract likely usernames from known emails and employee names."""
+        usernames: List[str] = []
+        seen: set = set()
+
+        def _add(u: str) -> None:
+            u = u.lower().strip()
+            # Keep only sane username characters
+            u = re.sub(r"[^a-z0-9._\-]", "", u)
+            if len(u) >= 3 and u not in seen:
+                seen.add(u)
+                usernames.append(u)
+
+        # From email local parts
+        for email in list(self.data.email_addresses.keys())[:30]:
+            local = email.split("@")[0]
+            _add(local)
+            # Also try without dots/underscores
+            _add(local.replace(".", "").replace("_", "").replace("-", ""))
+
+        # From employee names: John Doe → john.doe, johndoe, john_doe
+        for emp in self.data.employees[:20]:
+            name = emp.get("name", "")
+            parts = re.split(r"\s+", name.strip().lower())
+            if len(parts) >= 2:
+                first, last = parts[0], parts[-1]
+                _add(f"{first}.{last}")
+                _add(f"{first}{last}")
+                _add(f"{first}_{last}")
+                _add(first)
+            # Direct handles
+            handle = emp.get("handle", "").lstrip("@")
+            if handle:
+                _add(handle)
+
+        return usernames[:self._MAX_USERNAMES]
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            # Try as a Python module
+            try:
+                import maigret as _mg_mod  # type: ignore
+                binary = None  # will use module-based approach if needed
+                # For now, fall through to subprocess if CLI binary found
+                self.log.warning(
+                    "[maigret] CLI binary not on PATH (module found but CLI preferred).\n"
+                    "        Install: pip install maigret  then re-run"
+                )
+                return 0
+            except ImportError:
+                self.log.warning(
+                    "[maigret] Not found — skipping.\n"
+                    "        Install: pip install maigret"
+                )
+                return 0
+
+        usernames = self._collect_usernames()
+        if not usernames:
+            self.log.info("[maigret] No username candidates derived — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "maigret")
+        self.log.set_tool_context("maigret")
+        self.log.info(
+            f"[maigret] Social media enumeration for {len(usernames)} username(s): "
+            f"{', '.join(usernames[:5])}{'…' if len(usernames) > 5 else ''}"
+        )
+
+        all_profiles: List[Dict] = []
+        for username in usernames:
+            out_file = self.out / f"{username}.json"
+            cmd = (
+                f'"{binary}" {username} '
+                f'--output-type json -o "{out_file}" '
+                f"--timeout 30 --no-color --retries 1 "
+                f"--ignore-ids unknown --top-sites 500"
+            )
+            stdout, stderr, rc = _shell(cmd)
+            self.log.log_command(cmd, stdout, stderr, rc)
+
+            profiles = self._ingest_result(out_file, username)
+            all_profiles.extend(profiles)
+            if profiles:
+                self.log.info(
+                    f"[maigret] {username}: found on "
+                    f"{', '.join(p['site'] for p in profiles[:5])}"
+                    f"{'…' if len(profiles) > 5 else ''}"
+                )
+
+        # Write aggregated summary
+        summary_file = self.out / "maigret_summary.json"
+        summary_file.write_text(
+            json.dumps(all_profiles, indent=2, default=str), encoding="utf-8"
+        )
+
+        if all_profiles:
+            add_finding(
+                self.data,
+                tool="maigret",
+                type_="social_media_enumeration",
+                category=CAT_RECON,
+                severity="info",
+                detail=(
+                    f"maigret identified {len(all_profiles)} social/platform profiles "
+                    f"across {len(usernames)} usernames"
+                ),
+                domain=self.domain, affected=self.domain,
+            )
+
+        self.log.success(
+            f"[maigret] Complete — {len(all_profiles)} profiles across "
+            f"{len(usernames)} username(s)"
+        )
+        return len(all_profiles)
+
+    def _ingest_result(self, json_path: Path, username: str) -> List[Dict]:
+        """Parse maigret JSON output and return list of found profiles."""
+        if not json_path.exists():
+            return []
+        try:
+            raw = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return []
+
+        profiles: List[Dict] = []
+        sites_data = raw if isinstance(raw, dict) else {}
+
+        for site_name, site_info in sites_data.items():
+            if not isinstance(site_info, dict):
+                continue
+            status = site_info.get("status", {})
+            # maigret status.id: "Claimed", "Available", "Unknown", etc.
+            status_id = (
+                status.get("id", "") if isinstance(status, dict)
+                else str(status)
+            )
+            if status_id.lower() not in ("claimed",):
+                continue
+
+            profile_url = site_info.get("url_user", "") or site_info.get("url", "")
+            profile = {
+                "username":   username,
+                "site":       site_name,
+                "url":        profile_url,
+                "status":     status_id,
+                "tags":       site_info.get("tags", []),
+            }
+            profiles.append(profile)
+
+            # Add to employees social_profiles if we can correlate
+            for emp in self.data.employees:
+                emp_handle = emp.get("handle", "").lstrip("@").lower()
+                emp_email_local = ""
+                if emp.get("email"):
+                    emp_email_local = emp["email"].split("@")[0].lower()
+                if username in (emp_handle, emp_email_local):
+                    sp_list = emp.setdefault("social_profiles", [])
+                    entry = {"site": site_name, "url": profile_url}
+                    if entry not in sp_list:
+                        sp_list.append(entry)
+
+            if profile_url:
+                add_finding(
+                    self.data,
+                    tool="maigret",
+                    type_="social_profile_found",
+                    category=CAT_RECON,
+                    severity="info",
+                    detail=f"maigret: @{username} found on {site_name}",
+                    url=profile_url, affected=profile_url,
+                    domain=self.domain,
+                )
+
+        return profiles
+
+
+# ─── TruffleHogRunner ────────────────────────────────────────────────────────
+
+class TruffleHogRunner:
+    """
+    TruffleHog v3 — high-signal secret detection in GitHub repositories.
+
+    Scans a GitHub organisation (or individual repositories) for exposed
+    secrets using 800+ detectors (API keys, OAuth tokens, private keys, DB
+    connection strings, cloud credentials, etc.).  Only verified secrets
+    (confirmed live via API pings) are surfaced as HIGH findings.
+
+    CLI flags:
+      trufflehog github --org=ORG_NAME --json --no-update --only-verified
+      trufflehog git    --repo=URL     --json --no-update --only-verified
+
+    GitHub org is resolved from (in priority order):
+      1. --github-org CLI flag
+      2. GitHub org name inferred from company name slug
+      3. GitHub URLs already present in data.crawled_urls
+
+    Output:
+      osint/trufflehog/
+        trufflehog_github.jsonl  — one finding per line (NDJSON)
+        trufflehog_summary.json  — deduplicated by detector type
+
+    Placement: Phase 7 (concurrent with EmailAndPeopleOSINT).
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        github_org: str = "",
+    ):
+        self.domain     = domain
+        self.company    = company
+        self.out        = output_dir / "osint" / "trufflehog"
+        self.log        = log
+        self.data       = data
+        self.github_org = github_org.strip()
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        p = shutil.which("trufflehog")
+        if p:
+            return p
+        gobin = os.path.join(
+            os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin"
+        )
+        candidate = os.path.join(gobin, "trufflehog")
+        return candidate if os.path.isfile(candidate) else None
+
+    def _resolve_org(self) -> Optional[str]:
+        """Determine GitHub org name from provided hint or heuristics."""
+        if self.github_org:
+            return self.github_org
+
+        # Extract from GitHub URLs already discovered
+        gh_re = re.compile(r"https?://github\.com/([^/\s?#]+)", re.I)
+        org_candidates: Dict[str, int] = {}
+        for url in self.data.crawled_urls:
+            m = gh_re.match(url)
+            if m:
+                org = m.group(1).lower()
+                if org not in ("orgs", "repos", "trending"):
+                    org_candidates[org] = org_candidates.get(org, 0) + 1
+        if org_candidates:
+            return max(org_candidates, key=org_candidates.get)  # type: ignore
+
+        # Fallback: slugify company name
+        slug = re.sub(r"[^a-z0-9\-]", "", self.company.lower().replace(" ", "-"))
+        return slug if slug else None
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[trufflehog] Binary not found — skipping.\n"
+                "        macOS : brew install trufflehog\n"
+                "        Other : go install github.com/trufflesecurity/trufflehog/v3@latest"
+            )
+            return 0
+
+        org = self._resolve_org()
+        if not org:
+            self.log.info("[trufflehog] No GitHub org resolved — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "trufflehog")
+        self.log.set_tool_context("trufflehog")
+        self.log.info(f"[trufflehog] Scanning GitHub org: {org}")
+
+        out_file = self.out / "trufflehog_github.jsonl"
+        cmd = (
+            f'"{binary}" github --org="{org}" '
+            f"--json --no-update --only-verified 2>/dev/null"
+        )
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if stdout.strip():
+            out_file.write_text(stdout, encoding="utf-8")
+        else:
+            _write_placeholder(
+                self.out, "trufflehog_github.jsonl", cmd,
+                f"(trufflehog returned no verified secrets for org '{org}')"
+            )
+
+        count = self._ingest(out_file, org)
+        self.log.success(f"[trufflehog] Complete — {count} verified secrets found")
+        return count
+
+    def _ingest(self, jsonl_path: Path, org: str) -> int:
+        if not jsonl_path.exists():
+            return 0
+        count = 0
+        summary: Dict[str, int] = {}
+
+        for line in jsonl_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                finding = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            detector = finding.get("DetectorName", finding.get("detector_name", "Unknown"))
+            source_meta = finding.get("SourceMetadata", {}).get("Data", {})
+            gh_meta     = (
+                source_meta.get("Github", {})
+                or source_meta.get("Git", {})
+                or {}
+            )
+            repo    = gh_meta.get("repository", "")
+            file_   = gh_meta.get("file", "")
+            link    = gh_meta.get("link", "")
+            raw_val = finding.get("Raw", "")[:120]
+
+            detail = (
+                f"TruffleHog verified {detector} secret"
+                + (f" (redacted: {raw_val[:40]}…)" if raw_val else "")
+            )
+            _affected = link or (f"https://github.com/{org}/{repo}" if repo else f"https://github.com/{org}")
+
+            add_finding(
+                self.data,
+                tool="trufflehog",
+                type_="secret_detected",
+                category=CAT_SENSITIVE,
+                severity="high",
+                detail=detail,
+                url=link or f"https://github.com/{org}",
+                affected=_affected,
+                domain=self.domain,
+                detector=detector,
+                repository=repo,
+            )
+            summary[detector] = summary.get(detector, 0) + 1
+            count += 1
+
+        if summary:
+            summary_path = self.out / "trufflehog_summary.json"
+            summary_path.write_text(
+                json.dumps({"org": org, "by_detector": summary, "total": count},
+                           indent=2), encoding="utf-8"
+            )
+
+        return count
+
+
+# ─── CloudEnumRunner ─────────────────────────────────────────────────────────
+
+class CloudEnumRunner:
+    """
+    cloud_enum — cloud storage bucket / blob enumeration.
+
+    Enumerates AWS S3 buckets, Azure Blob containers, and Google Cloud Storage
+    buckets that may belong to the target organisation by permuting company and
+    domain keywords.  Exposed public buckets are HIGH severity findings.
+
+    CLI flags:
+      cloud_enum -k KEYWORD [-k KEYWORD2 …] -l output.txt --quickscan
+
+    Keywords used:
+      • Company name slug (acme-corp, acmecorp, acme)
+      • Domain without TLD (example from example.com)
+      • Domain second-level label variations
+
+    Output:
+      osint/cloud_enum/
+        cloud_enum_output.txt    — raw tool output
+        cloud_enum_findings.json — parsed bucket URLs
+
+    Placement: Phase 1.5 Wave C — after Phase 6 company intel, alongside
+    WappalyzerScanner.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "osint" / "cloud_enum"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        for candidate in ("cloud_enum", "cloud_enum.py"):
+            p = shutil.which(candidate)
+            if p:
+                return p
+        # pip-installed scripts location
+        for script_dir in (
+            os.path.join(sys.prefix, "bin"),
+            os.path.join(sys.prefix, "Scripts"),       # Windows
+            os.path.expanduser("~/.local/bin"),
+        ):
+            for name in ("cloud_enum", "cloud_enum.py"):
+                full = os.path.join(script_dir, name)
+                if os.path.isfile(full):
+                    return full
+        return None
+
+    def _build_keywords(self) -> List[str]:
+        """Derive cloud keyword permutations from company + domain."""
+        kws: List[str] = []
+        seen: set = set()
+
+        def _add(k: str) -> None:
+            k = re.sub(r"[^a-z0-9\-]", "", k.lower().strip())
+            if len(k) >= 3 and k not in seen:
+                seen.add(k)
+                kws.append(k)
+
+        # Domain second-level: "example" from "example.com"
+        parts = self.domain.split(".")
+        if len(parts) >= 2:
+            _add(parts[0])                          # example
+            _add(".".join(parts[:-1]))              # sub.example (if subdomain)
+
+        # Company name variants
+        company_slug = self.company.lower().strip()
+        _add(company_slug)
+        _add(company_slug.replace(" ", "-"))
+        _add(company_slug.replace(" ", ""))
+        _add(company_slug.replace(" ", "_"))
+        # First word only (often the brand name)
+        first_word = company_slug.split()[0] if " " in company_slug else company_slug
+        _add(first_word)
+
+        return kws[:8]  # cap to avoid excessive enumeration
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[cloud_enum] Binary not found — skipping.\n"
+                "        Install: pip install cloud-enum\n"
+                "        GitHub : https://github.com/initstring/cloud_enum"
+            )
+            return 0
+
+        keywords = self._build_keywords()
+        if not keywords:
+            self.log.info("[cloud_enum] No keywords derived — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "cloud_enum")
+        self.log.set_tool_context("cloud_enum")
+        self.log.info(
+            f"[cloud_enum] Enumerating cloud storage for keywords: "
+            f"{', '.join(keywords)}"
+        )
+
+        out_file = self.out / "cloud_enum_output.txt"
+        kw_flags = " ".join(f"-k {kw}" for kw in keywords)
+        cmd = (
+            f'"{binary}" {kw_flags} -l "{out_file}" --quickscan'
+        )
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        # cloud_enum writes to the -l file; also capture stdout
+        combined = (out_file.read_text(encoding="utf-8", errors="replace")
+                    if out_file.exists() else "") + "\n" + stdout
+
+        if not combined.strip():
+            _write_placeholder(
+                self.out, "cloud_enum_output.txt", cmd,
+                "(cloud_enum found no exposed buckets)"
+            )
+
+        count = self._ingest(combined, cmd)
+        self.log.success(f"[cloud_enum] Complete — {count} potential cloud assets found")
+        return count
+
+    # Patterns that indicate a found/exposed bucket
+    _EXPOSED_RE = re.compile(
+        r"(https?://[^\s]+(?:s3|blob|storage|bucket)[^\s]*)", re.I
+    )
+    _STATUS_RE  = re.compile(r"\[(open|public|exists|200)\]", re.I)
+
+    def _ingest(self, output: str, cmd: str) -> int:
+        count = 0
+        findings: List[Dict] = []
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            url_match    = self._EXPOSED_RE.search(line)
+            status_match = self._STATUS_RE.search(line)
+
+            if url_match and status_match:
+                bucket_url = url_match.group(1)
+                status_tag = status_match.group(1).upper()
+                provider   = (
+                    "S3"    if ".s3." in bucket_url or "s3.amazonaws" in bucket_url else
+                    "Azure" if "blob.core.windows" in bucket_url else
+                    "GCS"   if "storage.googleapis" in bucket_url else
+                    "Cloud"
+                )
+                findings.append({"url": bucket_url, "provider": provider, "status": status_tag})
+                add_finding(
+                    self.data,
+                    tool="cloud_enum",
+                    type_="exposed_cloud_storage",
+                    category=CAT_INFRA,
+                    severity="high",
+                    detail=f"cloud_enum: {provider} storage bucket is publicly accessible",
+                    url=bucket_url, affected=bucket_url,
+                    domain=self.domain,
+                    provider=provider,
+                )
+                count += 1
+
+        out_json = self.out / "cloud_enum_findings.json"
+        out_json.write_text(json.dumps(findings, indent=2), encoding="utf-8")
+        return count
+
+
+# ─── MaltegoSeedExporter ──────────────────────────────────────────────────────
+
+class MaltegoSeedExporter:
+    """
+    Maltego integration — seed file exporter for GUI-based link analysis.
+
+    Maltego is a graphical link-analysis platform with no headless/CLI
+    automation mode that can be called reliably from a script.  Its
+    'automationPort' flag launches the GUI, not a headless runner.
+
+    This class bridges OSift and Maltego by:
+      1. Generating a Maltego Machine-compatible MTGX seed file containing all
+         entities OSift has discovered so far (domain, IPs, subdomains, emails,
+         employees).
+      2. Writing install/import instructions to guide the operator.
+      3. Generating a CSV import file compatible with Maltego's Entity import.
+
+    The operator can then open Maltego, import the seed entities, and run
+    Transforms (PATERVA, Shodan, HaveIBeenPwned, etc.) interactively.
+
+    Output:
+      osint/maltego/
+        maltego_entities.csv       — CSV import for Maltego entity import
+        maltego_seed.mtgx          — MTGX-format XML seed graph (importable)
+        maltego_instructions.txt   — step-by-step import guide
+
+    Placement: Phase 6, alongside CompanyIntelligence.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = output_dir / "osint" / "maltego"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> None:
+        self.log.set_tool_context("Maltego")
+        self.log.info("[Maltego] Generating entity seed files for Maltego GUI import")
+
+        self._write_csv()
+        self._write_mtgx()
+        self._write_instructions()
+
+        self.log.success(
+            "[Maltego] Seed files written to osint/maltego/\n"
+            "          → Import maltego_entities.csv into Maltego via:\n"
+            "            Maltego → Import → Import Graph from CSV"
+        )
+
+    # ── CSV entity export ─────────────────────────────────────────────────────
+
+    def _write_csv(self) -> None:
+        rows: List[Dict[str, str]] = []
+
+        rows.append({
+            "Entity Type": "maltego.Domain",
+            "Value":       self.domain,
+            "Properties":  f"company={self.company}",
+        })
+
+        for sub in list(self.data.subdomains)[:500]:
+            rows.append({
+                "Entity Type": "maltego.DNSName",
+                "Value":       sub,
+                "Properties":  "source=OSift",
+            })
+
+        for ip, meta in list(self.data.ip_addresses.items())[:300]:
+            org = (meta or {}).get("org", "") or ""
+            rows.append({
+                "Entity Type": "maltego.IPv4Address",
+                "Value":       ip,
+                "Properties":  f"org={org}",
+            })
+
+        for email in list(self.data.email_addresses)[:300]:
+            rows.append({
+                "Entity Type": "maltego.EmailAddress",
+                "Value":       email,
+                "Properties":  "source=OSift",
+            })
+
+        for emp in self.data.employees[:200]:
+            name  = emp.get("name", "")
+            title = emp.get("title", "")
+            if name:
+                rows.append({
+                    "Entity Type": "maltego.Person",
+                    "Value":       name,
+                    "Properties":  f"title={title};source=OSift",
+                })
+
+        csv_path = self.out / "maltego_entities.csv"
+        import csv
+        with csv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh, fieldnames=["Entity Type", "Value", "Properties"]
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        self.log.info(f"[Maltego] CSV entity export: {len(rows)} entities → maltego_entities.csv")
+
+    # ── MTGX seed graph ───────────────────────────────────────────────────────
+
+    def _write_mtgx(self) -> None:
+        """
+        Write a minimal MTGX XML seed graph that Maltego can open directly.
+        MTGX is a ZIP archive containing an XML graph file; we write the raw
+        XML as a .mtgx file which Maltego can import via File → Open.
+        """
+        entities_xml: List[str] = []
+
+        def _ent(etype: str, value: str, **fields: str) -> str:
+            props = "".join(
+                f'        <Field Name="{k}">{_xml_escape(v)}</Field>\n'
+                for k, v in fields.items()
+            )
+            return (
+                f'    <MaltegoEntity type="{etype}">\n'
+                f'      <Value>{_xml_escape(value)}</Value>\n'
+                f'      <AdditionalFields>\n{props}'
+                f'      </AdditionalFields>\n'
+                f'    </MaltegoEntity>\n'
+            )
+
+        def _xml_escape(s: str) -> str:
+            return (
+                s.replace("&", "&amp;")
+                 .replace("<", "&lt;")
+                 .replace(">", "&gt;")
+                 .replace('"', "&quot;")
+            )
+
+        entities_xml.append(_ent(
+            "maltego.Domain", self.domain, company=self.company,
+        ))
+        for sub in list(self.data.subdomains)[:300]:
+            entities_xml.append(_ent("maltego.DNSName", sub))
+        for ip in list(self.data.ip_addresses)[:200]:
+            entities_xml.append(_ent("maltego.IPv4Address", ip))
+        for email in list(self.data.email_addresses)[:200]:
+            entities_xml.append(_ent("maltego.EmailAddress", email))
+
+        xml_body = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<MaltegoGraph version="1.2">\n'
+            '  <Entities>\n'
+            + "".join(entities_xml)
+            + '  </Entities>\n'
+            '</MaltegoGraph>\n'
+        )
+        (self.out / "maltego_seed.mtgx").write_text(xml_body, encoding="utf-8")
+
+    # ── Instructions file ─────────────────────────────────────────────────────
+
+    def _write_instructions(self) -> None:
+        subs_count   = len(self.data.subdomains)
+        ips_count    = len(self.data.ip_addresses)
+        emails_count = len(self.data.email_addresses)
+        emps_count   = len(self.data.employees)
+
+        instructions = f"""
+═══════════════════════════════════════════════════════════════
+  MALTEGO IMPORT GUIDE — OSift Seed Data
+  Target: {self.domain}  |  Company: {self.company}
+═══════════════════════════════════════════════════════════════
+
+OSift has pre-populated the following entity counts:
+  Subdomains   : {subs_count}
+  IP addresses : {ips_count}
+  Emails       : {emails_count}
+  Employees    : {emps_count}
+
+─── Option A: CSV Import (recommended for large datasets) ──────
+1. Open Maltego
+2. Create a new graph: File → New
+3. Go to: Import/Export → Import Graph from CSV
+4. Select: osint/maltego/maltego_entities.csv
+5. Map columns: Entity Type, Value, Properties
+6. Click Import
+
+─── Option B: Open MTGX Seed Graph ─────────────────────────────
+1. Open Maltego
+2. File → Open → select: osint/maltego/maltego_seed.mtgx
+3. The seed graph will load with all discovered entities
+
+─── Recommended Maltego Transforms to run after import ─────────
+On Domain entities:
+  • To DNS Name [Find DNS Names]
+  • To Email Address [Find Email Addresses using Search Engines]
+  • To Website [Resolve Domain to Website]
+  • Files and Documents from Domain
+  • To IP Address [Resolve to IP]
+
+On IP Address entities:
+  • To Location [city/country]
+  • To ASN
+  • To Netblock
+  • Shodan → To Open Ports
+
+On Email Address entities:
+  • HaveIBeenPwned → To Breach
+  • To Person [From Email]
+  • To Social Network Accounts
+
+On Person entities:
+  • To Email Addresses
+  • To Social Network Profiles
+  • To Phone Number
+
+─── Install Maltego ─────────────────────────────────────────────
+  Kali/Debian : sudo apt install maltego
+  All systems : https://www.maltego.com/downloads/
+  Community   : Free (limited transforms, CAPTCHA required every 3 days)
+  Commercial  : Full API access, no limits
+══════════════════════════════════════════════════════════════════
+""".strip()
+        (self.out / "maltego_instructions.txt").write_text(
+            instructions, encoding="utf-8"
+        )
+
+
+# ─── Phase 1.5 Orchestrator ───────────────────────────────────────────────────
+
+class PassiveOSINTOrchestrator:
+    """
+    Orchestrates the Phase 1.5 passive OSINT tools that need only a domain name.
+
+    Wave A (concurrent) — theHarvester + xurlfind3r
+      Run immediately after Phase 1 DNS enumeration while PD Wave A is also
+      running.  All tools are domain-only; no live host data needed.
+
+    Wave B (concurrent) — puredns + waybackurls
+      Run after passive subdomain collection (Wave A + pd_wave_a + pd_wave_b).
+      puredns validates and extends subdomain coverage; waybackurls mines the
+      Wayback Machine CDX for historical URLs and additional subdomains.
+
+    Phase 7 tools (concurrent) — EmailHarvester + maigret + TruffleHog
+      Runs alongside Phase 7 EmailAndPeopleOSINT for social and secret intelligence.
+
+    Wave C (concurrent) — WappalyzerScanner + CloudEnumRunner
+      Run after Phase 8 web crawl so the full set of live hosts is known.
+
+    Results flow into ReconData and are available to all subsequent phases.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        harvester_limit: int = 500,
+        xurlfind3r_enabled: bool = True,
+        skip_passive: bool = False,
+        github_org: str = "",
+        skip_wayback: bool = False,
+        skip_wappalyzer: bool = False,
+        skip_cloud_enum: bool = False,
+    ):
+        self.domain             = domain
+        self.company            = company
+        self.output_dir         = output_dir
+        self.log                = log
+        self.data               = data
+        self.harvester_limit    = harvester_limit
+        self.xurlfind3r_enabled = xurlfind3r_enabled
+        self.skip_passive       = skip_passive
+        self.github_org         = github_org
+        self.skip_wayback       = skip_wayback
+        self.skip_wappalyzer    = skip_wappalyzer
+        self.skip_cloud_enum    = skip_cloud_enum
+
+    def run_wave_a(self) -> None:
+        """
+        theHarvester + xurlfind3r — concurrent, domain only needed.
+        Mirrors the ProjectDiscovery wave pattern.
+        """
+        if self.skip_passive:
+            self.log.info("[PassiveOSINT] Skipped (--skip-passive)")
+            return
+
+        self.log.info("[PassiveOSINT] Wave A — theHarvester + xurlfind3r (concurrent)")
+
+        tasks: List[Any] = [
+            TheHarvesterRunner(
+                self.domain, self.company, self.output_dir,
+                self.log, self.data,
+                limit=self.harvester_limit,
+            ),
+        ]
+        if self.xurlfind3r_enabled:
+            tasks.append(
+                XurlFind3rRunner(
+                    self.domain, self.company, self.output_dir,
+                    self.log, self.data,
+                )
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    self.log.warning(f"[PassiveOSINT] Wave A / {name} error: {exc}")
+
+        self.log.info("[PassiveOSINT] Wave A complete")
+
+    def run_wave_b(self) -> None:
+        """
+        puredns + waybackurls — concurrent, runs after passive subdomain collection.
+        Requires: data.subdomains populated (from Wave A + pd_wave_a + pd_wave_b).
+        """
+        if self.skip_passive:
+            return
+
+        tasks: List[Any] = []
+
+        if not self.skip_wayback:
+            tasks.append(
+                WaybackURLsRunner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                )
+            )
+
+        tasks.append(
+            PureDNSRunner(
+                self.domain, self.company, self.output_dir, self.log, self.data,
+            )
+        )
+
+        self.log.info(
+            f"[PassiveOSINT] Wave B — {', '.join(t.__class__.__name__ for t in tasks)} (concurrent)"
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    self.log.warning(f"[PassiveOSINT] Wave B / {name} error: {exc}")
+
+        self.log.info("[PassiveOSINT] Wave B complete")
+
+    def run_wave_c(self) -> None:
+        """
+        WappalyzerScanner + CloudEnumRunner — concurrent, after Phase 8 crawl.
+        Requires: data.subdomains with http_status populated by prior phases.
+        """
+        if self.skip_passive:
+            return
+
+        tasks: List[Any] = []
+
+        if not self.skip_wappalyzer:
+            tasks.append(
+                WappalyzerScanner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                )
+            )
+
+        if not self.skip_cloud_enum:
+            tasks.append(
+                CloudEnumRunner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                )
+            )
+
+        if not tasks:
+            return
+
+        self.log.info(
+            f"[PassiveOSINT] Wave C — {', '.join(t.__class__.__name__ for t in tasks)} (concurrent)"
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    self.log.warning(f"[PassiveOSINT] Wave C / {name} error: {exc}")
+
+        self.log.info("[PassiveOSINT] Wave C complete")
+
+    def run_phase7_tools(self) -> None:
+        """
+        EmailHarvester + maigret + TruffleHog — concurrent, alongside Phase 7.
+        """
+        if self.skip_passive:
+            return
+
+        self.log.info(
+            "[PassiveOSINT] Phase 7 tools — EmailHarvester + maigret + TruffleHog (concurrent)"
+        )
+
+        tasks: List[Any] = [
+            EmailHarvesterRunner(
+                self.domain, self.company, self.output_dir, self.log, self.data,
+            ),
+            MaigretRunner(
+                self.domain, self.company, self.output_dir, self.log, self.data,
+            ),
+            TruffleHogRunner(
+                self.domain, self.company, self.output_dir, self.log, self.data,
+                github_org=self.github_org,
+            ),
+        ]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:
+                    self.log.warning(
+                        f"[PassiveOSINT] Phase 7 / {name} error: {exc}"
+                    )
+
+        self.log.info("[PassiveOSINT] Phase 7 tools complete")
+
+    def run_maltego_export(self) -> None:
+        """
+        MaltegoSeedExporter — generates seed files, no subprocess.
+        Called at Phase 6 after enough data has been gathered.
+        """
+        if self.skip_passive:
+            return
+        try:
+            MaltegoSeedExporter(
+                self.domain, self.company, self.output_dir, self.log, self.data,
+            ).run()
+        except Exception as exc:
+            self.log.warning(f"[Maltego] Seed export error: {exc}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROJECTDISCOVERY TOOLKIT — Phase 11
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Tools integrated (all from github.com/projectdiscovery):
+#
+#   Subdomain Discovery
+#     subfinder   — passive multi-source subdomain enumeration
+#     chaos       — Chaos DB subdomain dataset (requires CHAOS_KEY env var)
+#     shuffledns  — mass DNS resolver + wildcard filter (needs massdns)
+#
+#   DNS & Host Validation
+#     dnsx        — multi-threaded DNS resolver / validator
+#
+#   TLS / Certificate Intelligence
+#     tlsx        — fast TLS handshake + cert extraction at scale
+#
+#   CDN & Cloud Detection
+#     cdncheck    — classify IPs/hosts as CDN / cloud / WAF
+#
+#   Web Crawl & JS Analysis
+#     katana      — next-gen web crawler: JS rendering, form discovery, links
+#
+#   ASN / IP Range Expansion
+#     asnmap      — ASN → CIDR expansion with live host discovery
+#
+#   Internet-Wide Search (multi-engine)
+#     uncover     — wraps Shodan/Censys/Fofa/Quake/Hunter/Zoomeye/etc.
+#
+#   Cloud Asset Discovery
+#     cloudlist   — enumerate cloud assets via provider credentials
+#
+# Execution ordering (based on data availability):
+#   Wave A (domain only needed) — subfinder, chaos               ← runs during Phase 1
+#   Wave B (after Wave A)       — shuffledns, dnsx               ← consolidates subdomains
+#   Wave C (after IPs known)    — tlsx, cdncheck, asnmap, uncover← after Phase 4
+#   Wave D (after live hosts)   — katana                         ← after Phase 3 certs
+#   Wave E (standalone)         — cloudlist                      ← alongside Phase 6
+#
+# Each tool is checked → if missing: go install (auto) → fail nicely if no Go
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Go / tool bootstrap ──────────────────────────────────────────────────────
+
+# Mapping: binary name → go install path
+_PD_TOOLS: Dict[str, str] = {
+    "subfinder":  "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    "chaos":      "github.com/projectdiscovery/chaos-client/cmd/chaos@latest",
+    "shuffledns": "github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest",
+    "dnsx":       "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+    "tlsx":       "github.com/projectdiscovery/tlsx/cmd/tlsx@latest",
+    "cdncheck":   "github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest",
+    "katana":     "github.com/projectdiscovery/katana/cmd/katana@latest",
+    "asnmap":     "github.com/projectdiscovery/asnmap/cmd/asnmap@latest",
+    "uncover":    "github.com/projectdiscovery/uncover/cmd/uncover@latest",
+    "cloudlist":  "github.com/projectdiscovery/cloudlist/cmd/cloudlist@latest",
+}
+
+
+def _find_go() -> Optional[str]:
+    """Return the path to the go binary, or None if not installed."""
+    go = shutil.which("go")
+    if go:
+        return go
+    # Common non-PATH locations
+    for candidate in ["/usr/local/go/bin/go", "/usr/local/bin/go",
+                      os.path.expanduser("~/go/bin/go"),
+                      r"C:\Program Files\Go\bin\go.exe",
+                      r"C:\Go\bin\go.exe"]:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _ensure_go(log: "ReconLogger") -> Optional[str]:
+    """
+    Return the path to the Go binary, auto-installing it when missing in managed mode.
+    Returns None if Go is not available and cannot be installed.
+    """
+    go = _find_go()
+    if go:
+        return go
+
+    _tool_log(log, "[tools] Go (golang) not found — needed for ProjectDiscovery tools", "WARNING")
+
+    if _VANTAGE_MANAGED:
+        # Attempt silent auto-install
+        if IS_LINUX:
+            for pkg in ("golang-go", "golang"):
+                ok, _ = _osift_apt_install(pkg)
+                if ok:
+                    go = _find_go()
+                    if go:
+                        _tool_log(log, f"[tools] Go installed via apt: {go}", "SUCCESS")
+                        return go
+        _go_brew = (
+            shutil.which("brew")
+            or (os.path.isfile("/opt/homebrew/bin/brew") and "/opt/homebrew/bin/brew")
+            or (os.path.isfile("/usr/local/bin/brew") and "/usr/local/bin/brew")
+        ) if IS_MACOS else None
+        if _go_brew:
+            try:
+                r = subprocess.run([_go_brew, "install", "go"],
+                                   capture_output=True, text=True, timeout=300)
+                if r.returncode == 0:
+                    go = _find_go()
+                    if go:
+                        _tool_log(log, f"[tools] Go installed via brew: {go}", "SUCCESS")
+                        return go
+            except Exception:
+                pass
+        _tool_log(log, "[tools] Go auto-install failed — ProjectDiscovery tools will be skipped", "WARNING")
+        return None
+
+    # TTY: print install hints and let user decide
+    print("[tools] ProjectDiscovery tools require Go (golang) to install.")
+    print("[tools] Go was not found on this system.")
+    print("[tools] Install Go from: https://go.dev/dl/")
+    if IS_WINDOWS:
+        print("[tools]   winget install GoLang.Go  |  scoop install go")
+    elif IS_MACOS:
+        print("[tools]   brew install go")
+    else:
+        print("[tools]   sudo apt install golang-go   (Debian/Ubuntu)")
+        print("[tools]   sudo dnf install golang       (Fedora/RHEL)")
+    return None
+
+
+def _go_install(tool: str, go_path: str, log: "ReconLogger") -> bool:
+    """
+    Run `go install <pkg>` for *tool*.
+    Returns True on success, False on failure.
+    """
+    pkg = _PD_TOOLS[tool]
+    _tool_log(log, f"[PD] Installing {tool} via go install …", "INFO")
+
+    # go install needs GOPATH/bin in PATH; derive GOPATH
+    gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
+    gobin  = os.path.join(gopath, "bin")
+    env    = os.environ.copy()
+    env["GOPATH"] = gopath
+    env["PATH"]   = gobin + os.pathsep + env.get("PATH", "")
+
+    try:
+        result = subprocess.run(
+            [go_path, "install", pkg],
+            capture_output=True, text=True, timeout=300,
+            env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+        )
+        log.log_command(f"{go_path} install {pkg}", result.stdout, result.stderr, result.returncode)
+
+        if result.returncode == 0:
+            # Binary lands in $GOPATH/bin — add that to PATH for this process
+            if gobin not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = gobin + os.pathsep + os.environ.get("PATH", "")
+            log.success(f"[PD] {tool} installed successfully → {gobin}/{tool}")
+            return True
+        else:
+            log.warning(f"[PD] go install {tool} failed (rc={result.returncode}): {result.stderr[:300]}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        log.warning(f"[PD] go install {tool} timed out")
+        return False
+    except Exception as e:
+        log.warning(f"[PD] go install {tool} error: {e}")
+        return False
+
+
+def _ensure_pd_tools(
+    tools: List[str],
+    log: "ReconLogger",
+    skip_pd: bool = False,
+) -> Dict[str, bool]:
+    """
+    Check that each tool in *tools* is available.
+    Missing tools: attempt `go install` automatically.
+    If Go is not present, prompt the user once.
+
+    Returns a dict  {tool_name: is_available}.
+    """
+    if skip_pd:
+        return {t: False for t in tools}
+
+    availability: Dict[str, bool] = {}
+    missing: List[str] = []
+
+    for tool in tools:
+        # Refresh PATH lookup each time (go install may have added to PATH)
+        if shutil.which(tool):
+            availability[tool] = True
+        else:
+            # Also check GOPATH/bin explicitly
+            gobin = os.path.join(os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin")
+            alt   = os.path.join(gobin, tool + (".exe" if IS_WINDOWS else ""))
+            if os.path.isfile(alt):
+                # Add to PATH so future shutil.which calls work
+                if gobin not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = gobin + os.pathsep + os.environ.get("PATH", "")
+                availability[tool] = True
+            else:
+                availability[tool] = False
+                missing.append(tool)
+
+    if not missing:
+        return availability
+
+    _tool_log(log, f"[PD] Missing tools: {', '.join(missing)}", "WARNING")
+
+    go_path = _ensure_go(log)
+
+    if not go_path:
+        if _VANTAGE_MANAGED:
+            # Non-interactive: skip all PD tools gracefully
+            for t in missing:
+                availability[t] = False
+            return availability
+        # TTY: ask user
+        print(f"\n  Missing PD tools: {', '.join(missing)}")
+        try:
+            ans = input("  Skip ProjectDiscovery tools and continue? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = "y"
+        if ans != "y":
+            print("[!] Exiting. Please install Go and re-run OSift.")
+            sys.exit(1)
+        for t in missing:
+            availability[t] = False
+        return availability
+
+    # ── Auto-install with go install ──────────────────────────────────────────
+    _tool_log(log, f"[PD] Go found at {go_path}. Auto-installing {len(missing)} tool(s) …", "INFO")
+    for tool in missing:
+        ok = _go_install(tool, go_path, log)
+        availability[tool] = ok
+        if ok:
+            # Verify binary is now reachable
+            gobin = os.path.join(os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin")
+            binary = shutil.which(tool) or os.path.join(gobin, tool + (".exe" if IS_WINDOWS else ""))
+            availability[tool] = os.path.isfile(binary) or bool(shutil.which(tool))
+
+    still_missing = [t for t, ok in availability.items() if not ok]
+    if still_missing:
+        log.warning(f"[PD] Could not install: {', '.join(still_missing)} — those modules will be skipped")
+
+    return availability
+
+
+def _pd_binary(tool: str) -> str:
+    """
+    Return the full path to a ProjectDiscovery binary.
+    Prefers $GOPATH/bin/<tool> over PATH so there's no ambiguity.
+    """
+    gobin  = os.path.join(os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin")
+    binary = os.path.join(gobin, tool + (".exe" if IS_WINDOWS else ""))
+    if os.path.isfile(binary):
+        return binary
+    found = shutil.which(tool)
+    return found or tool
+
+
+# ─── Shared resolver list (used by shuffledns / dnsx) ────────────────────────
+
+_RESOLVERS_LIST = [
+    "8.8.8.8", "8.8.4.4",          # Google
+    "1.1.1.1", "1.0.0.1",          # Cloudflare
+    "9.9.9.9", "149.112.112.112",  # Quad9
+    "208.67.222.222", "208.67.220.220",  # OpenDNS
+    "64.6.64.6", "64.6.65.6",      # Verisign
+    "185.228.168.9", "185.228.169.9",    # CleanBrowsing
+]
+
+
+def _write_resolvers(output_dir: Path) -> Path:
+    """Write the resolver list to a temp file and return its path."""
+    path = output_dir / "logs" / "resolvers.txt"
+    path.write_text("\n".join(_RESOLVERS_LIST), encoding="utf-8")
+    return path
+
+
+def _write_hosts_file(hosts: List[str], output_dir: Path, name: str = "hosts.txt") -> Path:
+    """Write a list of hostnames/IPs to a file for piping into PD tools."""
+    path = output_dir / "logs" / name
+    path.write_text("\n".join(hosts), encoding="utf-8")
+    return path
+
+
+# ─── Result ingestion helpers ─────────────────────────────────────────────────
+
+def _ingest_subdomain_list(
+    path: Path,
+    data: "ReconData",
+    source: str,
+    domain: str,
+    log: "ReconLogger",
+):
+    """Read a newline-delimited hostname file and merge into data.subdomains."""
+    if not path.exists():
+        return 0
+    new_count = 0
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        host = line.strip().lower().rstrip(".")
+        if not host or not host.endswith(domain):
+            continue
+        rec = data.subdomains.setdefault(
+            host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+        )
+        if source not in rec["sources"]:
+            rec["sources"].append(source)
+            new_count += 1
+        add_finding(
+            data, source, "subdomain_identified", "DNS", "INFO",
+            "Subdomain Identified",
+            host=domain, affected=host,
+            output_file=str(path),
+        )
+    if new_count:
+        log.success(f"[PD/{source}] +{new_count} new subdomains from {path.name}")
+    return new_count
+
+
+def _ingest_ip_list(
+    path: Path,
+    data: "ReconData",
+    source: str,
+    log: "ReconLogger",
+):
+    """Read a newline-delimited IP file and merge into data.ip_addresses."""
+    if not path.exists():
+        return 0
+    new_count = 0
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        ip = line.strip()
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if ip not in data.ip_addresses:
+            data.ip_addresses[ip] = {
+                "fqdns": [], "context": source, "asn": None, "org": None, "geo": None
+            }
+            new_count += 1
+    if new_count:
+        log.success(f"[PD/{source}] +{new_count} new IPs")
+    return new_count
+
+
+def _parse_jsonl(path: Path) -> List[Dict]:
+    """Read a newline-delimited JSON file and return a list of dicts."""
+    results = []
+    if not path.exists():
+        return results
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            results.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return results
+
+
+# ─── ProjectDiscovery tool modules ────────────────────────────────────────────
+
+class PDSubfinder:
+    """
+    subfinder — passive multi-source subdomain enumeration.
+    subfinder by ProjectDiscovery @projectdiscovery (https://github.com/projectdiscovery/subfinder)
+
+    CLI flags used:
+      -d DOMAIN          target domain
+      -o FILE            output file (one hostname per line)
+      -all               use all sources including slow ones
+      -silent            suppress banner
+      -t 10              threads
+      -timeout 30        seconds per source
+
+    Runs in Wave A (domain only needed).
+    No API keys required for basic usage; optional keys in ~/.config/subfinder/provider-config.yaml
+    """
+
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
+        self.domain = domain
+        self.out    = output_dir / "dns" / "subdomains"
+        self.log    = log
+        self.data   = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = _pd_binary("subfinder")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[subfinder] Binary not found — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "subfinder")
+        self.log.set_tool_context("subfinder")
+        out_file = self.out / "subfinder.txt"
+        cmd = (
+            f'"{binary}" -d {self.domain} -o "{out_file}" '
+            f"-all -silent -t 10 -timeout 30"
+        )
+        self.log.info(f"[subfinder] Running passive subdomain enumeration")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        count = _ingest_subdomain_list(out_file, self.data, "subfinder", self.domain, self.log)
+        self.log.success(f"[subfinder] Complete — {count} new subdomains")
+        return count
+
+
+class PDChaos:
+    """
+    chaos — Chaos DB subdomain dataset by ProjectDiscovery.
+
+    CLI flags used:
+      -d DOMAIN     target domain
+      -o FILE       output file
+      -key KEY      Chaos API key (required; also read from CHAOS_KEY env var)
+      -silent       suppress banner
+
+    Runs in Wave A. API key from --chaos-key or $CHAOS_KEY.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        chaos_key: str = "",
+    ):
+        self.domain    = domain
+        self.out       = output_dir / "dns" / "subdomains"
+        self.log       = log
+        self.data      = data
+        self.chaos_key = chaos_key.strip() or os.environ.get("CHAOS_KEY", "").strip()
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = _pd_binary("chaos")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[chaos] Binary not found — skipping")
+            return 0
+        if not self.chaos_key:
+            self.log.info("[chaos] No API key — skipping (provide --chaos-key or set $CHAOS_KEY)")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "chaos")
+        self.log.set_tool_context("chaos")
+        safe_domain = re.sub(r'[^\w\-.]', '_', self.domain)
+        out_file = self.out / f"chaos_{safe_domain}.txt"
+        cmd = (
+            f'"{binary}" -d {self.domain} -key {self.chaos_key} '
+            f'-o "{out_file}" -silent'
+        )
+        self.log.info(f"[chaos] Querying Chaos DB for {self.domain}")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        count = _ingest_subdomain_list(out_file, self.data, "chaos", self.domain, self.log)
+        self.log.success(f"[chaos] Complete — {count} new subdomains")
+        return count
+
+
+class PDShuffleDNS:
+    """
+    shuffledns — mass DNS resolver with wildcard filtering.
+
+    CLI flags used:
+      -d DOMAIN          target domain
+      -w WORDLIST        input wordlist (DNS brute force)
+      -r RESOLVERS       resolver list file
+      -o FILE            output file (resolved hostnames)
+      -t 500             massdns threads
+      -mode resolve      resolve from wordlist
+      -silent            suppress banner
+
+    Runs in Wave B (after Wave A — feeds all known subdomains + wordlist through resolvers).
+    Requires massdns on PATH for best results; degrades gracefully without it.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        wordlist: Optional[Path] = None,
+    ):
+        self.domain   = domain
+        self.out      = output_dir / "dns" / "subdomains"
+        self.log      = log
+        self.data     = data
+        self.wordlist = wordlist
+        self._res_file = _write_resolvers(output_dir)
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def _build_wordlist(self) -> Path:
+        """Merge DEFAULT_WORDLIST with already-known subdomain labels."""
+        words: Set[str] = set(DEFAULT_WORDLIST)
+        for fqdn in self.data.subdomains:
+            label = fqdn.replace(f".{self.domain}", "").split(".")[0]
+            if label:
+                words.add(label)
+        wl_path = self.out.parent.parent / "logs" / "shuffledns_wordlist.txt"
+        wl_path.write_text("\n".join(sorted(words)), encoding="utf-8")
+        return wl_path
+
+    def run(self) -> int:
+        binary = _pd_binary("shuffledns")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[shuffledns] Binary not found — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "shuffledns")
+        self.log.set_tool_context("shuffledns")
+        wl   = self.wordlist or self._build_wordlist()
+        out_file = self.out / "shuffledns.txt"
+
+        cmd = (
+            f'"{binary}" -d {self.domain} -w "{wl}" -r "{self._res_file}" '
+            f'-o "{out_file}" -t 500 -mode resolve -silent'
+        )
+        self.log.info(f"[shuffledns] Mass DNS resolution with {sum(1 for _ in wl.open())} words")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        count = _ingest_subdomain_list(out_file, self.data, "shuffledns", self.domain, self.log)
+        self.log.success(f"[shuffledns] Complete — {count} new resolved subdomains")
+        return count
+
+
+class PDDnsx:
+    """
+    dnsx — multi-threaded DNS resolver / validator.
+    dnsx by ProjectDiscovery @projectdiscovery (https://github.com/projectdiscovery/dnsx)
+
+    Resolves all accumulated subdomains and extracts A/CNAME/MX/NS records.
+
+    CLI flags used:
+      -l FILE        input list of hostnames
+      -a -cname -mx -ns -resp   record types to return
+      -json          JSON output (one record set per line)
+      -o FILE        output file
+      -t 100         threads
+      -rl 300        rate limit (queries/second)
+      -silent        suppress banner
+      -r RESOLVERS   custom resolvers
+
+    Runs in Wave B (consolidation pass over all discovered subdomains).
+    """
+
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
+        self.domain = domain
+        self.out    = output_dir / "dns" / "records"
+        self.log    = log
+        self.data   = data
+        self._res_file = _write_resolvers(output_dir)
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = _pd_binary("dnsx")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[dnsx] Binary not found — skipping")
+            return 0
+
+        hosts = list(self.data.subdomains.keys())
+        if not hosts:
+            self.log.info("[dnsx] No subdomains to resolve — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "dnsx")
+        self.log.set_tool_context("dnsx")
+
+        input_file  = _write_hosts_file(hosts, self.out.parent.parent, "dnsx_input.txt")
+        out_json    = self.out / "dnsx_results.json"
+        out_txt     = self.out / "dnsx_resolved.txt"
+
+        cmd = (
+            f'"{binary}" -l "{input_file}" '
+            f"-a -cname -mx -ns -resp "
+            f'-json -o "{out_json}" '
+            f'-r "{self._res_file}" '
+            f"-t 100 -rl 300 -silent"
+        )
+        self.log.info(f"[dnsx] Resolving {len(hosts)} subdomains")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        # Parse JSONL output
+        resolved_count  = 0
+        new_sub_count   = 0
+        records_parsed  = _parse_jsonl(out_json)
+        resolved_hosts: List[str] = []
+
+        for entry in records_parsed:
+            host = entry.get("host", "").lower().rstrip(".")
+            if not host:
+                continue
+
+            # A records → populate IP map
+            for ip in entry.get("a", []):
+                try:
+                    ipaddress.ip_address(ip)
+                except ValueError:
+                    continue
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [], "context": "dnsx", "asn": None, "org": None, "geo": None}
+                )
+                if host not in ip_rec["fqdns"]:
+                    ip_rec["fqdns"].append(host)
+                sub_rec = self.data.subdomains.setdefault(
+                    host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                )
+                if ip not in sub_rec["ips"]:
+                    sub_rec["ips"].append(ip)
+                    resolved_count += 1
+
+            # CNAME records → add to subdomain map
+            for cname in entry.get("cname", []):
+                cname = cname.rstrip(".")
+                if cname.endswith(self.domain):
+                    rec = self.data.subdomains.setdefault(
+                        cname, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "dnsx_cname" not in rec["sources"]:
+                        rec["sources"].append("dnsx_cname")
+                        new_sub_count += 1
+                    add_finding(
+                        self.data, "dnsx_cname", "subdomain_identified", "DNS", "INFO",
+                        "Subdomain Identified",
+                        host=self.domain, affected=cname,
+                        output_file=str(out_json),
+                    )
+
+            # Mark host as dns-validated
+            if host in self.data.subdomains:
+                if "dnsx" not in self.data.subdomains[host]["sources"]:
+                    self.data.subdomains[host]["sources"].append("dnsx")
+            resolved_hosts.append(host)
+
+        # Write plain-text resolved list for downstream tools
+        out_txt.write_text("\n".join(resolved_hosts), encoding="utf-8")
+
+        self.log.success(
+            f"[dnsx] {len(records_parsed)} hosts resolved | "
+            f"{resolved_count} IPs mapped | {new_sub_count} CNAME subs added"
+        )
+        return len(records_parsed)
+
+
+class DNSEnrichmentRunner:
+    """
+    Phase 11: DNS Enrichment — runs dig and dnsx against all FQDNs
+    collected across all prior discovery phases.
+
+    dig  — per-FQDN multi-record-type query (A, AAAA, MX, TXT, NS, CNAME)
+            run concurrently with a thread pool; results written per-FQDN and
+            as a combined summary JSON.
+    dnsx — bulk DNS resolution pass (includes TXT, AAAA) over the full FQDN set.
+
+    Both runs update data.subdomains and data.ip_addresses and emit
+    "DNS Records" / "DNS TXT Records" informational findings.
+
+    Output files:
+      dns/dig/dig_summary.json                   — all FQDNs with DNS records (keyed by FQDN)
+      dns/dnsx_enrich/dnsx_enrich_results.json   — JSONL from dnsx
+      dns/dnsx_enrich/dnsx_enrich_resolved.txt   — resolved hostname list
+    """
+
+    _DIG_TYPES = ["A", "AAAA", "MX", "TXT", "NS", "CNAME"]
+    _MAX_DIG   = 2000         # cap per-FQDN dig to avoid extreme runtimes
+    _DIG_WORKERS = 20
+
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
+        self.domain    = domain
+        self.out_dig   = output_dir / "dns" / "dig"
+        self.out_dnsx  = output_dir / "dns" / "dnsx_enrich"
+        self.log       = log
+        self.data      = data
+        self.out_dig.mkdir(parents=True, exist_ok=True)
+        self.out_dnsx.mkdir(parents=True, exist_ok=True)
+        self._res_file = _write_resolvers(output_dir)
+
+    def run(self) -> None:
+        fqdns = sorted(self.data.subdomains.keys())
+        if not fqdns:
+            self.log.info("[DNS Enrich] No FQDNs collected — skipping")
+            return
+        self.log.info(f"[DNS Enrich] Enriching {len(fqdns)} FQDNs via dig + dnsx")
+        # Track which FQDNs have been processed to prevent reprocessing already-seen
+        # hosts in the second pass (guards against infinite CNAME loops).
+        self._processed: set = set(fqdns)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            dig_fut  = ex.submit(self._run_dig, fqdns)
+            dnsx_fut = ex.submit(self._run_dnsx_enrich, fqdns)
+            dig_count  = dig_fut.result()
+            dnsx_count = dnsx_fut.result()
+        self.log.success(
+            f"[DNS Enrich] dig: {dig_count} FQDNs with records | "
+            f"dnsx-enrich: {dnsx_count} hosts resolved"
+        )
+        # Second pass: pick up any FQDNs added to data.subdomains during this run
+        # (e.g., CNAMEs pointing to in-domain hosts discovered during dig/dnsx).
+        # A single extra pass is sufficient — new CNAMEs from the second pass are
+        # rare and will be caught by WHOIS / report aggregation.
+        new_fqdns = sorted(f for f in self.data.subdomains if f not in self._processed)
+        if new_fqdns:
+            self.log.info(f"[DNS Enrich] Second pass: {len(new_fqdns)} newly discovered FQDNs")
+            self._processed.update(new_fqdns)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+                dig_fut2  = ex.submit(self._run_dig, new_fqdns)
+                dnsx_fut2 = ex.submit(self._run_dnsx_enrich, new_fqdns)
+                dig_count2  = dig_fut2.result()
+                dnsx_count2 = dnsx_fut2.result()
+            self.log.info(
+                f"[DNS Enrich] Second pass complete — dig: {dig_count2} | dnsx: {dnsx_count2}"
+            )
+
+    # ── dig ──────────────────────────────────────────────────────────────────
+
+    def _run_dig(self, fqdns: List[str]) -> int:
+        dig_path = shutil.which("dig")
+        if not dig_path:
+            self.log.warning("[dig] dig not found — skipping dig enrichment")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(dig_path, "dig")
+        targets = fqdns[: self._MAX_DIG]
+        if len(fqdns) > self._MAX_DIG:
+            self.log.info(f"[dig] Capping at {self._MAX_DIG} FQDNs ({len(fqdns)} total)")
+
+        def _query_fqdn(fqdn: str) -> Tuple[str, Dict]:
+            records: Dict[str, List[str]] = {}
+            for rtype in self._DIG_TYPES:
+                cmd = f'"{dig_path}" +nocmd +noall +answer +short {fqdn} {rtype}'
+                stdout, _stderr, _rc = _shell(cmd)
+                answers = [ln.strip().rstrip(".") for ln in stdout.splitlines() if ln.strip()]
+                if answers:
+                    records[rtype] = answers
+            return fqdn, {"fqdn": fqdn, "records": records}
+
+        summary: Dict[str, Dict] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self._DIG_WORKERS) as pool:
+            for fqdn, result in pool.map(_query_fqdn, targets):
+                if not result["records"]:
+                    continue
+                summary[fqdn] = result
+                # Enrich data structures
+                for ip in result["records"].get("A", []):
+                    try:
+                        ipaddress.ip_address(ip)
+                    except ValueError:
+                        continue
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        ip, {"fqdns": [], "context": "dig", "asn": None, "org": None, "geo": None}
+                    )
+                    if fqdn not in ip_rec["fqdns"]:
+                        ip_rec["fqdns"].append(fqdn)
+                    sub_rec = self.data.subdomains.setdefault(
+                        fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if ip not in sub_rec["ips"]:
+                        sub_rec["ips"].append(ip)
+                sub_entry = self.data.subdomains.setdefault(
+                    fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                )
+                if "dig" not in sub_entry["sources"]:
+                    sub_entry["sources"].append("dig")
+                # CNAME records — add in-domain targets as new subdomains
+                for cname_target in result["records"].get("CNAME", []):
+                    cname_target = cname_target.lower().rstrip(".")
+                    if cname_target.endswith(self.domain) and cname_target not in self.data.subdomains:
+                        self.data.subdomains[cname_target] = {
+                            "sources": ["dig_cname"], "ips": [], "ports": [], "http_status": None
+                        }
+                        add_finding(
+                            data=self.data, tool="dig",
+                            type_="subdomain_identified", category="DNS", severity="INFO",
+                            detail="Subdomain Identified",
+                            host=self.domain, affected=cname_target,
+                            output_file=str(self.out_dig / f"{_safe_filename(fqdn)}.json"),
+                        )
+                # ── A record findings ──────────────────────────────────────
+                _a_raw   = result["records"].get("A", [])
+                _a_ips:       List[str] = []
+                _a_redirects: List[str] = []
+                for _a_val in _a_raw:
+                    try:
+                        ipaddress.ip_address(_a_val)
+                        _a_ips.append(_a_val)
+                    except ValueError:
+                        # Non-IP in A answer = CNAME in the resolution chain
+                        _a_redirects.append(_a_val.rstrip("."))
+                _a_is_redirect = bool(_a_redirects)
+                _a_title = (
+                    "DNS: A Record Found (Redirect)"
+                    if _a_is_redirect
+                    else "DNS: A Record Resolved"
+                )
+                _a_out = str(self.out_dig / f"{_safe_filename(fqdn)}.json")
+                # Store redirect targets in data.subdomains for downstream enrichment
+                if _a_is_redirect:
+                    _sub_entry = self.data.subdomains.setdefault(
+                        fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    _sub_entry["redirects_to"] = _a_redirects
+                _redirects_str = ",".join(_a_redirects) if _a_redirects else ""
+                for _a_ip in _a_ips:
+                    add_finding(
+                        data=self.data,
+                        tool="dig",
+                        type_="DNS Records",
+                        category="DNS Intelligence",
+                        severity="INFO",
+                        detail=_a_title,
+                        host=self.domain,
+                        domain=self.domain,
+                        affected=f"{fqdn} - {_a_ip}",
+                        output_file=_a_out,
+                        redirects_to=_redirects_str,
+                    )
+                if not _a_ips and _a_is_redirect:
+                    # CNAME chain with no final IP (e.g. dangling CNAME)
+                    add_finding(
+                        data=self.data,
+                        tool="dig",
+                        type_="DNS Records",
+                        category="DNS Intelligence",
+                        severity="INFO",
+                        detail=_a_title,
+                        host=self.domain,
+                        domain=self.domain,
+                        affected=f"{fqdn} - {_a_redirects[0]}",
+                        output_file=_a_out,
+                        redirects_to=_redirects_str,
+                    )
+                # Informational finding for non-A record types (one per FQDN)
+                _other_recs = {rt: vs for rt, vs in result["records"].items() if rt != "A"}
+                if _other_recs:
+                    rec_summary = ", ".join(
+                        f"{rt}: {', '.join(vs[:3])}" for rt, vs in _other_recs.items()
+                    )
+                    add_finding(
+                        data=self.data,
+                        tool="dig",
+                        type_="DNS Records",
+                        category="DNS Intelligence",
+                        severity="INFO",
+                        detail=f"DNS records resolved: {rec_summary}",
+                        host=fqdn,
+                        domain=self.domain,
+                        affected=fqdn,
+                        output_file=_a_out,
+                    )
+                # Write per-FQDN file for evidence linking
+                _fqdn_file = self.out_dig / f"{_safe_filename(fqdn)}.json"
+                _fqdn_file.write_text(
+                    json.dumps(result, indent=2), encoding="utf-8"
+                )
+
+        (self.out_dig / "dig_summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        self.log.info(f"[dig] {len(summary)} FQDNs returned DNS records")
+        return len(summary)
+
+    # ── dnsx enrichment ──────────────────────────────────────────────────────
+
+    def _run_dnsx_enrich(self, fqdns: List[str]) -> int:
+        binary = _pd_binary("dnsx")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[dnsx-enrich] dnsx binary not found — skipping")
+            return 0
+        if not fqdns:
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "dnsx")
+        self.log.set_tool_context("dnsx")
+
+        input_file = _write_hosts_file(fqdns, self.out_dnsx.parent.parent, "dnsx_enrich_input.txt")
+        out_json   = self.out_dnsx / "dnsx_enrich_results.json"
+        out_txt    = self.out_dnsx / "dnsx_enrich_resolved.txt"
+
+        cmd = (
+            f'"{binary}" -l "{input_file}" '
+            f"-a -aaaa -cname -mx -ns -txt -resp "
+            f'-json -o "{out_json}" '
+            f'-r "{self._res_file}" '
+            f"-t 100 -rl 300 -silent"
+        )
+        self.log.info(f"[dnsx-enrich] Bulk-resolving {len(fqdns)} FQDNs (post-discovery pass)")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        records_parsed = _parse_jsonl(out_json)
+        resolved_hosts: List[str] = []
+        resolved_count = 0
+
+        for entry in records_parsed:
+            host = entry.get("host", "").lower().rstrip(".")
+            if not host:
+                continue
+
+            # A records → IP map
+            for ip in entry.get("a", []):
+                try:
+                    ipaddress.ip_address(ip)
+                except ValueError:
+                    continue
+                ip_rec = self.data.ip_addresses.setdefault(
+                    ip, {"fqdns": [], "context": "dnsx-enrich", "asn": None, "org": None, "geo": None}
+                )
+                if host not in ip_rec["fqdns"]:
+                    ip_rec["fqdns"].append(host)
+                sub_rec = self.data.subdomains.setdefault(
+                    host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                )
+                if ip not in sub_rec["ips"]:
+                    sub_rec["ips"].append(ip)
+                    resolved_count += 1
+
+            # TXT records → finding per host
+            txt_records = entry.get("txt", [])
+            if txt_records:
+                _host_file = self.out_dnsx / f"{_safe_filename(host)}.json"
+                _host_file.write_text(
+                    json.dumps(entry, indent=2, default=str), encoding="utf-8"
+                )
+                add_finding(
+                    data=self.data,
+                    tool="dnsx",
+                    type_="DNS TXT Records",
+                    category="DNS Intelligence",
+                    severity="INFO",
+                    detail=f"TXT records resolved: {'; '.join(txt_records[:5])}",
+                    host=host, domain=self.domain, affected=host,
+                    output_file=str(_host_file),
+                )
+
+            sub_entry = self.data.subdomains.setdefault(
+                host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+            )
+            if "dnsx_enrich" not in sub_entry["sources"]:
+                sub_entry["sources"].append("dnsx_enrich")
+            resolved_hosts.append(host)
+
+        out_txt.write_text("\n".join(resolved_hosts), encoding="utf-8")
+        self.log.success(
+            f"[dnsx-enrich] {len(records_parsed)} hosts resolved | {resolved_count} IPs mapped"
+        )
+        return len(records_parsed)
+
+
+class ShodanCLIRunner:
+    """
+    Shodan CLI — per-IP host lookup via `shodan host <ip>`.
+    Shodan CLI by John Matherly @achillean / Shodan.io (https://github.com/achillean/shodan-python)
+
+    Runs against every IP address in data.ip_addresses to identify open ports.
+    Emits one "Open Port Found" finding per IP that has at least one open port.
+    Ports within a single finding are listed one per line in the Affected field.
+
+    Requires the `shodan` Python package CLI tool:
+      pip install shodan
+    Then initialised with an API key:
+      shodan init YOUR_API_KEY
+
+    If shodan_key is provided at construction time, `shodan init` is called
+    automatically before queries begin so that no manual setup is required.
+
+    Output:
+      osint/shodan_cli/<ip>.txt            — raw `shodan host` text per IP
+      osint/shodan_cli/shodan_cli_summary.json — all results combined
+
+    Placement: Phase 4.5 — after Phase 11 DNS Enrichment (all IPs known),
+    before Phase 9 aggregation.
+    """
+
+    _MAX_IPS     = 200   # guard against extremely large IP sets
+    _MAX_WORKERS = 3     # conservative: Shodan free tier ≈ 1 req/s
+
+    def __init__(
+        self,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        shodan_key: str = "",
+    ):
+        self.out        = output_dir / "osint" / "shodan_cli"
+        self.log        = log
+        self.data       = data
+        self.shodan_key = shodan_key
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = shutil.which("shodan")
+        if not binary:
+            self.log.warning(
+                "[Shodan CLI] `shodan` binary not found — skipping.\n"
+                "        Install: pip install shodan\n"
+                "        Init   : shodan init YOUR_API_KEY"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "shodan-cli")
+        self.log.set_tool_context("shodan-cli")
+
+        # Initialise CLI key if one was supplied
+        if self.shodan_key:
+            _init_cmd = f'"{binary}" init {self.shodan_key}'
+            _, _init_err, _init_rc = _shell(_init_cmd)
+            if _init_rc != 0:
+                self.log.warning(f"[Shodan CLI] `shodan init` failed: {_strip_ansi(_init_err)[:200]}")
+
+        ips = sorted(self.data.ip_addresses.keys())
+        if not ips:
+            self.log.info("[Shodan CLI] No IPs collected — skipping")
+            return 0
+
+        if len(ips) > self._MAX_IPS:
+            self.log.warning(
+                f"[Shodan CLI] {len(ips)} IPs discovered; "
+                f"capping at {self._MAX_IPS} to limit API usage"
+            )
+            ips = ips[: self._MAX_IPS]
+
+        self.log.info(f"[Shodan CLI] Querying {len(ips)} IPs for open ports")
+
+        results: Dict[str, List[str]] = {}   # ip -> ["80/tcp", "443/tcp", ...]
+        _lock = threading.Lock()
+
+        def _query(ip: str) -> None:
+            cmd = f'"{binary}" host {ip}'
+            stdout, stderr, rc = _shell(cmd)
+            out_file = self.out / f"{ip.replace(':', '_')}.txt"
+            out_file.write_text(
+                _strip_ansi(stdout) if stdout else (
+                    f"(shodan host {ip} returned no output)"
+                    if rc == 0
+                    else f"(shodan host {ip} error: {_strip_ansi(stderr)[:200]})"
+                ),
+                encoding="utf-8",
+                errors="replace",
+            )
+            if rc != 0 or not stdout:
+                return
+            ports = self._parse_ports(_strip_ansi(stdout))
+            if ports:
+                with _lock:
+                    results[ip] = ports
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(self._MAX_WORKERS, len(ips))
+        ) as pool:
+            futs = {pool.submit(_query, ip): ip for ip in ips}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as exc:
+                    self.log.warning(f"[Shodan CLI] Worker error for {futs[fut]}: {exc}")
+
+        # Write combined summary JSON
+        summary_path = self.out / "shodan_cli_summary.json"
+        summary_path.write_text(
+            json.dumps(results, indent=2), encoding="utf-8"
+        )
+
+        # Emit one "Open Port Found" finding per IP
+        count = 0
+        for ip, ports in sorted(results.items()):
+            ip_rec   = self.data.ip_addresses.get(ip, {})
+            out_file = self.out / f"{ip.replace(':', '_')}.txt"
+            ev_file  = str(out_file) if out_file.exists() else str(summary_path)
+            add_finding(
+                self.data,
+                tool="shodan-cli",
+                type_="open_port",
+                category=CAT_INFRA,
+                severity="INFO",
+                detail="Open Port Found",
+                ip=ip,
+                host=self.data.domain,
+                affected="\n".join(ports),
+                output_file=ev_file,
+                raw_command=f"shodan host {ip}",
+            )
+            # Register any newly-seen ports on the IP record
+            ip_rec.setdefault("ports", [])
+            for p in ports:
+                if p not in ip_rec["ports"]:
+                    ip_rec["ports"].append(p)
+            count += 1
+
+        self.log.success(
+            f"[Shodan CLI] Complete — {count} IPs with open ports identified"
+        )
+        return count
+
+    @staticmethod
+    def _parse_ports(text: str) -> List[str]:
+        """
+        Extract open-port strings from `shodan host` text output.
+
+        The Ports section looks like:
+            Ports:
+                 80/tcp
+                443/tcp  https
+               8080/tcp  http
+        Returns a sorted list of "port/proto" strings (e.g. ["80/tcp", "443/tcp"]).
+        """
+        ports: List[str] = []
+        in_ports = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.lower() == "ports:":
+                in_ports = True
+                continue
+            if in_ports:
+                m = re.match(r'^(\d+/(tcp|udp))', stripped)
+                if m:
+                    ports.append(m.group(1))
+                elif stripped and not re.match(r'^\d', stripped):
+                    # Non-numeric non-empty line ends the ports section
+                    break
+        return sorted(ports, key=lambda s: int(s.split("/")[0]))
+
+
+class PDTlsx:
+    """
+    tlsx — fast TLS handshake and certificate data extraction.
+
+    CLI flags used:
+      -l FILE       input list of hosts
+      -san          extract Subject Alternative Names
+      -cn           extract Common Name
+      -so           subject organisation
+      -tv           TLS version
+      -cipher       cipher suite
+      -expired      flag expired certs
+      -self-signed  flag self-signed certs
+      -mismatched   flag hostname mismatches
+      -json         JSON output per host
+      -o FILE       output file
+      -t 100        threads
+      -timeout 5    seconds per handshake
+      -silent       suppress banner
+
+    Runs in Wave C (after IPs/hosts known).
+    New subdomains discovered from SANs are merged back.
+    """
+
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
+        self.domain = domain
+        self.out    = output_dir / "certificates" / "tlsx"
+        self.log    = log
+        self.data   = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = _pd_binary("tlsx")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[tlsx] Binary not found — skipping")
+            return 0
+
+        hosts = list(self.data.subdomains.keys())
+        if not hosts:
+            self.log.info("[tlsx] No hosts to scan — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "tlsx")
+        self.log.set_tool_context("tlsx")
+
+        input_file = _write_hosts_file(hosts, self.out.parent.parent, "tlsx_input.txt")
+        out_json   = self.out / "tlsx_results.json"
+
+        cmd = (
+            f'"{binary}" -l "{input_file}" '
+            f"-san -cn -tv -cipher "
+            f"-expired -self-signed -mismatched "
+            f'-json -o "{out_json}" '
+            f"-t 100 -timeout 5 -silent"
+        )
+        self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if rc != 0:
+            self.log.warning(f"[tlsx] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
+            _write_placeholder(self.out, "tlsx_results.json",
+                               cmd, f"(tlsx exited with code {rc})")
+
+        records     = _parse_jsonl(out_json)
+        san_new     = 0
+        cert_count  = 0
+        flagged     = 0
+
+        for entry in records:
+            host = entry.get("host", "").split(":")[0].lower()
+            cert_count += 1
+
+            # Build cert record
+            cert_rec: Dict[str, Any] = {
+                "hostname":      host,
+                "source":        "tlsx",
+                "common_name":   entry.get("subject_cn", ""),
+                "issuer":        entry.get("issuer_cn", ""),
+                "not_before":    entry.get("not_before", ""),
+                "not_after":     entry.get("not_after", ""),
+                "tls_version":   entry.get("tls_version", ""),
+                "cipher":        entry.get("cipher", ""),
+                "alt_names":     entry.get("subject_an", []),
+                "self_signed":   entry.get("self_signed", False),
+                "expired":       entry.get("expired", False),
+                "mismatched":    entry.get("mismatched", False),
+            }
+            self.data.certificates.append(cert_rec)
+
+            # Flag security issues
+            for flag, label in [
+                ("self_signed", "self-signed certificate"),
+                ("expired",     "expired certificate"),
+                ("mismatched",  "hostname mismatch certificate"),
+            ]:
+                if entry.get(flag):
+                    add_finding(
+                        self.data, "tlsx",
+                        f"tls_{flag}", CAT_TLS, "medium",
+                        f"tlsx: {label} detected",
+                        host=host, affected=host,
+                        tls_version=entry.get("tls_version"),
+                        cipher=entry.get("cipher"),
+                    )
+                    flagged += 1
+
+            # Harvest SANs for new subdomains
+            for san in entry.get("subject_an", []):
+                san = san.lstrip("*.").lower().rstrip(".")
+                if san.endswith(self.domain) and san not in self.data.subdomains:
+                    self.data.subdomains[san] = {
+                        "sources": ["tlsx_san"], "ips": [], "ports": [], "http_status": None
+                    }
+                    san_new += 1
+
+        # Persist parsed output
+        (self.out / "tlsx_parsed.json").write_text(
+            json.dumps(records, indent=2, default=str), encoding="utf-8"
+        )
+        if not records:
+            self.log.info("[tlsx] No TLS certificate records returned")
+            _write_placeholder(self.out, "tlsx_results.json",
+                               cmd, "(tlsx returned no TLS certificate data)")
+        self.log.success(
+            f"[tlsx] {cert_count} certs | {san_new} new SAN subdomains | {flagged} TLS issues flagged"
+        )
+        return cert_count
+
+
+class PDCdncheck:
+    """
+    cdncheck — classify IPs and hostnames as CDN / cloud / WAF / monitoring.
+
+    CLI flags used:
+      -l FILE       input list of IPs/hosts
+      -resp         include matching provider name in output
+      -json         JSON output per line
+      -o FILE       output file
+      -t 100        threads
+      -silent       suppress banner
+
+    Runs in Wave C (after IPs known).
+    Annotates data.ip_addresses and data.subdomains with CDN/cloud metadata.
+    """
+
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
+        self.domain = domain
+        self.out    = output_dir / "ip_addresses"
+        self.log    = log
+        self.data   = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = _pd_binary("cdncheck")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[cdncheck] Binary not found — skipping")
+            return 0
+
+        targets = list(self.data.ip_addresses.keys()) + list(self.data.subdomains.keys())
+        if not targets:
+            self.log.info("[cdncheck] No targets — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "cdncheck")
+        self.log.set_tool_context("cdncheck")
+
+        input_file = _write_hosts_file(targets, self.out.parent, "cdncheck_input.txt")
+        out_json   = self.out / "cdncheck_results.json"
+
+        cmd = (
+            f'"{binary}" -l "{input_file}" '
+            f'-resp -json -o "{out_json}" '
+            f"-t 100 -silent"
+        )
+        self.log.info(f"[cdncheck] CDN/cloud classification for {len(targets)} targets")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        records   = _parse_jsonl(out_json)
+        cdn_count = 0
+
+        for entry in records:
+            host     = entry.get("input", "").lower()
+            cdn      = entry.get("cdn", False)
+            cloud    = entry.get("cloud", False)
+            waf      = entry.get("waf", False)
+            provider = entry.get("provider", "")
+            cdn_type = "cdn" if cdn else ("cloud" if cloud else ("waf" if waf else "unknown"))
+
+            metadata = {"cdn_provider": provider, "cdn_type": cdn_type}
+
+            # Annotate IP record
+            if host in self.data.ip_addresses:
+                self.data.ip_addresses[host].update(metadata)
+                cdn_count += 1
+
+            # Annotate subdomain record
+            if host in self.data.subdomains:
+                self.data.subdomains[host].update(metadata)
+
+            # Add finding for WAF detection
+            if waf:
+                add_finding(
+                    self.data, "cdncheck",
+                    "waf_detected", CAT_INFRA, "info",
+                    f"cdncheck: WAF/proxy detected (provider: {provider})",
+                    host=host, affected=host,
+                    cdn_provider=provider,
+                )
+
+        (self.out / "cdncheck_parsed.json").write_text(
+            json.dumps(records, indent=2, default=str), encoding="utf-8"
+        )
+        self.log.success(f"[cdncheck] Classified {cdn_count} CDN/cloud/WAF targets")
+        return cdn_count
+
+
+class PDKatana:
+    """
+    katana — next-generation web crawler with JS rendering support.
+    katana by ProjectDiscovery @projectdiscovery (https://github.com/projectdiscovery/katana)
+
+    CLI flags used:
+      -list FILE       input list of URLs/domains to crawl
+      -d 3             crawl depth
+      -jc              JavaScript crawling (chromium headless)
+      -ef ico,png,jpg,gif,svg,woff,ttf,otf,eot,css   exclude extensions
+      -ct 30           crawl timeout per URL
+      -c 10            concurrency
+      -rl 50           rate limit (req/sec)
+      -json            JSON output
+      -o FILE          output file
+      -silent          suppress banner
+      -form-extraction extract form action/method/fields
+      -known-files     probe for robots.txt / sitemap.xml
+      -display-out     print URLs to stdout too
+
+    Runs in Wave D (after certs collected → live HTTPS hosts available).
+    Discovered URLs are merged into data.crawled_urls.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        max_depth: int = 3,
+    ):
+        self.domain    = domain
+        self.out       = output_dir / "web_crawl" / "katana"
+        self.log       = log
+        self.data      = data
+        self.max_depth = max_depth
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def _build_seed_list(self) -> Path:
+        """Generate HTTP/HTTPS seed URLs from known subdomains + domain."""
+        seeds: List[str] = []
+        targets = [self.domain] + [
+            h for h in self.data.subdomains
+            if "dnsx" in self.data.subdomains[h].get("sources", [])
+               or "subfinder" in self.data.subdomains[h].get("sources", [])
+        ]
+        for host in targets[:100]:     # cap to 100 seeds to avoid runaway crawl
+            seeds.append(f"https://{host}")
+            seeds.append(f"http://{host}")
+        path = self.out.parent.parent / "logs" / "katana_seeds.txt"
+        path.write_text("\n".join(seeds), encoding="utf-8")
+        return path
+
+    def run(self) -> int:
+        binary = _pd_binary("katana")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[katana] Binary not found — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "katana")
+        self.log.set_tool_context("katana")
+        seed_file = self._build_seed_list()
+        out_json  = self.out / "katana_results.json"
+        excludes  = "ico,png,jpg,gif,svg,woff,ttf,otf,eot,css,mp4,mp3,zip,gz,tar"
+
+        cmd = (
+            f'"{binary}" -list "{seed_file}" '
+            f"-d {self.max_depth} "
+            f"-ef {excludes} "
+            f"-ct 30 -c 10 -rl 50 "
+            f'-json -o "{out_json}" -silent'
+        )
+        self.log.info(f"[katana] Crawling {sum(1 for _ in seed_file.open())} seed URLs (depth={self.max_depth})")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if rc != 0:
+            self.log.warning(f"[katana] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
+            _write_placeholder(self.out, "katana_results.json",
+                               cmd, f"(katana exited with code {rc})")
+
+        records      = _parse_jsonl(out_json)
+        url_count    = 0
+        form_count   = 0
+        secret_count = 0
+
+        for entry in records:
+            url = entry.get("request", {}).get("url", "") or entry.get("endpoint", "")
+            if not url:
+                continue
+            url_count += 1
+
+            # Merge into crawled URLs
+            url_rec = self.data.crawled_urls.setdefault(url, {})
+            url_rec.update({
+                "source":      "katana",
+                "status":      entry.get("response", {}).get("status_code"),
+                "content_type": entry.get("response", {}).get("headers", {}).get("content-type", ""),
+            })
+
+            # Extract subdomain from URL
+            try:
+                parsed = urllib.parse.urlparse(url)
+                host   = parsed.netloc.split(":")[0].lower()
+                if host.endswith(self.domain) and host not in self.data.subdomains:
+                    self.data.subdomains[host] = {
+                        "sources": ["katana"], "ips": [], "ports": [], "http_status": None
+                    }
+            except Exception:
+                pass
+
+            # Form extraction
+            for form in entry.get("request", {}).get("form_data", []):
+                form_count += 1
+                action = form.get("action", url)
+                add_finding(
+                    self.data, "katana",
+                    "form_discovered", CAT_WEB, "info",
+                    f"Form discovered: method={form.get('method','?')} fields={form.get('parameters',[])}",
+                    url=action, affected=action,
+                    form_method=form.get("method", ""),
+                    form_fields=form.get("parameters", []),
+                )
+
+            # Scan response body for sensitive patterns
+            body = (entry.get("response", {}).get("body") or "")[:8000]
+            for category, patterns in SENSITIVE_PATTERNS.items():
+                for pattern in patterns:
+                    matches = re.findall(pattern, body)
+                    for m in matches[:5]:
+                        val = m if isinstance(m, str) else str(m)
+                        add_finding(
+                            self.data, "katana",
+                            "sensitive_data", category, "high",
+                            f"{category} pattern detected: {val[:80]}",
+                            url=url, affected=url,
+                            matched_value=val[:80],
+                        )
+                        secret_count += 1
+
+        (self.out / "katana_parsed.json").write_text(
+            json.dumps(records[:500], indent=2, default=str), encoding="utf-8"
+        )
+        if not records:
+            self.log.info("[katana] No URLs crawled — output empty")
+            _write_placeholder(self.out, "katana_results.json",
+                               cmd, "(katana returned no crawled URLs)")
+        self.log.success(
+            f"[katana] {url_count} URLs crawled | {form_count} forms | {secret_count} sensitive patterns"
+        )
+        return url_count
+
+
+class PDASNmap:
+    """
+    asnmap — ASN to CIDR expansion and live-host scanning.
+
+    CLI flags used:
+      -a ORG/ASN   resolve ASN by org name or ASN number
+      -ip IP       resolve ASN for a specific IP (auto-detects ASN)
+      -json        JSON output
+      -o FILE      output file
+      -silent      suppress banner
+
+    Runs in Wave C (after IP enrichment — ASNs populated by Phase 4).
+    Discovers additional IP ranges belonging to the same organisation.
+    """
+
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
+        self.domain = domain
+        self.out    = output_dir / "ip_addresses"
+        self.log    = log
+        self.data   = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def _collect_orgs_and_asns(self) -> Tuple[List[str], List[str]]:
+        """Build deduplicated lists of org names and ASN strings from known IPs."""
+        orgs: Set[str] = set()
+        asns: Set[str] = set()
+        for rec in self.data.ip_addresses.values():
+            if rec.get("org"):
+                orgs.add(rec["org"])
+            if rec.get("asn"):
+                asn = str(rec["asn"]).upper()
+                if re.match(r"AS\d+", asn):
+                    asns.add(asn)
+        return list(orgs)[:5], list(asns)[:10]
+
+    # Per-process timeout (seconds).  asnmap makes a single upstream lookup
+    # per invocation — 60 s is generous; the old global _shell() timeout was 700 s.
+    _QUERY_TIMEOUT = 60
+
+    def run(self) -> int:
+        binary = _pd_binary("asnmap")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[asnmap] Binary not found — skipping")
+            return 0
+
+        orgs, asns = self._collect_orgs_and_asns()
+        if not orgs and not asns:
+            self.log.info("[asnmap] No ASN/org data yet — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "asnmap")
+        self.log.set_tool_context("asnmap")
+
+        # Build the list of (label, cmd, out_tmp) tuples to run concurrently.
+        # ASN numbers are more reliable than org names; org fallback only used
+        # when no ASNs were collected.
+        targets: List[Tuple[str, str, Path]] = []
+        for asn in asns[:10]:
+            out_tmp = self.out / f"asnmap_{asn}.json"
+            cmd     = f'"{binary}" -a {asn} -json -o "{out_tmp}" -silent'
+            targets.append((asn, cmd, out_tmp))
+        if not asns:
+            for org in orgs[:3]:
+                out_tmp = self.out / f"asnmap_org_{_safe_filename(org)}.json"
+                cmd     = f'"{binary}" -a "{org}" -json -o "{out_tmp}" -silent'
+                targets.append((org, cmd, out_tmp))
+
+        self.log.info(
+            f"[asnmap] Querying {len(targets)} target(s) concurrently "
+            f"(timeout {self._QUERY_TIMEOUT}s each)"
+        )
+
+        # Worker: run one asnmap invocation with the tighter per-call timeout.
+        def _query_one(label: str, cmd: str, out_tmp: Path) -> Tuple[str, str, str, int, List[Dict]]:
+            self.log.info(f"[asnmap] → {label}")
+            try:
+                result = subprocess.run(
+                    cmd, shell=True, capture_output=True, text=True,
+                    timeout=self._QUERY_TIMEOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+                )
+                stdout, stderr, rc = result.stdout, result.stderr, result.returncode
+            except subprocess.TimeoutExpired:
+                self.log.warning(f"[asnmap] {label} timed out after {self._QUERY_TIMEOUT}s")
+                stdout, stderr, rc = "", "timed out", -1
+            except Exception as exc:
+                stdout, stderr, rc = "", str(exc), -1
+            records = _parse_jsonl(out_tmp)
+            return label, cmd, stdout, rc, records
+
+        all_ranges: List[Dict] = []
+        cidr_count = 0
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            futures = {
+                pool.submit(_query_one, label, cmd, out_tmp): label
+                for label, cmd, out_tmp in targets
+            }
+            for future in concurrent.futures.as_completed(futures):
+                label, cmd, stdout, rc, records = future.result()
+                self.log.log_command(cmd, stdout, "", rc)
+                all_ranges.extend(records)
+                # Ingest CIDRs for ASN-keyed targets only
+                asn_key = label if re.match(r"AS\d+", label.upper()) else None
+                for r in records:
+                    for cidr in (r.get("cidr") or []) or (
+                        [r["ip_range"]] if r.get("ip_range") else []
+                    ):
+                        if not cidr:
+                            continue
+                        key = asn_key or r.get("asn", label)
+                        self.data.asn_info.setdefault(key, {
+                            "org": r.get("org", ""), "country": r.get("country", ""), "cidrs": []
+                        })
+                        cidrs = self.data.asn_info[key].setdefault("cidrs", [])
+                        if cidr not in cidrs:
+                            cidrs.append(cidr)
+                            cidr_count += 1
+
+        out_json = self.out / "asnmap_results.json"
+        out_json.write_text(json.dumps(all_ranges, indent=2, default=str), encoding="utf-8")
+        self.log.success(f"[asnmap] {cidr_count} CIDR ranges discovered from {len(targets)} target(s)")
+        return cidr_count
+
+
+class PDUncover:
+    """
+    uncover — multi-engine internet-wide host search.
+
+    Wraps: Shodan, Censys, Fofa, Quake, Hunter, Zoomeye, Netlas, CriminalIP.
+
+    CLI flags used:
+      -q QUERY     search query string
+      -e ENGINE    comma-separated engines to use
+      -l 200       result limit
+      -json        JSON output
+      -o FILE      output file
+      -silent      suppress banner
+
+    Keys for each engine are read from environment variables:
+      SHODAN_API_KEY, CENSYS_API_ID, CENSYS_API_SECRET, FOFA_EMAIL, FOFA_KEY,
+      QUAKE_TOKEN, HUNTER_API_KEY, ZOOMEYE_API_KEY, NETLAS_API_KEY, CRIMINALIP_API_KEY
+    OSift also passes Shodan/Censys keys from its own CLI args.
+
+    Runs in Wave C (after IPs known).
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        shodan_key: str = "",
+        censys_id: str = "",
+        censys_secret: str = "",
+    ):
+        self.domain       = domain
+        self.out          = output_dir / "api_intel" / "uncover"
+        self.log          = log
+        self.data         = data
+        self.shodan_key   = shodan_key
+        self.censys_id    = censys_id
+        self.censys_secret = censys_secret
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def _setup_env(self) -> Dict[str, str]:
+        """Inject API keys into environment for uncover."""
+        env = os.environ.copy()
+        if self.shodan_key:
+            env["SHODAN_API_KEY"] = self.shodan_key
+        if self.censys_id:
+            env["CENSYS_API_ID"]     = self.censys_id
+            env["CENSYS_API_SECRET"] = self.censys_secret
+        return env
+
+    def _run_query(self, query: str, engines: str, out_file: Path, env: Dict) -> List[Dict]:
+        binary = _pd_binary("uncover")
+        cmd = (
+            f'"{binary}" -q "{query}" -e {engines} '
+            f'-l 200 -json -o "{out_file}" -silent'
+        )
+        self.log.info(f"[uncover] Query: {query!r} via {engines}")
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=120,
+                env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+            )
+            self.log.log_command(cmd, result.stdout, result.stderr, result.returncode)
+        except Exception as e:
+            self.log.debug(f"[uncover] Error: {e}")
+        return _parse_jsonl(out_file)
+
+    def run(self) -> int:
+        binary = _pd_binary("uncover")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[uncover] Binary not found — skipping")
+            return 0
+
+        env    = self._setup_env()
+        total  = 0
+
+        # Determine which engines have keys
+        engines_available = []
+        if env.get("SHODAN_API_KEY"):
+            engines_available.append("shodan")
+        if env.get("CENSYS_API_ID"):
+            engines_available.append("censys")
+        # Fofa, Quake, Hunter, Zoomeye, Netlas via env vars set externally
+        for evar, ename in [
+            ("FOFA_KEY",         "fofa"),
+            ("QUAKE_TOKEN",      "quake"),
+            ("ZOOMEYE_API_KEY",  "zoomeye"),
+            ("NETLAS_API_KEY",   "netlas"),
+            ("CRIMINALIP_API_KEY","criminalip"),
+        ]:
+            if env.get(evar):
+                engines_available.append(ename)
+
+        if not engines_available:
+            self.log.info("[uncover] No engine API keys detected — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "uncover")
+        self.log.set_tool_context("uncover")
+        engines_str = ",".join(engines_available)
+
+        # Query 1: SSL cert subject
+        q1_file = self.out / "ssl_cert.json"
+        q1 = f'ssl:"{self.domain}"'
+        records_q1 = self._run_query(q1, engines_str, q1_file, env)
+
+        # Query 2: HTTP hostname header
+        q2_file = self.out / "http_host.json"
+        q2 = f'hostname:"{self.domain}"'
+        records_q2 = self._run_query(q2, engines_str, q2_file, env)
+
+        # Ingest results from both queries
+        for records, _qfile in [(records_q1, q1_file), (records_q2, q2_file)]:
+            for entry in records:
+                ip   = entry.get("ip", "")
+                host = entry.get("hostname", "").lower().rstrip(".")
+                port = entry.get("port")
+
+                if ip:
+                    try:
+                        ipaddress.ip_address(ip)
+                        ip_rec = self.data.ip_addresses.setdefault(
+                            ip, {"fqdns": [], "context": "uncover", "asn": None, "org": None, "geo": None}
+                        )
+                        if host and host not in ip_rec["fqdns"]:
+                            ip_rec["fqdns"].append(host)
+                        if port:
+                            existing = self.data.open_ports.setdefault(ip, [])
+                            if port not in existing:
+                                existing.append(port)
+                        total += 1
+                    except ValueError:
+                        pass
+
+                if host and host.endswith(self.domain):
+                    sub_rec = self.data.subdomains.setdefault(
+                        host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "uncover" not in sub_rec["sources"]:
+                        sub_rec["sources"].append("uncover")
+                    if ip and ip not in sub_rec.get("ips", []):
+                        sub_rec.setdefault("ips", []).append(ip)
+                    add_finding(
+                        self.data, "uncover", "subdomain_identified", "DNS", "INFO",
+                        "Subdomain Identified",
+                        host=self.domain, affected=host,
+                        output_file=str(_qfile) if _qfile.exists() else "",
+                    )
+
+        self.log.success(f"[uncover] {total} unique hosts found via {engines_str}")
+        return total
+
+
+class PDCloudlist:
+    """
+    cloudlist — enumerate assets across cloud provider accounts.
+
+    Reads provider credentials from a YAML config file.
+    The config path defaults to ~/.config/cloudlist/config.yaml
+    OSift writes a minimal config if cloud_config_path is provided.
+
+    CLI flags used:
+      -config FILE    provider config file
+      -provider NAME  comma-separated provider list (or 'all')
+      -json           JSON output
+      -o FILE         output file
+      -silent         suppress banner
+
+    Runs in Wave E (standalone, alongside Phase 6 company intelligence).
+    Discovered hostnames and IPs are merged into the shared data structures.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        cloud_config: str = "",
+    ):
+        self.domain       = domain
+        self.out          = output_dir / "company_info" / "cloudlist"
+        self.log          = log
+        self.data         = data
+        self.cloud_config = cloud_config.strip()
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    def run(self) -> int:
+        binary = _pd_binary("cloudlist")
+        if not shutil.which(binary) and not os.path.isfile(binary):
+            self.log.warning("[cloudlist] Binary not found — skipping")
+            return 0
+        if not self.cloud_config:
+            self.log.info(
+                "[cloudlist] No cloud config path provided — skipping "
+                "(use --cloudlist-config to point to a cloudlist YAML)"
+            )
+            return 0
+        if not os.path.isfile(self.cloud_config):
+            self.log.warning(f"[cloudlist] Config file not found: {self.cloud_config}")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "cloudlist")
+        self.log.set_tool_context("cloudlist")
+
+        out_json = self.out / "cloudlist_results.json"
+        cmd = (
+            f'"{binary}" -config "{self.cloud_config}" '
+            f'-provider all '
+            f'-json -o "{out_json}" -silent'
+        )
+        self.log.info(f"[cloudlist] Enumerating cloud assets from {self.cloud_config}")
+        stdout, stderr, rc = _shell(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        records    = _parse_jsonl(out_json)
+        host_count = 0
+        ip_count   = 0
+
+        for entry in records:
+            public_ip = entry.get("public_ip", "")
+            private_ip = entry.get("private_ip", "")
+            dns_name   = entry.get("dns_name", "").lower().rstrip(".")
+            provider   = entry.get("provider", "")
+            service    = entry.get("service", "")
+
+            # Ingest public IP
+            if public_ip:
+                try:
+                    ipaddress.ip_address(public_ip)
+                    ip_rec = self.data.ip_addresses.setdefault(
+                        public_ip, {"fqdns": [], "context": f"cloudlist:{provider}", "asn": None, "org": None, "geo": None}
+                    )
+                    ip_rec["cloud_provider"] = provider
+                    ip_rec["cloud_service"]  = service
+                    if dns_name and dns_name not in ip_rec["fqdns"]:
+                        ip_rec["fqdns"].append(dns_name)
+                    ip_count += 1
+                except ValueError:
+                    pass
+
+            # Ingest DNS name
+            if dns_name and dns_name.endswith(self.domain):
+                sub_rec = self.data.subdomains.setdefault(
+                    dns_name, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                )
+                if "cloudlist" not in sub_rec["sources"]:
+                    sub_rec["sources"].append("cloudlist")
+                if public_ip and public_ip not in sub_rec.get("ips", []):
+                    sub_rec.setdefault("ips", []).append(public_ip)
+                add_finding(
+                    self.data, "cloudlist", "subdomain_identified", "DNS", "INFO",
+                    "Subdomain Identified",
+                    host=self.domain, affected=dns_name,
+                    output_file=str(self.out / "cloudlist_full.json"),
+                )
+                host_count += 1
+
+        out_json_full = self.out / "cloudlist_full.json"
+        out_json_full.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
+        self.log.success(
+            f"[cloudlist] {len(records)} cloud assets | {host_count} in-scope hosts | {ip_count} IPs"
+        )
+        return len(records)
+
+
+# ─── ProjectDiscovery Orchestrator ────────────────────────────────────────────
+
+class ProjectDiscoveryOrchestrator:
+    """
+    Orchestrates all ProjectDiscovery tool modules in the correct wave order,
+    running independent tools concurrently within each wave.
+
+    Wave A — Domain only (concurrent): subfinder, chaos
+    Wave B — After Wave A (concurrent): shuffledns, dnsx
+    Wave C — After IPs known (concurrent): tlsx, cdncheck, asnmap, uncover
+    Wave D — After live hosts: katana
+    Wave E — Standalone (concurrent with C): cloudlist
+
+    Each wave waits for its dependencies before launching.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        # ── optional keys/config ─────────────────────────────────────────────
+        chaos_key:       str = "",
+        shodan_key:      str = "",
+        censys_id:       str = "",
+        censys_secret:   str = "",
+        cloud_config:    str = "",
+        max_depth:       int = 3,
+        wordlist:        Optional[Path] = None,
+        skip_pd:         bool = False,
+    ):
+        self.domain        = domain
+        self.company       = company
+        self.output_dir    = output_dir
+        self.log           = log
+        self.data          = data
+        self.chaos_key     = chaos_key
+        self.shodan_key    = shodan_key
+        self.censys_id     = censys_id
+        self.censys_secret = censys_secret
+        self.cloud_config  = cloud_config
+        self.max_depth     = max_depth
+        self.wordlist      = wordlist
+        self.skip_pd       = skip_pd
+
+        # Check / install all tools up-front
+        self.log.info("[PD] Checking ProjectDiscovery tool availability …")
+        self.avail = _ensure_pd_tools(list(_PD_TOOLS.keys()), log, skip_pd=skip_pd)
+
+        enabled = [t for t, ok in self.avail.items() if ok]
+        disabled = [t for t, ok in self.avail.items() if not ok]
+        if enabled:
+            self.log.success(f"[PD] Enabled tools  : {', '.join(enabled)}")
+        if disabled:
+            self.log.info(f"[PD] Disabled tools : {', '.join(disabled)}")
+
+    # ── Wave A ────────────────────────────────────────────────────────────────
+    def run_wave_a(self):
+        """subfinder + chaos — concurrent, domain only needed."""
+        self.log.info("[PD] Wave A — passive subdomain discovery")
+        tasks = []
+        if self.avail.get("subfinder"):
+            tasks.append(PDSubfinder(self.domain, self.output_dir, self.log, self.data))
+        if self.avail.get("chaos"):
+            tasks.append(PDChaos(self.domain, self.output_dir, self.log, self.data, self.chaos_key))
+
+        if not tasks:
+            return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as e:
+                    self.log.warning(f"[PD] Wave A task error: {e}")
+
+    # ── Wave B ────────────────────────────────────────────────────────────────
+    def run_wave_b(self):
+        """shuffledns + dnsx — concurrent, consume Wave A subdomains."""
+        self.log.info("[PD] Wave B — mass DNS resolution")
+        tasks = []
+        if self.avail.get("shuffledns"):
+            tasks.append(PDShuffleDNS(
+                self.domain, self.output_dir, self.log, self.data, self.wordlist
+            ))
+        if self.avail.get("dnsx"):
+            tasks.append(PDDnsx(self.domain, self.output_dir, self.log, self.data))
+
+        if not tasks:
+            return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as e:
+                    self.log.warning(f"[PD] Wave B task error: {e}")
+
+    # ── Wave C + E (concurrent) ───────────────────────────────────────────────
+    def run_wave_c_and_e(self):
+        """tlsx + cdncheck + asnmap + uncover + cloudlist — all concurrent."""
+        self.log.info("[PD] Wave C+E — TLS, CDN, ASN, internet search, cloud assets")
+        tasks = []
+
+        if self.avail.get("tlsx"):
+            tasks.append(PDTlsx(self.domain, self.output_dir, self.log, self.data))
+        if self.avail.get("cdncheck"):
+            tasks.append(PDCdncheck(self.domain, self.output_dir, self.log, self.data))
+        if self.avail.get("asnmap"):
+            tasks.append(PDASNmap(self.domain, self.output_dir, self.log, self.data))
+        if self.avail.get("uncover"):
+            tasks.append(PDUncover(
+                self.domain, self.output_dir, self.log, self.data,
+                self.shodan_key, self.censys_id, self.censys_secret,
+            ))
+        if self.avail.get("cloudlist"):
+            tasks.append(PDCloudlist(
+                self.domain, self.output_dir, self.log, self.data, self.cloud_config
+            ))
+
+        if not tasks:
+            return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    fut.result()
+                except Exception as e:
+                    self.log.warning(f"[PD] Wave C/E task error: {e}")
+
+    # ── Wave D ────────────────────────────────────────────────────────────────
+    def run_wave_d(self):
+        """katana — sequential (CPU/bandwidth heavy), needs live resolved hosts."""
+        if not self.avail.get("katana"):
+            return
+        self.log.info("[PD] Wave D — deep web crawl with katana")
+        try:
+            PDKatana(
+                self.domain, self.output_dir, self.log, self.data, self.max_depth
+            ).run()
+        except Exception as e:
+            self.log.warning(f"[PD] Wave D (katana) error: {e}")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    def _write_summary(self):
+        summary = {
+            "timestamp":       datetime.datetime.now(datetime.UTC).isoformat(),
+            "domain":          self.domain,
+            "tools_enabled":   [t for t, ok in self.avail.items() if ok],
+            "tools_disabled":  [t for t, ok in self.avail.items() if not ok],
+            "subdomains_total": len(self.data.subdomains),
+            "ips_total":        len(self.data.ip_addresses),
+            "open_ports_ips":   len(self.data.open_ports),
+            "certificates":     len(self.data.certificates),
+            "crawled_urls":     len(self.data.crawled_urls),
+            "sensitive_findings": len(self.data.sensitive_findings),
+            "asn_blocks":       sum(
+                len(v.get("cidrs", [])) for v in self.data.asn_info.values()
+            ),
+        }
+        out = self.output_dir / "api_intel" / "pd_summary.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        self.log.success(
+            f"[PD] All waves complete | "
+            f"subdomains={summary['subdomains_total']} | "
+            f"IPs={summary['ips_total']} | "
+            f"crawled={summary['crawled_urls']}"
+        )
+
+
+# ─── Aggregation ─────────────────────────────────────────────────────────────
+
+def aggregate_sensitive_data(output_dir: Path, log: ReconLogger, data: ReconData):
+    """
+    Write a per-category breakdown of all findings from the FindingStore.
+    Preserves per-category JSONL files for downstream tooling.
+    """
+    log.set_tool_context("OSift")
+    _agg_path_base = _project_dir if _project_dir else output_dir
+    _raw_agg = data.findings.all_findings()
+    all_findings: List[Dict] = []
+    for _fa in _raw_agg:
+        _ofa = (_fa.get("output_file") or "").strip()
+        if _ofa:
+            _fac = dict(_fa)
+            _fac["output_file"] = ",".join(
+                _rel_path(p.strip(), _agg_path_base)
+                for p in _ofa.split(",") if p.strip()
+            )
+            all_findings.append(_fac)
+        else:
+            all_findings.append(_fa)
+    by_cat: Dict[str, List] = defaultdict(list)
+    for f in all_findings:
+        by_cat[f.get("category", "Uncategorized")].append(f)
+
+    summary = {
+        "generated_at":   datetime.datetime.now(datetime.UTC).isoformat(),
+        "tool":           "OSift",
+        "tool_version":   VERSION,
+        "total_findings": len(all_findings),
+        "validated":      data.findings.validated_count(),
+        "by_category":    {cat: len(items) for cat, items in by_cat.items()},
+        "findings":       dict(by_cat),
+    }
+    out = output_dir / "sensitive_data" / "summary.json"
+    out.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+    log.success(
+        f"[SENSITIVE] {len(all_findings)} findings "
+        f"({data.findings.validated_count()} multi-tool validated) "
+        f"across {len(by_cat)} categories"
+    )
+    return summary
+
+
+# ─── Final Report ─────────────────────────────────────────────────────────────
+
+# ─── Subdomain Confirmer ──────────────────────────────────────────────────────
+
+class SubdomainConfirmer:
+    """
+    Confirms which primary subdomains actually exist and serve web traffic,
+    and collects a full DNS record profile for each one.
+
+    Per-subdomain checks (all concurrent, one task per FQDN):
+      1. A records     — IPv4 addresses (primary IP shown in ip_address column)
+      2. AAAA records  — IPv6 addresses
+      3. CNAME         — canonical-name target if the FQDN is an alias
+      4. MX records    — mail exchangers (priority:host)
+      5. NS records    — nameservers authoritative for the subdomain
+      6. TXT records   — all TXT values; SPF and DMARC policies extracted
+      7. CAA records   — certificate authority authorisation entries
+      8. SOA record    — start-of-authority (serial, mname)
+      9. SRV records   — well-known service-location records probed
+     10. HTTP probe    — HEAD http://<fqdn>/ → final status code
+     11. HTTPS probe   — HEAD https://<fqdn>/ (cert-verify off) → final status code
+
+    DNS queries use dnspython when it is available (same resolver the
+    DNSEnumerator uses, pointed at 8.8.8.8 / 1.1.1.1), with a stdlib
+    socket.getaddrinfo() fallback for A/AAAA when dnspython is absent.
+
+    Output file: reports/subdomains_confirmed.csv
+
+    Column reference
+    ----------------
+    subdomain       FQDN being probed
+    ip_address      First resolved IPv4 (or IPv6) address; NXDOMAIN / ERROR
+    a_records       Comma-separated list of all A addresses
+    aaaa_records    Comma-separated list of all AAAA addresses
+    cname           CNAME target, or blank
+    mx_records      Comma-separated "priority:host" pairs, sorted by priority
+    ns_records      Comma-separated nameserver FQDNs
+    txt_records     Pipe-separated TXT record values (newlines stripped)
+    caa_records     Comma-separated "flags tag value" entries
+    spf             SPF record value, or blank
+    dmarc           DMARC policy string (_dmarc.<fqdn>), or blank
+    dkim_selectors  Comma-separated selector names that returned a DKIM key
+    soa             "mname serial" for the SOA record, or blank
+    srv_records     Pipe-separated "service priority port target" entries
+    http_status     Final HTTP status code (int), TIMEOUT, ERROR, NO_DNS, SSL_ERROR
+    https_status    Final HTTPS status code (int), TIMEOUT, ERROR, NO_DNS, SSL_ERROR
+
+    Status tokens (non-numeric)
+    ---------------------------
+    NXDOMAIN   DNS lookup failed — name does not exist
+    NO_DNS     HTTP/HTTPS probe skipped because DNS resolution failed
+    TIMEOUT    Connection or read timed out
+    SSL_ERROR  TLS handshake failed (even with cert verification disabled)
+    ERROR      Connection refused or other OS-level error
+    """
+
+    MAX_WORKERS   = 30      # concurrent subdomain tasks
+    HTTP_TIMEOUT  = 8       # seconds per HTTP/HTTPS connection attempt
+    MAX_REDIRECTS = 3       # maximum redirect hops to follow
+    DNS_TIMEOUT   = 4       # seconds per DNS query
+
+    # Columns in the order they appear in the CSV
+    CSV_COLUMNS = [
+        "subdomain", "ip_address",
+        "a_records", "aaaa_records", "cname",
+        "mx_records", "ns_records",
+        "txt_records", "caa_records",
+        "spf", "dmarc", "dkim_selectors",
+        "soa", "srv_records",
+        "http_status", "https_status",
+        "redirect_to",
+    ]
+
+    # Common DKIM selectors to probe on each subdomain
+    _DKIM_SELECTORS = [
+        "default", "google", "k1", "k2", "mail", "dkim",
+        "selector1", "selector2",          # Microsoft 365
+        "s1", "s2", "smtp", "smtpapi",
+        "mimecast", "sendgrid", "mandrill",
+        "mailchimp", "klaviyo", "hubspot",
+        "20120113", "20221208",             # date-based Google selectors
+    ]
+
+    # Well-known SRV service prefixes to probe
+    _SRV_SERVICES = [
+        "_http._tcp", "_https._tcp",
+        "_smtp._tcp", "_smtps._tcp", "_submission._tcp",
+        "_imap._tcp", "_imaps._tcp", "_pop3._tcp", "_pop3s._tcp",
+        "_sip._tcp", "_sips._tcp",
+        "_xmpp-client._tcp", "_xmpp-server._tcp",
+        "_autodiscover._tcp",
+        "_ldap._tcp", "_ldaps._tcp",
+    ]
+
+    # SSL context reused across all HTTPS probes
+    _SSL_CTX = ssl.create_default_context()
+    _SSL_CTX.check_hostname = False
+    _SSL_CTX.verify_mode    = ssl.CERT_NONE
+
+    def __init__(self, subdomains: List[str], log: "ReconLogger") -> None:
+        self.subdomains = subdomains
+        self.log        = log
+        # Build a dnspython resolver if available (same settings as DNSEnumerator)
+        if DNS_AVAILABLE:
+            self._resolver = dns.resolver.Resolver()
+            self._resolver.timeout     = self.DNS_TIMEOUT
+            self._resolver.lifetime    = self.DNS_TIMEOUT * 2
+            self._resolver.nameservers = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1"]
+        else:
+            self._resolver = None
+
+    # ── Public entry point ────────────────────────────────────────────────────
+
+    def run(self) -> List[Dict[str, str]]:
+        """
+        Probe all subdomains concurrently.
+        Returns a list of result dicts keyed by CSV_COLUMNS, sorted so
+        DNS-resolved entries appear first (alphabetically), then unresolved.
+        """
+        if not self.subdomains:
+            return []
+
+        self.log.info(
+            f"[SubdomainConfirmer] Probing {len(self.subdomains)} subdomain(s) "
+            f"(DNS A/AAAA/CNAME/MX/NS/TXT/CAA/SOA/SRV + HTTP/HTTPS, "
+            f"{self.MAX_WORKERS} concurrent workers)"
+        )
+
+        results: List[Dict[str, str]] = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(self.MAX_WORKERS, len(self.subdomains))
+        ) as pool:
+            future_map = {pool.submit(self._probe, fqdn): fqdn
+                          for fqdn in self.subdomains}
+            for future in concurrent.futures.as_completed(future_map):
+                fqdn = future_map[future]
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    results.append(self._error_row(fqdn, str(exc)))
+                    self.log.debug(f"[SubdomainConfirmer] {fqdn}: unexpected error: {exc}")
+
+        resolved   = sorted(
+            (r for r in results if r["ip_address"] not in ("NXDOMAIN", "ERROR")),
+            key=lambda r: r["subdomain"],
+        )
+        unresolved = sorted(
+            (r for r in results if r["ip_address"] in ("NXDOMAIN", "ERROR")),
+            key=lambda r: r["subdomain"],
+        )
+        ordered = resolved + unresolved
+
+        live = sum(
+            1 for r in ordered
+            if r["http_status"] not in ("NO_DNS", "TIMEOUT", "ERROR", "NXDOMAIN", "SSL_ERROR")
+            or r["https_status"] not in ("NO_DNS", "TIMEOUT", "ERROR", "NXDOMAIN", "SSL_ERROR")
+        )
+        self.log.success(
+            f"[SubdomainConfirmer] Complete — "
+            f"{len(resolved)}/{len(self.subdomains)} resolved in DNS, "
+            f"{live} with live HTTP/HTTPS"
+        )
+        return ordered
+
+    # ── Per-subdomain probe ───────────────────────────────────────────────────
+
+    def _probe(self, fqdn: str) -> Dict[str, str]:
+        """Run all DNS checks then HTTP/HTTPS probes for one FQDN."""
+        dns_data = self._dns_checks(fqdn)
+        ip       = dns_data["ip_address"]
+
+        row: Dict[str, str] = {
+            "subdomain":       fqdn,
+            "ip_address":      ip,
+            "a_records":       dns_data["a_records"],
+            "aaaa_records":    dns_data["aaaa_records"],
+            "cname":           dns_data["cname"],
+            "mx_records":      dns_data["mx_records"],
+            "ns_records":      dns_data["ns_records"],
+            "txt_records":     dns_data["txt_records"],
+            "caa_records":     dns_data["caa_records"],
+            "spf":             dns_data["spf"],
+            "dmarc":           dns_data["dmarc"],
+            "dkim_selectors":  dns_data["dkim_selectors"],
+            "soa":             dns_data["soa"],
+            "srv_records":     dns_data["srv_records"],
+        }
+        if ip in ("NXDOMAIN", "ERROR"):
+            row["http_status"]  = "NO_DNS"
+            row["https_status"] = "NO_DNS"
+            row["redirect_to"]  = ""
+        else:
+            _http_st,  _http_redir  = self._http_probe(fqdn, "http")
+            _https_st, _https_redir = self._http_probe(fqdn, "https")
+            row["http_status"]  = _http_st
+            row["https_status"] = _https_st
+            # Prefer HTTPS redirect destination; fall back to HTTP
+            row["redirect_to"]  = _https_redir or _http_redir
+        return row
+
+    def _error_row(self, fqdn: str, reason: str = "ERROR") -> Dict[str, str]:
+        """Return a fully-populated error row so DictWriter never sees missing keys."""
+        return {col: ("ERROR" if col in ("subdomain", "ip_address", "http_status", "https_status")
+                       else "") for col in self.CSV_COLUMNS} | {"subdomain": fqdn}
+
+    # ── DNS checks ───────────────────────────────────────────────────────────
+
+    def _dns_checks(self, fqdn: str) -> Dict[str, str]:
+        """
+        Query all relevant DNS record types for *fqdn* and return a flat
+        dict of string values suitable for direct CSV insertion.
+        """
+        out: Dict[str, str] = {
+            "ip_address":     "",
+            "a_records":      "",
+            "aaaa_records":   "",
+            "cname":          "",
+            "mx_records":     "",
+            "ns_records":     "",
+            "txt_records":    "",
+            "caa_records":    "",
+            "spf":            "",
+            "dmarc":          "",
+            "dkim_selectors": "",
+            "soa":            "",
+            "srv_records":    "",
+        }
+
+        # ── A records ────────────────────────────────────────────────────────
+        a_recs = self._qry(fqdn, "A")
+        if a_recs:
+            out["a_records"]  = ", ".join(a_recs)
+            out["ip_address"] = a_recs[0]
+
+        # ── AAAA records ─────────────────────────────────────────────────────
+        aaaa_recs = self._qry(fqdn, "AAAA")
+        if aaaa_recs:
+            out["aaaa_records"] = ", ".join(aaaa_recs)
+            # Use AAAA as primary IP only when no A record resolved
+            if not out["ip_address"]:
+                out["ip_address"] = aaaa_recs[0]
+
+        # ── CNAME ────────────────────────────────────────────────────────────
+        cname_recs = self._qry(fqdn, "CNAME")
+        if cname_recs:
+            out["cname"] = cname_recs[0].rstrip(".")
+
+        # If nothing resolved yet, try the OS resolver as fallback
+        if not out["ip_address"]:
+            out["ip_address"] = self._resolve_fallback(fqdn)
+
+        # ── MX records ───────────────────────────────────────────────────────
+        mx_recs = self._qry_structured(fqdn, "MX")
+        if mx_recs:
+            pairs = sorted(
+                (int(r.get("priority", 0)), r.get("exchange", "").rstrip("."))
+                for r in mx_recs
+            )
+            out["mx_records"] = ", ".join(f"{p}:{h}" for p, h in pairs)
+
+        # ── NS records ───────────────────────────────────────────────────────
+        ns_recs = self._qry(fqdn, "NS")
+        if ns_recs:
+            out["ns_records"] = ", ".join(r.rstrip(".") for r in sorted(ns_recs))
+
+        # ── TXT records (includes SPF extraction) ────────────────────────────
+        txt_recs = self._qry(fqdn, "TXT")
+        if txt_recs:
+            cleaned = [r.strip('"').replace("\n", " ") for r in txt_recs]
+            out["txt_records"] = " | ".join(cleaned)
+            for val in cleaned:
+                v = val.lower()
+                if v.startswith("v=spf1") and not out["spf"]:
+                    out["spf"] = val
+
+        # ── CAA records ──────────────────────────────────────────────────────
+        caa_recs = self._qry_structured(fqdn, "CAA")
+        if caa_recs:
+            entries = [
+                f"{r.get('flags',0)} {r.get('tag','')} {r.get('value','').strip(chr(34))}"
+                for r in caa_recs
+            ]
+            out["caa_records"] = ", ".join(entries)
+
+        # ── SOA record ───────────────────────────────────────────────────────
+        soa_recs = self._qry_structured(fqdn, "SOA")
+        if soa_recs:
+            s = soa_recs[0]
+            out["soa"] = f"{s.get('mname','').rstrip('.')} serial={s.get('serial','')}"
+
+        # ── DMARC (_dmarc.<fqdn>) ─────────────────────────────────────────────
+        dmarc_recs = self._qry(f"_dmarc.{fqdn}", "TXT")
+        for val in dmarc_recs:
+            v = val.strip('"')
+            if v.lower().startswith("v=dmarc1"):
+                out["dmarc"] = v
+                break
+
+        # ── DKIM selectors ───────────────────────────────────────────────────
+        found_selectors: List[str] = []
+        for sel in self._DKIM_SELECTORS:
+            recs = self._qry(f"{sel}._domainkey.{fqdn}", "TXT")
+            for r in recs:
+                if "v=dkim1" in r.lower():
+                    found_selectors.append(sel)
+                    break
+        if found_selectors:
+            out["dkim_selectors"] = ", ".join(found_selectors)
+
+        # ── SRV records ──────────────────────────────────────────────────────
+        srv_entries: List[str] = []
+        for svc in self._SRV_SERVICES:
+            recs = self._qry_structured(f"{svc}.{fqdn}", "SRV")
+            for r in recs:
+                srv_entries.append(
+                    f"{svc} {r.get('priority','')} {r.get('port','')} "
+                    f"{r.get('target','').rstrip('.')}"
+                )
+        if srv_entries:
+            out["srv_records"] = " | ".join(srv_entries)
+
+        return out
+
+    # ── DNS query helpers ─────────────────────────────────────────────────────
+
+    def _qry(self, name: str, rtype: str) -> List[str]:
+        """
+        Query *name* for *rtype* using dnspython when available.
+        Returns a list of raw string representations, or [] on any failure.
+        Falls back to socket.getaddrinfo for A/AAAA when dnspython is absent.
+        """
+        if self._resolver is not None:
+            try:
+                answers = self._resolver.resolve(name, rtype,
+                                                  raise_on_no_answer=False)
+                return [str(r) for r in answers]
+            except Exception:
+                return []
+        # stdlib fallback — only A and AAAA are resolvable this way
+        if rtype in ("A", "AAAA"):
+            family = socket.AF_INET if rtype == "A" else socket.AF_INET6
+            try:
+                results = socket.getaddrinfo(name, None, family, socket.SOCK_STREAM)
+                return [sockaddr[0] for _, _, _, _, sockaddr in results if sockaddr[0]]
+            except Exception:
+                return []
+        return []
+
+    def _qry_structured(self, name: str, rtype: str) -> List[Dict]:
+        """
+        Like _qry() but returns structured dicts parsed from the raw rdata.
+        Only available when dnspython is present; returns [] otherwise.
+        """
+        if self._resolver is None:
+            return []
+        try:
+            answers = self._resolver.resolve(name, rtype,
+                                              raise_on_no_answer=False)
+        except Exception:
+            return []
+
+        out: List[Dict] = []
+        for rdata in answers:
+            raw = str(rdata)
+            rec: Dict[str, Any] = {"raw": raw, "rtype": rtype}
+
+            if rtype == "MX":
+                parts = raw.split(None, 1)
+                rec["priority"] = int(parts[0]) if parts and parts[0].isdigit() else 0
+                rec["exchange"] = parts[1].rstrip(".") if len(parts) > 1 else raw
+            elif rtype == "CAA":
+                parts = raw.split(None, 2)
+                if len(parts) == 3:
+                    rec.update({"flags": parts[0], "tag": parts[1],
+                                "value": parts[2].strip('"')})
+            elif rtype == "SOA":
+                parts = raw.split()
+                if len(parts) >= 7:
+                    rec.update({
+                        "mname": parts[0].rstrip("."), "rname": parts[1].rstrip("."),
+                        "serial": parts[2], "refresh": parts[3],
+                        "retry": parts[4], "expire": parts[5], "minimum": parts[6],
+                    })
+            elif rtype == "SRV":
+                parts = raw.split()
+                if len(parts) == 4:
+                    rec.update({"priority": parts[0], "weight": parts[1],
+                                "port": parts[2], "target": parts[3].rstrip(".")})
+            elif rtype == "NS":
+                rec["nameserver"] = raw.rstrip(".")
+            out.append(rec)
+        return out
+
+    def _resolve_fallback(self, fqdn: str) -> str:
+        """
+        OS-level resolver fallback (AF_UNSPEC).  Returns an IP string,
+        "NXDOMAIN", or "ERROR".
+        """
+        try:
+            infos = socket.getaddrinfo(fqdn, None, socket.AF_UNSPEC,
+                                        socket.SOCK_STREAM)
+            for _, _, _, _, sockaddr in infos:
+                ip = sockaddr[0]
+                if ip:
+                    return ip
+            return "ERROR"
+        except socket.gaierror as exc:
+            msg = str(exc).lower()
+            if any(k in msg for k in ("name or service", "nodename", "nxdomain",
+                                       "no address", "does not exist")):
+                return "NXDOMAIN"
+            return "ERROR"
+        except Exception:
+            return "ERROR"
+
+    # ── HTTP / HTTPS probe ────────────────────────────────────────────────────
+
+    def _http_probe(self, fqdn: str, scheme: str) -> Tuple[str, str]:
+        """
+        Send a HEAD request (with redirect following) and return a tuple of
+        (final_status_code_str, redirect_url) where redirect_url is the final
+        destination URL if one or more redirects occurred, or "" if the
+        initial request was answered without redirecting.
+        """
+        import urllib.request
+        import urllib.error
+
+        initial_url = f"{scheme}://{fqdn}/"
+        url = initial_url
+        redirects_left = self.MAX_REDIRECTS
+
+        try:
+            while redirects_left >= 0:
+                req = urllib.request.Request(
+                    url,
+                    method="HEAD",
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; OSift/2.0 subdomain-prober)",
+                        "Accept":     "*/*",
+                        "Connection": "close",
+                    },
+                )
+                if scheme == "https":
+                    opener = urllib.request.build_opener(
+                        urllib.request.HTTPSHandler(context=self._SSL_CTX)
+                    )
+                else:
+                    opener = urllib.request.build_opener()
+
+                try:
+                    resp = opener.open(req, timeout=self.HTTP_TIMEOUT)
+                    redirect_to = url if url != initial_url else ""
+                    return str(resp.status), redirect_to
+                except urllib.error.HTTPError as http_err:
+                    if http_err.code in (301, 302, 303, 307, 308) and redirects_left > 0:
+                        location = http_err.headers.get("Location", "")
+                        if not location:
+                            redirect_to = url if url != initial_url else ""
+                            return str(http_err.code), redirect_to
+                        url = location
+                        redirects_left -= 1
+                        continue
+                    redirect_to = url if url != initial_url else ""
+                    return str(http_err.code), redirect_to
+                break
+
+        except (socket.timeout, TimeoutError):
+            return "TIMEOUT", ""
+        except ConnectionRefusedError:
+            return "ERROR", ""
+        except ssl.SSLError:
+            return "SSL_ERROR", ""
+        except OSError as exc:
+            msg = str(exc).lower()
+            if "timed out" in msg or "timeout" in msg:
+                return "TIMEOUT", ""
+            return "ERROR", ""
+        except Exception:
+            return "ERROR", ""
+
+        return "ERROR", ""
+
+
+def confirm_and_write_subdomains(
+    subdomains: List[str],
+    output_dir: Path,
+    log: "ReconLogger",
+) -> Tuple[Path, List[Dict[str, str]]]:
+    """
+    Run SubdomainConfirmer on *subdomains*, write reports/subdomains_confirmed.csv,
+    and return (csv_path, results_list).
+
+    CSV columns: subdomain, ip_address, a_records, aaaa_records, cname,
+                 mx_records, ns_records, txt_records, caa_records, spf, dmarc,
+                 dkim_selectors, soa, srv_records, http_status, https_status
+    """
+    confirmer = SubdomainConfirmer(subdomains, log)
+    rows      = confirmer.run()
+
+    # Include a row if the subdomain resolved to an IP address (DNS confirmed)
+    # OR if at least one of http/https returned a numeric status code.
+    # Rows that are NXDOMAIN with no HTTP response at all are excluded.
+    # The full list is still returned to callers so log counts stay accurate.
+    _NO_RESPONSE = {"NO_DNS", "TIMEOUT", "ERROR", "NXDOMAIN", "SSL_ERROR", ""}
+
+    def _include_row(row):
+        has_ip   = row.get("ip_address", "") not in ("NXDOMAIN", "ERROR", "")
+        has_http = (
+            row.get("http_status",  "") not in _NO_RESPONSE
+            or row.get("https_status", "") not in _NO_RESPONSE
+        )
+        return has_ip or has_http
+
+    confirmed = [r for r in rows if _include_row(r)]
+
+    csv_path  = output_dir / "reports" / "subdomains_confirmed.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=SubdomainConfirmer.CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(confirmed)
+
+    return csv_path, rows
+
+
+def write_tools_snapshot(output_dir: Path) -> None:
+    """Write reports/tools_used.json from the current TOOL_REGISTRY state.
+    Non-fatal — called after tool init and again at report time."""
+    try:
+        reports_dir = output_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        _tools_raw = TOOL_REGISTRY.all_tools()
+        _tools_list = sorted(
+            [{"name": _n, "version": _i.get("version") or "",
+              "queried_at": _i.get("queried_at") or "",
+              "type": _TOOL_TYPES.get(_n, "")}
+             for _n, _i in _tools_raw.items()],
+            key=lambda x: x["name"].lower(),
+        )
+        (reports_dir / "tools_used.json").write_text(
+            json.dumps(_tools_list, indent=2, default=str), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
+    """
+    Write incremental targets_osint.json and findings_vantage.json so Vantage
+    can display live data during an active scan.  Called after each major phase;
+    generate_final_report() overwrites these with the fully-populated versions.
+    Non-fatal: any exception is silently swallowed.
+    """
+    try:
+        reports_dir = output_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── targets_osint.json ─────────────────────────────────────────────────
+        # Build reverse-lookup: fqdn → [ips] from ip_addresses records so that
+        # subdomains discovered via Shodan/OTX (ip_addresses["fqdns"]) also show
+        # an IP even when subdomains["ips"] was never populated by DNS resolution.
+        _fqdn_to_ips_snap: Dict[str, List[str]] = {}
+        for _ip_k, _ip_m in data.ip_addresses.items():
+            for _fqdn_k in (_ip_m.get("fqdns") or []):
+                if _fqdn_k:
+                    _fqdn_to_ips_snap.setdefault(_fqdn_k, []).append(_ip_k)
+
+        _subs_map: Dict[str, Dict] = {}
+        for _sub, _meta in data.subdomains.items():
+            _ips = list(_meta.get("ips") or [])
+            # Supplement with reverse-lookup from ip_addresses
+            for _rip in _fqdn_to_ips_snap.get(_sub, []):
+                if _rip not in _ips:
+                    _ips.append(_rip)
+            _subs_map[_sub] = {
+                "host":         _sub,
+                "ip":           _ips[0] if _ips else "",
+                "sources":      sorted(set(_meta.get("sources") or [])),
+                "first_seen":   "",
+                "severity":     "INFO",
+                "http_status":  _meta.get("http_status"),
+                "redirects_to": _meta.get("redirects_to") or [],
+                "redirect_to":  _meta.get("redirect_to", ""),
+            }
+        _ips_map: Dict[str, Dict] = {}
+        for _ip, _meta in data.ip_addresses.items():
+            # Build enriched FQDN list: combine ip_addresses[ip]["fqdns"] with
+            # reverse lookup from data.subdomains (subdomains that resolved to this IP)
+            _fqdns_set: Dict[str, List[int]] = {}  # fqdn -> ports
+            for _fqdn in (_meta.get("fqdns") or []):
+                if _fqdn and _fqdn not in _fqdns_set:
+                    _fqdns_set[_fqdn] = []
+            for _sub, _sub_meta in data.subdomains.items():
+                if _ip in (_sub_meta.get("ips") or []) and _sub not in _fqdns_set:
+                    _fqdns_set[_sub] = []
+            # Attach per-FQDN ports from data.subdomains
+            for _fqdn in list(_fqdns_set.keys()):
+                _sub_rec = data.subdomains.get(_fqdn)
+                if _sub_rec:
+                    _fqdns_set[_fqdn] = sorted(set(_sub_rec.get("ports") or []))
+            # Build sources: context string + explicit sources list
+            _ip_sources: List[str] = []
+            for _s in (_meta.get("sources") or []):
+                if _s and _s not in _ip_sources:
+                    _ip_sources.append(_s)
+            _ctx = _meta.get("context") or ""
+            if _ctx and _ctx not in _ip_sources:
+                _ip_sources.append(_ctx)
+            _ips_map[_ip] = {
+                "ip":         _ip,
+                "fqdns":      [{"fqdn": _f, "ports": _p} for _f, _p in sorted(_fqdns_set.items())],
+                "sources":    sorted(set(_ip_sources)),
+                "first_seen": _meta.get("first_seen") or "",
+                "severity":   "INFO",
+                # legacy field for backwards compatibility
+                "host":       (list(_fqdns_set.keys()) or [""])[0],
+            }
+        _emails_map: Dict[str, Dict] = {}
+        for _em, _meta in data.email_addresses.items():
+            if "@" not in _em:
+                continue
+            _emails_map[_em] = {
+                "email":    _em,
+                "sources":  sorted(set(_meta.get("sources") or [])),
+                "severity": "INFO",
+            }
+        (reports_dir / "targets_osint.json").write_text(
+            json.dumps({
+                "domain":     data.domain,
+                "company":    data.company,
+                "generated":  datetime.datetime.now(datetime.UTC).isoformat(),
+                "subdomains": sorted(_subs_map.values(), key=lambda x: x["host"]),
+                "emails":     sorted(_emails_map.values(), key=lambda x: x["email"]),
+                "ips":        sorted(_ips_map.values(), key=lambda x: x["ip"]),
+            }, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        # ── findings_vantage.json ──────────────────────────────────────────────
+        _SKIP_SNAP = {
+            "subdomain", "subdomain_enum", "subdomain_discovery",
+            "email", "email_address", "ip", "ip_intel", "ip_address",
+            "dns_record", "whois", "technology", "crawled_url",
+            "primary_subdomain",
+        }
+        _SEV_SNAP = {"CRITICAL": "CRITICAL", "HIGH": "HIGH",
+                     "MEDIUM": "MEDIUM", "LOW": "LOW", "INFO": "INFO"}
+        snap_findings: List[Dict] = []
+        for _f in data.findings.all_findings():
+            if not isinstance(_f, dict):
+                continue
+            _ftype = (_f.get("type") or "").strip().lower()
+            if _ftype in _SKIP_SNAP:
+                continue
+            _detail    = (_f.get("detail") or "").strip()
+            _ftype_raw = (_f.get("type") or "").strip()
+            _category  = (_f.get("category") or "").strip()
+            if _detail:
+                _title = _detail[:120]
+            elif _ftype_raw:
+                _title = f"{_ftype_raw}: {_category}"
+            else:
+                continue
+            _tool_name = (_f.get("tool") or "").strip()
+            _val_tools = [v.get("tool", "") for v in (_f.get("validations") or []) if v.get("tool")]
+            snap_findings.append({
+                "title":       _title,
+                "datetime":    _f.get("timestamp") or "",
+                "ip":          (_f.get("ip") or "").strip(),
+                "port":        0,
+                "hostname":    (_f.get("host") or _f.get("domain") or "").strip(),
+                "risk":        _SEV_SNAP.get((_f.get("severity") or "info").upper(), "INFO"),
+                "command":     _f.get("raw_command") or f"osift:{_tool_name}",
+                "description": (_f.get("description") or _detail),
+                "output":      "",
+                "cves":        (_f.get("cve") or "").strip(),
+                "sources":     ",".join(sorted(set(s for s in ([_tool_name] + _val_tools) if s))),
+                "service":     "",
+                "output_file": _rel_output_file((_f.get("output_file") or "").strip(),
+                                              _project_dir if _project_dir else output_dir),
+                "affected":    (_f.get("affected") or "").strip(),
+                "_scope":      "osint",
+                "_tool":       "osift",
+                "_category":   _category,
+            })
+        (reports_dir / "findings_vantage.json").write_text(
+            json.dumps(snap_findings, indent=2, default=str),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # non-critical
+
+
+def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
+                          project_dir: Optional[Path] = None) -> Path:
+    """
+    Produce three artefacts:
+
+    1. reports/final_report.json   — full machine-readable report with all data
+    2. reports/findings_report.json — unified, deduplicated findings with
+                                      full tool provenance and validation records
+    3. reports/executive_summary.txt — human-readable text summary
+    """
+    log.set_tool_context("OSift")
+    log.info("[REPORT] Generating final correlated report")
+    data.end_time = datetime.datetime.now(datetime.UTC).isoformat()
+
+    # ── Email Address findings ─────────────────────────────────────────────────
+    # Split emails into in-scope (email @domain matches any target domain or
+    # subdomain thereof) and unknown (external domain).  Each bucket gets one
+    # grouped finding keyed to host=data.domain; all source tools become pills.
+    # Must run BEFORE all_findings snapshot so these are included in output.
+    _scope_domains_ef = set(data.domains if data.domains else [data.domain])
+
+    _inscope_emails: Dict[str, List[str]] = {}  # email_norm → [sources]
+    _unknown_emails: Dict[str, List[str]] = {}  # email_norm → [sources]
+
+    for _ea, _em in data.email_addresses.items():
+        if "@" not in _ea:
+            continue
+        _ea_norm = _ea.lower().strip()
+        _ea_dom  = _ea_norm.split("@", 1)[1]
+        _ea_srcs = [_s for _s in (_em.get("sources") or []) if _s]
+        if any(_ea_dom == _sd or _ea_dom.endswith("." + _sd) for _sd in _scope_domains_ef):
+            _inscope_emails[_ea_norm] = _ea_srcs
+        else:
+            _unknown_emails[_ea_norm] = _ea_srcs
+
+    def _emit_email_group_ef(bucket: Dict[str, List[str]], title: str, type_: str) -> None:
+        if not bucket:
+            return
+        _all_srcs: List[str] = []
+        for _srcs in bucket.values():
+            for _s in _srcs:
+                if _s not in _all_srcs:
+                    _all_srcs.append(_s)
+        if not _all_srcs:
+            _all_srcs = ["OSift"]
+        _affected_str = "\n".join(sorted(bucket.keys()))
+        add_finding(data, _all_srcs[0], type_, CAT_RECON, "INFO", title,
+                    host=data.domain, affected=_affected_str)
+        for _src in _all_srcs[1:]:
+            add_finding(data, _src, type_, CAT_RECON, "INFO", title,
+                        host=data.domain)
+
+    _emit_email_group_ef(_inscope_emails, "Email Address Identified",          "email_identified")
+    _emit_email_group_ef(_unknown_emails, "Email Address Identified (Unknown)", "email_identified_unknown")
+
+    # ── Unified findings report ────────────────────────────────────────────────
+    # Normalise output_file paths to be portable relative paths.
+    # When launched from Vantage with --project-dir, paths are stored relative
+    # to project_dir so the Vantage evidence viewer can resolve them directly
+    # against the project root.  In standalone mode, paths are relative to output_dir.
+    _path_base = project_dir if project_dir else (_project_dir if _project_dir else output_dir)
+    _raw_findings = data.findings.all_findings()
+    all_findings: List[Dict] = []
+    for _fraw in _raw_findings:
+        _of = (_fraw.get("output_file") or "").strip()
+        if _of:
+            _fc = dict(_fraw)
+            _fc["output_file"] = ",".join(
+                _rel_path(p.strip(), _path_base)
+                for p in _of.split(",") if p.strip()
+            )
+            all_findings.append(_fc)
+        else:
+            all_findings.append(_fraw)
+
+    finding_stats = data.findings.stats()
+    tools_info    = TOOL_REGISTRY.all_tools()
+
+    findings_report = {
+        "meta": {
+            "report_type":    "OSift Unified Findings Report",
+            "osift_version":  VERSION,
+            "platform":       SYSTEM,
+            "company":        data.company,
+            "domain":         data.domain,
+            "generated_at":   data.end_time,
+            "scan_started":   data.start_time,
+            "scan_ended":     data.end_time,
+        },
+        "tools_run": tools_info,
+        "statistics": {
+            **finding_stats,
+            "subdomains":       len(data.subdomains),
+            "ip_addresses":     len(data.ip_addresses),
+            "email_addresses":  len(data.email_addresses),
+            "employees":        len(data.employees),
+            "certificates":     len(data.certificates),
+            "crawled_urls":     len(data.crawled_urls),
+            "breach_records":   len(data.breach_data),
+            "asn_blocks":       sum(len(v.get("cidrs", [])) for v in data.asn_info.values()),
+        },
+        "findings_by_severity": data.findings.by_severity(),
+        "findings_by_category": data.findings.by_category(),
+        "all_findings":         all_findings,
+        "breach_data":          data.breach_data,
+    }
+
+    findings_path = output_dir / "reports" / "findings_report.json"
+    findings_path.write_text(
+        json.dumps(findings_report, indent=2, default=str), encoding="utf-8"
+    )
+
+    # ── Full data report ───────────────────────────────────────────────────────
+    full_report = {
+        "meta": {
+            "tool":       "OSift",
+            "version":    VERSION,
+            "platform":   SYSTEM,
+            "company":    data.company,
+            "domain":     data.domain,
+            "start_time": data.start_time,
+            "end_time":   data.end_time,
+            "tools_run":  tools_info,
+        },
+        "summary": {
+            "subdomains_found":       len(data.subdomains),
+            "ip_addresses_found":     len(data.ip_addresses),
+            "email_addresses_found":  len(data.email_addresses),
+            "employees_found":        len(data.employees),
+            "certificates_collected": len(data.certificates),
+            "physical_addresses":     len(data.physical_addresses),
+            "associated_companies":   len(data.associated_companies),
+            "associated_domains":     len(data.associated_domains),
+            "crawled_urls":           len(data.crawled_urls),
+            "sensitive_findings":     len(all_findings),
+            "validated_findings":     data.findings.validated_count(),
+            "breach_records":         len(data.breach_data),
+            "phone_numbers":          len(data.phone_numbers),
+            "dns_record_types":       list(data.dns_records.get(data.domain, {}).keys()),
+            "finding_stats":          finding_stats,
+        },
+        "dns": {
+            "records":        data.dns_records,
+            "zone_transfers": data.zone_transfers,
+            "subdomains":     data.subdomains,
+        },
+        "network": {
+            "ip_addresses": data.ip_addresses,
+            "asn_info":     data.asn_info,
+            "open_ports":   data.open_ports,
+        },
+        "certificates": data.certificates,
+        "email_intelligence": {
+            "addresses":     data.email_addresses,
+            "employees":     data.employees,
+            "phone_numbers": data.phone_numbers,
+        },
+        "company_intelligence": {
+            "physical_addresses":    data.physical_addresses,
+            "associated_companies":  data.associated_companies,
+            "associated_domains":    data.associated_domains,
+            "whois":                 data.whois_data,
+        },
+        "web_intelligence": {
+            "crawled_urls":  data.crawled_urls,
+            "technologies":  data.technologies,
+        },
+        "findings":          all_findings,
+        "breach_intelligence": data.breach_data,
+        "errors":            data.errors,
+    }
+
+    report_path = output_dir / "reports" / "final_report.json"
+    report_path.write_text(json.dumps(full_report, indent=2, default=str), encoding="utf-8")
+
+    # ── Plain-text executive summary ───────────────────────────────────────────
+    sep  = "=" * 72
+    dash = "-" * 72
+
+    def _sev_badge(sev: str) -> str:
+        return {"critical": "[CRITICAL]", "high": "[HIGH]    ",
+                "medium":   "[MEDIUM]  ", "low":  "[LOW]     ",
+                "info":     "[INFO]    "}.get(sev.lower(), f"[{sev.upper():<8}]")
+
+    lines: List[str] = [
+        sep,
+        f"  OSIFT RECONNAISSANCE REPORT",
+        f"  {data.company.upper()} — {data.domain}",
+        sep,
+        f"  Generated    : {data.end_time}",
+        f"  Scan started : {data.start_time}",
+        f"  Platform     : {SYSTEM}",
+        f"  OSift version: {VERSION}",
+        "",
+        dash,
+        "  TOOLS RUN",
+        dash,
+    ]
+    for tname, tinfo in sorted(tools_info.items()):
+        lines.append(
+            f"  {tname:<30} v{tinfo['version']:<20} "
+            f"(registered {tinfo.get('queried_at','')[:19]})"
+        )
+
+    lines += [
+        "",
+        dash,
+        "  RECONNAISSANCE SUMMARY",
+        dash,
+    ]
+    s = full_report["summary"]
+    for label, key in [
+        ("Subdomains",              "subdomains_found"),
+        ("IP Addresses",            "ip_addresses_found"),
+        ("Email Addresses",         "email_addresses_found"),
+        ("Employees",               "employees_found"),
+        ("Certificates",            "certificates_collected"),
+        ("Physical Addresses",      "physical_addresses"),
+        ("Associated Domains",      "associated_domains"),
+        ("Associated Companies",    "associated_companies"),
+        ("Crawled URLs",            "crawled_urls"),
+        ("Breach Records",          "breach_records"),
+    ]:
+        lines.append(f"  {label:<28}: {s[key]}")
+
+    lines += [
+        "",
+        dash,
+        "  FINDINGS OVERVIEW",
+        dash,
+        f"  Total unique findings : {finding_stats['total']}",
+        f"  Multi-tool validated  : {finding_stats['validated']}",
+        f"  (a validated finding was independently confirmed by 2+ tools)",
+        "",
+        "  By severity:",
+    ]
+    for sev in ["critical", "high", "medium", "low", "info"]:
+        cnt = finding_stats["by_severity"].get(sev, 0)
+        if cnt:
+            lines.append(f"    {_sev_badge(sev)} {cnt:>5} findings")
+
+    lines += ["", "  By category:"]
+    for cat, cnt in sorted(finding_stats["by_category"].items(), key=lambda x: -x[1]):
+        lines.append(f"    {cat:<36}: {cnt}")
+
+    lines += ["", "  By tool:"]
+    for tool, cnt in sorted(finding_stats["by_tool"].items(), key=lambda x: -x[1]):
+        ver = TOOL_REGISTRY.get_version(tool)
+        lines.append(f"    {tool:<30} v{ver:<16}: {cnt} finding(s)")
+
+    # ── Critical / High findings detail ───────────────────────────────────────
+    high_findings = [
+        f for f in all_findings
+        if f.get("severity", "info") in ("critical", "high")
+    ]
+    if high_findings:
+        lines += ["", dash, "  CRITICAL & HIGH SEVERITY FINDINGS", dash]
+        for f in high_findings[:50]:    # cap at 50 for readability
+            ts        = f.get("timestamp", "")[:19]
+            tool      = f.get("tool", "?")
+            ver       = f.get("tool_version", "?")
+            sev       = _sev_badge(f.get("severity", "info"))
+            fid       = f.get("finding_id", "")[:8]
+            validated = f" [+{len(f['validations'])} validation(s)]" if f.get("validations") else ""
+            lines.append(
+                f"\n  {sev} [{fid}]{validated}"
+                f"\n    Category  : {f.get('category', '?')}"
+                f"\n    Type      : {f.get('type', '?')}"
+                f"\n    Detail    : {f.get('detail', '')}"
+                f"\n    Tool      : {tool} v{ver}"
+                f"\n    Timestamp : {ts}"
+            )
+            if f.get("cve"):   lines.append(f"    CVE       : {f['cve']}")
+            if f.get("ip"):    lines.append(f"    IP        : {f['ip']}")
+            if f.get("host"):  lines.append(f"    Host      : {f['host']}")
+            if f.get("url"):   lines.append(f"    URL       : {f['url']}")
+            for v in f.get("validations", []):
+                lines.append(
+                    f"    ✓ Validated by {v['tool']} v{v['version']} at {v['timestamp'][:19]}"
+                )
+
+    # ── DNS security posture ───────────────────────────────────────────────────
+    dns_rec = data.dns_records.get(data.domain, {})
+    ss      = dns_rec.get("security_summary") if isinstance(dns_rec, dict) else None
+    if ss:
+        lines += ["", dash, "  DNS SECURITY POSTURE", dash]
+        def _tick(present: bool) -> str:
+            return "[OK]" if present else "[!!]"
+
+        # SPF
+        spf_policy = ss.get("spf_policy", "absent")
+        lines.append(
+            f"  {_tick(ss.get('spf_present'))} SPF    : "
+            + (f"present — policy: {spf_policy}" if ss.get("spf_present")
+               else "ABSENT — domain is spoofable via email")
+        )
+
+        # DMARC
+        dmarc_policy = ss.get("dmarc_policy", "absent")
+        lines.append(
+            f"  {_tick(ss.get('dmarc_present'))} DMARC  : "
+            + (f"present — p={dmarc_policy}" if ss.get("dmarc_present")
+               else "ABSENT — no enforcement policy for SPF/DKIM failures")
+        )
+
+        # DKIM
+        sels = ss.get("dkim_selectors", [])
+        lines.append(
+            f"  {_tick(bool(sels))} DKIM   : "
+            + (f"selectors: {', '.join(sels)}" if sels
+               else "no selectors found across common names")
+        )
+
+        # CAA
+        caa_issuers = ss.get("caa_issuers", [])
+        lines.append(
+            f"  {_tick(ss.get('caa_present'))} CAA    : "
+            + (f"present — issuers: {', '.join(caa_issuers) or 'none listed'}"
+               if ss.get("caa_present")
+               else "ABSENT — any CA can issue certs for this domain")
+        )
+
+        # DNSSEC
+        dnssec_info = dns_rec.get("DNSSEC", {})
+        has_dnskey  = dnssec_info.get("dnskey_present", False)
+        has_ds      = dnssec_info.get("ds_present", False)
+        lines.append(
+            f"  {_tick(ss.get('dnssec_signed'))} DNSSEC : "
+            + (f"signed (DNSKEY: {'yes' if has_dnskey else 'no'}, "
+               f"DS: {'yes' if has_ds else 'no'})"
+               if ss.get("dnssec_signed")
+               else "NOT SIGNED — DNS responses may be forged")
+        )
+
+        # MTA-STS
+        lines.append(
+            f"  {_tick(ss.get('mta_sts'))} MTA-STS: "
+            + ("present" if ss.get("mta_sts")
+               else "absent — inbound SMTP TLS not enforced")
+        )
+
+        # TLS-RPT
+        lines.append(
+            f"  {_tick(ss.get('tls_rpt'))} TLS-RPT: "
+            + ("present" if ss.get("tls_rpt")
+               else "absent — no TLS failure reporting")
+        )
+
+        # BIMI
+        if ss.get("bimi_present"):
+            lines.append("  [OK] BIMI   : present")
+
+        # MX servers
+        mx_recs = dns_rec.get("MX", [])
+        if mx_recs:
+            lines += ["", f"  MX records ({len(mx_recs)}):"]
+            for mx in sorted(mx_recs, key=lambda r: r.get("priority", 0)
+                             if isinstance(r, dict) else 0):
+                if isinstance(mx, dict):
+                    lines.append(
+                        f"    {mx.get('priority', '?'):>4}  {mx.get('exchange', mx.get('raw', '?'))}"
+                    )
+
+        # NS servers
+        ns_recs = dns_rec.get("NS", [])
+        if ns_recs:
+            lines += ["", f"  NS records ({len(ns_recs)}):"]
+            for ns in ns_recs:
+                if isinstance(ns, dict):
+                    lines.append(f"    {ns.get('nameserver', ns.get('raw', '?'))}")
+
+        # CAA details
+        caa_recs = dns_rec.get("CAA", [])
+        if caa_recs:
+            lines += ["", f"  CAA records ({len(caa_recs)}):"]
+            for caa in caa_recs:
+                if isinstance(caa, dict):
+                    lines.append(
+                        f"    {caa.get('flags','?')} {caa.get('tag','?'):<12} "
+                        f"{caa.get('value','?')}"
+                    )
+
+        # SRV services found
+        srv_svc = dns_rec.get("SRV_SERVICES", [])
+        if srv_svc:
+            unique_svcs = sorted({r.get("service","?") for r in srv_svc
+                                  if isinstance(r, dict)})
+            lines += ["", f"  SRV services found ({len(unique_svcs)}):"]
+            for svc in unique_svcs:
+                svc_recs = [r for r in srv_svc
+                            if isinstance(r, dict) and r.get("service") == svc]
+                for r in svc_recs:
+                    lines.append(
+                        f"    {svc:<30} port {r.get('port','?'):<6} "
+                        f"-> {r.get('target','?')}"
+                    )
+
+        # TLSA records
+        tlsa_recs = dns_rec.get("TLSA", [])
+        if tlsa_recs:
+            lines += ["", f"  TLSA (DANE) records ({len(tlsa_recs)}):"]
+            for t in tlsa_recs:
+                if isinstance(t, dict):
+                    lines.append(
+                        f"    usage={t.get('usage','?')} selector={t.get('selector','?')} "
+                        f"matching={t.get('matching','?')}"
+                    )
+
+    # ── Subdomain table ────────────────────────────────────────────────────────
+    if data.subdomains:
+        lines += ["", dash, "  SUBDOMAINS", dash]
+        lines.append(f"  {'FQDN':<52} {'IPs':<22} SOURCES")
+        lines.append(f"  {'-'*50} {'-'*20} -------")
+        for sub in sorted(data.subdomains.keys()):
+            rec  = data.subdomains[sub]
+            ips  = ", ".join(rec.get("ips", []))[:20]
+            srcs = ", ".join(rec.get("sources", []))
+            lines.append(f"  {sub:<52} {ips:<22} {srcs}")
+
+    # ── Email addresses ────────────────────────────────────────────────────────
+    if data.email_addresses:
+        lines += ["", dash, "  EMAIL ADDRESSES", dash]
+        for email in sorted(data.email_addresses.keys()):
+            rec    = data.email_addresses[email]
+            breach = "  [BREACHED]" if rec.get("breach") else ""
+            name   = (f" — {rec.get('first_name','')} {rec.get('last_name','')}").strip(" —")
+            lines.append(f"  {email}{breach}{name}")
+
+    # ── Breach summary ─────────────────────────────────────────────────────────
+    if data.breach_data:
+        lines += ["", dash, "  CREDENTIAL BREACHES", dash]
+        for b in data.breach_data[:30]:
+            email   = b.get("email", "?")
+            sources = ", ".join(b.get("breach_sources", [b.get("breach_name", "?")]))
+            tool    = b.get("source", "?")
+            ts      = b.get("timestamp", "")[:19]
+            lines.append(f"  {email:<40} {sources:<30} [{tool} {ts}]")
+
+    lines += ["", sep, "  END OF REPORT", sep]
+    summary_path = output_dir / "reports" / "executive_summary.txt"
+
+    # ── Build email lists (needed by both email files and summary) ────────────
+    primary_domain = data.domain.lower().strip()
+    emails_primary = sorted(
+        e for e in data.email_addresses
+        if e.lower().endswith("@" + primary_domain)
+    )
+    emails_other = sorted(
+        e for e in data.email_addresses
+        if not e.lower().endswith("@" + primary_domain)
+    )
+    ep_path = output_dir / "reports" / "emails_primary.txt"
+    eo_path = output_dir / "reports" / "emails_other.txt"
+
+    # ── Build subdomain list ──────────────────────────────────────────────────
+    primary_suffix = "." + primary_domain
+    target_subdomains = sorted(
+        fqdn for fqdn in data.subdomains
+        if fqdn.lower().endswith(primary_suffix)
+        or fqdn.lower() == primary_domain
+    )
+    sub_path = output_dir / "reports" / "subdomains.txt"
+
+    # ── Write independent flat files concurrently ────────────────────────────
+    # summary, emails_primary, emails_other, and subdomains.txt are independent
+    # of each other and of the subdomain probe — run them in parallel.
+    def _write_summary():
+        summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _write_ep():
+        ep_path.write_text(
+            "\n".join(emails_primary) + ("\n" if emails_primary else ""),
+            encoding="utf-8",
+        )
+
+    def _write_eo():
+        eo_path.write_text(
+            "\n".join(emails_other) + ("\n" if emails_other else ""),
+            encoding="utf-8",
+        )
+
+    def _write_sub():
+        sub_path.write_text(
+            "\n".join(target_subdomains) + ("\n" if target_subdomains else ""),
+            encoding="utf-8",
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _rpool:
+        _rfuts = [
+            _rpool.submit(_write_summary),
+            _rpool.submit(_write_ep),
+            _rpool.submit(_write_eo),
+            _rpool.submit(_write_sub),
+        ]
+        for _rf in concurrent.futures.as_completed(_rfuts):
+            _rf.result()   # re-raise any write exception immediately
+
+    # ── subdomains_confirmed.csv — DNS + HTTP/HTTPS probe each primary subdomain ─
+    confirmed_path, confirmed_rows = confirm_and_write_subdomains(
+        target_subdomains, output_dir, log
+    )
+    # Back-propagate HTTP redirect_to into data.subdomains for targets_osint.json
+    for _cr in confirmed_rows:
+        _cr_fqdn  = _cr.get("subdomain", "")
+        _cr_redir = _cr.get("redirect_to", "")
+        if _cr_fqdn and _cr_redir and _cr_fqdn in data.subdomains:
+            data.subdomains[_cr_fqdn]["redirect_to"] = _cr_redir
+
+    # ── phone_numbers.csv ─────────────────────────────────────────────────────
+    # Pull phone data from IntelAggregator's output if available, otherwise fall
+    # back to raw phone_numbers list so the file is always produced.
+    _agg_phones = getattr(data, "_aggregated_phones", None)
+
+    _phone_rows: List[Dict] = []
+    if _agg_phones:
+        for rec in _agg_phones.get("valid", []):
+            _phone_rows.append({**rec, "valid": True})
+        for rec in _agg_phones.get("invalid", []):
+            _phone_rows.append({**rec, "valid": False})
+    else:
+        for raw in sorted(set(data.phone_numbers)):
+            result = PhoneValidator.validate(raw)
+            _phone_rows.append(result)
+
+    _PHONE_COLS = [
+        "raw", "valid", "reason",
+        "format_type", "e164", "normalized",
+        "area_code", "country", "region", "location",
+        "source",
+        # external validation sub-fields (flattened)
+        "ext_queried", "ext_valid", "ext_service",
+        "ext_carrier", "ext_line_type", "ext_reason",
+    ]
+    def _flatten_phone(rec: Dict) -> Dict:
+        """Flatten external_validation sub-dict into ext_* columns."""
+        out = {col: "" for col in _PHONE_COLS}
+        for col in _PHONE_COLS:
+            if col in rec:
+                out[col] = rec[col]
+        ext = rec.get("external_validation") or {}
+        out["ext_queried"]   = ext.get("queried",   "")
+        out["ext_valid"]     = ext.get("valid",      "")
+        out["ext_service"]   = ext.get("service",    "")
+        out["ext_carrier"]   = ext.get("carrier",    "")
+        out["ext_line_type"] = ext.get("line_type",  "")
+        out["ext_reason"]    = ext.get("reason",     "")
+        return out
+
+    phones_path = output_dir / "reports" / "phone_numbers.csv"
+    with open(phones_path, "w", newline="", encoding="utf-8") as _pfh:
+        _pw = csv.DictWriter(_pfh, fieldnames=_PHONE_COLS, extrasaction="ignore")
+        _pw.writeheader()
+        _pw.writerows(_flatten_phone(r) for r in _phone_rows)
+
+    # ── findings.csv ──────────────────────────────────────────────────────────
+    # Flatten FindingStore into a tabular CSV.  All optional fields that may be
+    # absent on any given finding are included as empty strings.
+    _FINDING_COLS = [
+        "finding_id", "type", "category", "severity", "detail",
+        "tool", "tool_version", "timestamp",
+        "cve", "ip", "host", "url", "email", "domain",
+        "phone_e164", "phone_raw", "area_code", "location",
+        "country", "region", "phone_source",
+        "validated_by",         # pipe-separated list of validating tool names
+        "validation_count",
+    ]
+    def _flatten_finding(f: Dict) -> Dict:
+        out = {col: "" for col in _FINDING_COLS}
+        for col in _FINDING_COLS:
+            if col in f:
+                out[col] = f[col]
+        validations = f.get("validations", [])
+        out["validation_count"] = len(validations)
+        out["validated_by"]     = " | ".join(v.get("tool", "") for v in validations)
+        return out
+
+    # Exclude sensitive_data findings from findings.csv — they are voluminous
+    # pattern-match hits (API keys, passwords, connection strings, etc.) that
+    # belong in the per-category JSONL files produced by aggregate_sensitive_data,
+    # not in the high-level findings table.  Both WebCrawler and katana use
+    # type="sensitive_data" regardless of the specific pattern category name.
+    _csv_findings = [
+        f for f in all_findings
+        if f.get("type") != "sensitive_data"
+    ]
+
+    findings_csv_path = output_dir / "reports" / "findings.csv"
+    with open(findings_csv_path, "w", newline="", encoding="utf-8") as _ffh:
+        _fw = csv.DictWriter(_ffh, fieldnames=_FINDING_COLS, extrasaction="ignore")
+        _fw.writeheader()
+        _fw.writerows(_flatten_finding(f) for f in _csv_findings)
+
+    # ── Primary subdomain findings — only confirmed (IP or HTTP response) ─────
+    # Build the same inclusion set used for subdomains_confirmed.csv and add one
+    # FindingStore entry per confirmed primary subdomain.  Secondary subdomains
+    # and all secondary domains are excluded from findings.csv.
+    _NO_RESP_SET = {"NO_DNS", "TIMEOUT", "ERROR", "NXDOMAIN", "SSL_ERROR", ""}
+    _confirmed_fqdns: Set[str] = {
+        r["subdomain"] for r in confirmed_rows
+        if r.get("ip_address", "") not in ("NXDOMAIN", "ERROR", "")
+        or r.get("http_status",  "") not in _NO_RESP_SET
+        or r.get("https_status", "") not in _NO_RESP_SET
+    }
+    _sub_ts = datetime.datetime.now(datetime.UTC).isoformat()
+    for fqdn, meta in sorted(data.subdomains.items()):
+        if fqdn not in _confirmed_fqdns:
+            continue
+        sources = ", ".join(meta.get("sources", [])) or "unknown"
+        add_finding(
+            data, "OSift", "primary_subdomain", "Subdomain", "info",
+            f"Confirmed in-scope subdomain: {fqdn} (sources: {sources})",
+            host=fqdn, timestamp=_sub_ts,
+            ips=meta.get("ips", []), discovery_sources=meta.get("sources", []),
+            http_status=meta.get("http_status"),
+        )
+
+    # ── Subdomain probe count helpers ─────────────────────────────────────────
+    _NO_RESP = {"NO_DNS", "TIMEOUT", "ERROR", "NXDOMAIN", "SSL_ERROR", ""}
+    in_csv_count = sum(
+        1 for r in confirmed_rows
+        if r.get("ip_address", "") not in ("NXDOMAIN", "ERROR", "")
+        or r.get("http_status",  "") not in _NO_RESP
+        or r.get("https_status", "") not in _NO_RESP
+    )
+    # "live" = at least one status is 1xx-3xx
+    _LIVE_CODES = {str(c) for c in range(100, 400)}
+    confirmed_live = sum(
+        1 for r in confirmed_rows
+        if r.get("http_status",  "") in _LIVE_CODES
+        or r.get("https_status", "") in _LIVE_CODES
+    )
+
+    # ── findings_vantage.json — findings normalized to Vantage format ─────────
+    # Ports app.py's _normalize_osift_findings() logic so Vantage can read this
+    # file directly without performing its own transformation.
+    _SKIP_TYPES = {
+        "subdomain", "subdomain_enum", "subdomain_discovery",
+        "email", "email_address", "ip", "ip_intel", "ip_address",
+        "dns_record", "whois", "technology", "crawled_url",
+        "primary_subdomain",
+    }
+    _SEV_MAP = {"CRITICAL": "CRITICAL", "HIGH": "HIGH",
+                "MEDIUM": "MEDIUM", "LOW": "LOW", "INFO": "INFO"}
+    vantage_findings: List[Dict] = []
+    for _f in all_findings:
+        if not isinstance(_f, dict):
+            continue
+        _ftype = (_f.get("type") or "").strip().lower()
+        if _ftype in _SKIP_TYPES:
+            continue
+        _detail   = (_f.get("detail") or "").strip()
+        _ftype_raw = (_f.get("type") or "").strip()
+        _category = (_f.get("category") or "").strip()
+        if _detail:
+            _title = _detail[:120]
+        elif _ftype_raw:
+            _title = f"{_ftype_raw}: {_category}"
+        else:
+            continue
+        _severity  = (_f.get("severity") or "info").upper()
+        _risk      = _SEV_MAP.get(_severity, "INFO")
+        _tool_name = (_f.get("tool") or "").strip()
+        _val_tools = [v.get("tool", "") for v in (_f.get("validations") or []) if v.get("tool")]
+        _sources   = ",".join(sorted(set(s for s in ([_tool_name] + _val_tools) if s)))
+        _cve = (_f.get("cve") or "").strip()
+        if not _cve and _f.get("cves"):
+            _cl = _f["cves"]
+            _cve = ",".join(_cl) if isinstance(_cl, list) else str(_cl)
+        _ip       = (_f.get("ip") or "").strip()
+        _host     = (_f.get("host") or _f.get("domain") or "").strip()
+        _port     = 0
+        _url      = _f.get("url") or ""
+        _affected = (_f.get("affected") or "").strip()
+        # Only derive hostname from URL when the finding has no explicit host set.
+        # Without this guard the crawled URL's subdomain (e.g. crp.example.com) would
+        # overwrite the original target domain stored in host= (e.g. example.com).
+        if _url and not _ip and not _host:
+            import urllib.parse as _up
+            _p = _up.urlparse(_url)
+            if _p.hostname:
+                _host = _p.hostname
+            if _p.port:
+                _port = _p.port
+            elif _p.scheme == "https":
+                _port = 443
+            elif _p.scheme == "http":
+                _port = 80
+        elif _url:
+            import urllib.parse as _up
+            _p = _up.urlparse(_url)
+            if _p.port:
+                _port = _p.port
+            elif _p.scheme == "https":
+                _port = 443
+            elif _p.scheme == "http":
+                _port = 80
+        vantage_findings.append({
+            "title":       _title,
+            "datetime":    _f.get("timestamp") or "",
+            "ip":          _ip,
+            "port":        _port,
+            "hostname":    _host,
+            "risk":        _risk,
+            "command":     f"osift:{_tool_name}",
+            "description": _detail,
+            "output":      "",
+            "cves":        _cve,
+            "sources":     _sources,
+            "service":     "",
+            "output_file": (_f.get("output_file") or "").strip(),
+            "affected":    _affected,
+            "_scope":      "osint",
+            "_tool":       "osift",
+            "_category":   _category,
+        })
+    fv_path = output_dir / "reports" / "findings_vantage.json"
+    fv_path.write_text(
+        json.dumps(vantage_findings, indent=2, default=str), encoding="utf-8"
+    )
+
+    # ── targets_osint.json — OSINT asset aggregation in Vantage format ─────────
+    # Ports app.py's /api/targets OSINT section so Vantage can read directly.
+    _SUB_TYPES_V   = {"subdomain", "subdomain_enum", "subdomain_discovery", "primary_subdomain"}
+    _EMAIL_TYPES_V = {"email", "email_address", "credential_email"}
+    _IP_TYPES_V    = {"ip", "ip_intel", "ip_address", "ip_info", "ip_reputation"}
+
+    _subs_map:   Dict[str, Dict] = {}
+    _emails_map: Dict[str, Dict] = {}
+    _ips_map:    Dict[str, Dict] = {}
+
+    for _f in all_findings:
+        if not isinstance(_f, dict):
+            continue
+        _ftype_v  = (_f.get("type") or "").lower().strip()
+        _sev_v    = (_f.get("severity") or "info").upper()
+        if _sev_v not in _SEV_MAP:
+            _sev_v = "INFO"
+        _tool_v = (_f.get("tool") or "").strip()
+        _ts_v   = _f.get("timestamp") or ""
+
+        if _ftype_v in _SUB_TYPES_V:
+            _host_v = (_f.get("host") or _f.get("detail") or "").strip()
+            if _host_v:
+                if _host_v not in _subs_map:
+                    _subs_map[_host_v] = {
+                        "host":         _host_v,
+                        "ip":           (_f.get("ip") or "").strip(),
+                        "sources":      [],
+                        "first_seen":   _ts_v,
+                        "severity":     _sev_v,
+                        "http_status":  _f.get("http_status"),
+                        "redirects_to": [],
+                    }
+                if _tool_v and _tool_v not in _subs_map[_host_v]["sources"]:
+                    _subs_map[_host_v]["sources"].append(_tool_v)
+                if _f.get("ip") and not _subs_map[_host_v]["ip"]:
+                    _subs_map[_host_v]["ip"] = (_f["ip"] or "").strip()
+                if _f.get("http_status") and not _subs_map[_host_v].get("http_status"):
+                    _subs_map[_host_v]["http_status"] = _f["http_status"]
+
+        elif (_ftype_v == "dns records"
+              and (_f.get("detail") or "").strip() == "DNS: A Record Found (Redirect)"):
+            # Extract FQDN from affected "fqdn - target" and store redirect targets
+            _aff_v = (_f.get("affected") or "").strip()
+            _redir_fqdn = _aff_v.split(" - ", 1)[0].strip() if _aff_v else ""
+            _redir_str  = (_f.get("redirects_to") or "").strip()
+            _redir_list = [t.strip() for t in _redir_str.split(",") if t.strip()]
+            if _redir_fqdn:
+                if _redir_fqdn not in _subs_map:
+                    _subs_map[_redir_fqdn] = {
+                        "host":         _redir_fqdn,
+                        "ip":           "",
+                        "sources":      [_tool_v] if _tool_v else [],
+                        "first_seen":   _ts_v,
+                        "severity":     "INFO",
+                        "http_status":  None,
+                        "redirects_to": _redir_list,
+                    }
+                elif _redir_list and not _subs_map[_redir_fqdn].get("redirects_to"):
+                    _subs_map[_redir_fqdn]["redirects_to"] = _redir_list
+
+        elif _ftype_v in _EMAIL_TYPES_V:
+            _email_v = (_f.get("email") or _f.get("detail") or "").strip()
+            if _email_v and "@" in _email_v:
+                if _email_v not in _emails_map:
+                    _email_dom_v = _email_v.split("@", 1)[1].lower()
+                    _em_meta_v   = (data.email_addresses.get(_email_v)
+                                    or data.email_addresses.get(_email_v.lower()) or {})
+                    _emails_map[_email_v] = {
+                        "email":     _email_v,
+                        "sources":   [],
+                        "severity":  _sev_v,
+                        "in_scope":  any(_email_dom_v == _sd or _email_dom_v.endswith("." + _sd)
+                                         for _sd in _scope_domains_ef),
+                        "confirmed": (_em_meta_v.get("verified_status", "") in ("deliverable", "valid")
+                                      or bool(_em_meta_v.get("breach"))),
+                    }
+                if _tool_v and _tool_v not in _emails_map[_email_v]["sources"]:
+                    _emails_map[_email_v]["sources"].append(_tool_v)
+
+        elif _ftype_v in _IP_TYPES_V:
+            _ext_ip = (_f.get("ip") or _f.get("detail") or "").strip()
+            if _ext_ip:
+                if _ext_ip not in _ips_map:
+                    _ips_map[_ext_ip] = {
+                        "ip":         _ext_ip,
+                        "fqdns":      [],
+                        "host":       (_f.get("host") or _f.get("domain") or "").strip(),
+                        "sources":    [],
+                        "first_seen": _ts_v,
+                        "severity":   _sev_v,
+                    }
+                if _tool_v and _tool_v not in _ips_map[_ext_ip]["sources"]:
+                    _ips_map[_ext_ip]["sources"].append(_tool_v)
+
+    # Build reverse-lookup: fqdn → [ips] so subdomains discovered via
+    # ip_addresses["fqdns"] (Shodan/OTX) also get an IP in the Subdomains table.
+    _fqdn_to_ips_fr: Dict[str, List[str]] = {}
+    for _ip_fr, _ip_mfr in data.ip_addresses.items():
+        for _fqdn_fr in (_ip_mfr.get("fqdns") or []):
+            if _fqdn_fr:
+                _fqdn_to_ips_fr.setdefault(_fqdn_fr, []).append(_ip_fr)
+
+    # Also pull directly from data.subdomains (authoritative — already deduplicated)
+    for _sub_fqdn, _sub_meta in data.subdomains.items():
+        _sub_redirs  = _sub_meta.get("redirects_to") or []
+        _sub_redir   = _sub_meta.get("redirect_to", "")
+        if _sub_fqdn not in _subs_map:
+            _sub_srcs = _sub_meta.get("sources") or []
+            _sub_ips  = list(_sub_meta.get("ips") or [])
+            for _rip in _fqdn_to_ips_fr.get(_sub_fqdn, []):
+                if _rip not in _sub_ips:
+                    _sub_ips.append(_rip)
+            _subs_map[_sub_fqdn] = {
+                "host":         _sub_fqdn,
+                "ip":           _sub_ips[0] if _sub_ips else "",
+                "sources":      sorted(set(_sub_srcs)),
+                "first_seen":   "",
+                "severity":     "INFO",
+                "http_status":  _sub_meta.get("http_status"),
+                "redirects_to": _sub_redirs,
+                "redirect_to":  _sub_redir,
+            }
+        else:
+            if _sub_redirs and not _subs_map[_sub_fqdn].get("redirects_to"):
+                _subs_map[_sub_fqdn]["redirects_to"] = _sub_redirs
+            if _sub_redir and not _subs_map[_sub_fqdn].get("redirect_to"):
+                _subs_map[_sub_fqdn]["redirect_to"] = _sub_redir
+
+    # Pull from data.ip_addresses — build enriched structure with fqdns list
+    for _ip_key, _ip_meta in data.ip_addresses.items():
+        _fqdns_set_gr: Dict[str, List[int]] = {}
+        for _fqdn_r in (_ip_meta.get("fqdns") or []):
+            if _fqdn_r:
+                _fqdns_set_gr[_fqdn_r] = []
+        for _sub_k, _sub_v in data.subdomains.items():
+            if _ip_key in (_sub_v.get("ips") or []) and _sub_k not in _fqdns_set_gr:
+                _fqdns_set_gr[_sub_k] = []
+        for _fqdn_r in list(_fqdns_set_gr.keys()):
+            _sub_rec_r = data.subdomains.get(_fqdn_r)
+            if _sub_rec_r:
+                _fqdns_set_gr[_fqdn_r] = sorted(set(_sub_rec_r.get("ports") or []))
+        _ip_srcs_r: List[str] = []
+        for _s_r in (_ip_meta.get("sources") or []):
+            if _s_r and _s_r not in _ip_srcs_r:
+                _ip_srcs_r.append(_s_r)
+        _ctx_r = _ip_meta.get("context") or ""
+        if _ctx_r and _ctx_r not in _ip_srcs_r:
+            _ip_srcs_r.append(_ctx_r)
+        _ips_map[_ip_key] = {
+            "ip":         _ip_key,
+            "fqdns":      [{"fqdn": _f_r, "ports": _p_r} for _f_r, _p_r in sorted(_fqdns_set_gr.items())],
+            "sources":    sorted(set(_ip_srcs_r)),
+            "first_seen": _ip_meta.get("first_seen") or "",
+            "severity":   "INFO",
+            "host":       (list(_fqdns_set_gr.keys()) or [""])[0],
+        }
+
+    # Pull from data.email_addresses
+    for _em_key, _em_meta in data.email_addresses.items():
+        if "@" not in _em_key:
+            continue
+        _em_dom_v = _em_key.split("@", 1)[1].lower()
+        _em_inscope = any(_em_dom_v == _sd or _em_dom_v.endswith("." + _sd)
+                          for _sd in _scope_domains_ef)
+        _em_confirmed = (_em_meta.get("verified_status", "") in ("deliverable", "valid")
+                         or bool(_em_meta.get("breach")))
+        if _em_key not in _emails_map:
+            _emails_map[_em_key] = {
+                "email":     _em_key,
+                "sources":   sorted(set(_em_meta.get("sources") or [])),
+                "severity":  "INFO",
+                "in_scope":  _em_inscope,
+                "confirmed": _em_confirmed,
+            }
+        else:
+            # Enrich existing entry with confirmed/in_scope if not already set
+            _emails_map[_em_key].setdefault("in_scope",  _em_inscope)
+            _emails_map[_em_key].setdefault("confirmed", _em_confirmed)
+
+    osint_targets = {
+        "domain":     data.domain,
+        "company":    data.company,
+        "generated":  data.end_time,
+        "subdomains": sorted(_subs_map.values(),  key=lambda x: x["host"]),
+        "emails":     sorted(_emails_map.values(), key=lambda x: x["email"]),
+        "ips":        sorted(_ips_map.values(),    key=lambda x: x["ip"]),
+    }
+    to_path = output_dir / "reports" / "targets_osint.json"
+    to_path.write_text(
+        json.dumps(osint_targets, indent=2, default=str), encoding="utf-8"
+    )
+
+    # ── findings.xlsx — multi-sheet Excel workbook ─────────────────────────────
+    xl_path = None
+    if _OPENPYXL_AVAILABLE:
+        try:
+            _wb = _openpyxl.Workbook()
+            _wb.remove(_wb.active)
+
+            _hdr_fill = _XlFill("solid", fgColor="1F4E79")
+            _hdr_font = _XlFont(bold=True, color="FFFFFF")
+            _alt_fill = _XlFill("solid", fgColor="D6E4F0")
+
+            def _xl_sheet(wb, name: str, headers: list, rows: list):
+                ws = wb.create_sheet(title=name)
+                ws.append(headers)
+                for cell in ws[1]:
+                    cell.fill = _hdr_fill
+                    cell.font = _hdr_font
+                    cell.alignment = _XlAlign(horizontal="center", wrap_text=True)
+                for i, row in enumerate(rows, start=2):
+                    ws.append(row)
+                    if i % 2 == 0:
+                        for cell in ws[i]:
+                            cell.fill = _alt_fill
+                for col in ws.columns:
+                    max_len = 0
+                    col_letter = col[0].column_letter
+                    for cell in col:
+                        try:
+                            max_len = max(max_len, len(str(cell.value or "")))
+                        except Exception:
+                            pass
+                    ws.column_dimensions[col_letter].width = min(max_len + 2, 80)
+                return ws
+
+            # Sheet 1: Findings (Vantage-normalised)
+            _xl_sheet(
+                _wb, "Findings",
+                ["Title", "Risk", "IP", "Port", "Hostname", "Description",
+                 "Sources", "CVEs", "Command", "DateTime", "Category"],
+                [
+                    [f.get("title",""), f.get("risk",""), f.get("ip",""),
+                     f.get("port",""), f.get("hostname",""),
+                     f.get("description",""), f.get("sources",""),
+                     f.get("cves",""), f.get("command",""),
+                     f.get("datetime",""), f.get("_category","")]
+                    for f in vantage_findings
+                ],
+            )
+
+            # Sheet 2: Raw Findings (full FindingStore fields)
+            _xl_sheet(
+                _wb, "Raw Findings",
+                ["ID", "Type", "Category", "Severity", "Detail",
+                 "Tool", "Tool Version", "Timestamp",
+                 "CVE", "IP", "Host", "URL", "Email", "Domain",
+                 "Validated By", "Validation Count"],
+                [
+                    [f.get("finding_id",""), f.get("type",""), f.get("category",""),
+                     f.get("severity",""), f.get("detail",""),
+                     f.get("tool",""), f.get("tool_version",""), f.get("timestamp",""),
+                     f.get("cve",""), f.get("ip",""), f.get("host",""),
+                     f.get("url",""), f.get("email",""), f.get("domain",""),
+                     " | ".join(v.get("tool","") for v in (f.get("validations") or [])),
+                     len(f.get("validations") or [])]
+                    for f in _csv_findings
+                ],
+            )
+
+            # Sheet 3: Subdomains
+            _xl_sheet(
+                _wb, "Subdomains",
+                ["Subdomain", "IP", "Sources", "Severity", "First Seen"],
+                [
+                    [s.get("host",""), s.get("ip",""),
+                     ", ".join(s.get("sources") or []),
+                     s.get("severity",""), s.get("first_seen","")]
+                    for s in osint_targets.get("subdomains", [])
+                ],
+            )
+
+            # Sheet 4: Emails
+            _xl_sheet(
+                _wb, "Emails",
+                ["Email", "Sources", "Severity"],
+                [
+                    [e.get("email",""),
+                     ", ".join(e.get("sources") or []),
+                     e.get("severity","")]
+                    for e in osint_targets.get("emails", [])
+                ],
+            )
+
+            # Sheet 5: IP Addresses
+            _xl_sheet(
+                _wb, "IP Addresses",
+                ["IP", "Hostname", "Sources", "Severity", "First Seen"],
+                [
+                    [i.get("ip",""), i.get("host",""),
+                     ", ".join(i.get("sources") or []),
+                     i.get("severity",""), i.get("first_seen","")]
+                    for i in osint_targets.get("ips", [])
+                ],
+            )
+
+            # Sheet 6: Breach Data
+            _xl_sheet(
+                _wb, "Breach Data",
+                ["Email", "Source", "Date", "Description", "Severity"],
+                [
+                    [b.get("email","") or b.get("detail",""),
+                     b.get("source","") or b.get("tool",""),
+                     b.get("date","") or b.get("timestamp","")[:10] if b.get("timestamp") else "",
+                     b.get("description","") or b.get("detail",""),
+                     b.get("severity","")]
+                    for b in (data.breach_data or [])
+                ],
+            )
+
+            xl_path = output_dir / "reports" / "findings.xlsx"
+            _wb.save(str(xl_path))
+        except Exception as _xl_exc:
+            xl_path = None
+            log.warning(f"[REPORT] findings.xlsx generation failed: {_xl_exc}")
+
+    log.success(f"[REPORT] Full data report  : {report_path.name}")
+    log.success(f"[REPORT] Findings report   : {findings_path.name}")
+    log.success(f"[REPORT] Exec. summary     : {summary_path.name}")
+    log.success(f"[REPORT] Primary emails    : {ep_path.name}  ({len(emails_primary)} addresses)")
+    log.success(f"[REPORT] Other emails      : {eo_path.name}  ({len(emails_other)} addresses)")
+    log.success(f"[REPORT] Subdomains        : {sub_path.name}  ({len(target_subdomains)} entries)")
+    log.success(
+        f"[REPORT] Subdomain probes  : {confirmed_path.name}  "
+        f"({in_csv_count} in CSV, {confirmed_live} live 1xx-3xx)"
+    )
+    log.success(
+        f"[REPORT] Phone numbers     : {phones_path.name}  ({len(_phone_rows)} numbers)"
+    )
+    log.success(
+        f"[REPORT] Findings CSV      : {findings_csv_path.name}  ({len(_csv_findings)} findings, {len(all_findings) - len(_csv_findings)} sensitive-data excluded)"
+    )
+    log.success(
+        f"[REPORT] Findings Vantage  : {fv_path.name}  ({len(vantage_findings)} findings)"
+    )
+    log.success(
+        f"[REPORT] Targets OSINT     : {to_path.name}  "
+        f"({len(_subs_map)} subdomains, {len(_emails_map)} emails, {len(_ips_map)} IPs)"
+    )
+    if xl_path:
+        log.success(f"[REPORT] Excel workbook    : {xl_path.name}")
+    log.success(
+        f"[REPORT] {len(all_findings)} unique findings "
+        f"({data.findings.validated_count()} validated by 2+ tools)"
+    )
+
+    # ── tools_used.json ────────────────────────────────────────────────────────
+    try:
+        write_tools_snapshot(output_dir)
+        log.success(f"[REPORT] Tools used        : tools_used.json  ({len(TOOL_REGISTRY.all_tools())} tools)")
+    except Exception as _tu_exc:
+        log.warning(f"[REPORT] tools_used.json failed: {_tu_exc}")
+
+    return report_path
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 12 — INTEL AGGREGATION & CLASSIFICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Phone Validator ─────────────────────────────────────────────────────────
+
+# Full NANP (North American Numbering Plan) area code table.
+# Format: area_code (str) → {"location": str, "country": str, "region": str}
+# Covers all US states/territories, all Canadian provinces, and NANP Caribbean.
+_NANP_AREA_CODES: Dict[str, Dict[str, str]] = {
+    # ── United States ─────────────────────────────────────────────────────────
+    "201": {"location": "Jersey City, NJ",          "country": "US", "region": "New Jersey"},
+    "202": {"location": "Washington, DC",            "country": "US", "region": "District of Columbia"},
+    "203": {"location": "Bridgeport/New Haven, CT",  "country": "US", "region": "Connecticut"},
+    "205": {"location": "Birmingham, AL",            "country": "US", "region": "Alabama"},
+    "206": {"location": "Seattle, WA",               "country": "US", "region": "Washington"},
+    "207": {"location": "Maine",                     "country": "US", "region": "Maine"},
+    "208": {"location": "Idaho",                     "country": "US", "region": "Idaho"},
+    "209": {"location": "Stockton/Modesto, CA",      "country": "US", "region": "California"},
+    "210": {"location": "San Antonio, TX",           "country": "US", "region": "Texas"},
+    "212": {"location": "New York City (Manhattan)", "country": "US", "region": "New York"},
+    "213": {"location": "Los Angeles, CA",           "country": "US", "region": "California"},
+    "214": {"location": "Dallas, TX",                "country": "US", "region": "Texas"},
+    "215": {"location": "Philadelphia, PA",          "country": "US", "region": "Pennsylvania"},
+    "216": {"location": "Cleveland, OH",             "country": "US", "region": "Ohio"},
+    "217": {"location": "Springfield/Champaign, IL", "country": "US", "region": "Illinois"},
+    "218": {"location": "Duluth/Hibbing, MN",        "country": "US", "region": "Minnesota"},
+    "219": {"location": "Hammond/Gary, IN",          "country": "US", "region": "Indiana"},
+    "220": {"location": "Newark/Zanesville, OH",     "country": "US", "region": "Ohio"},
+    "223": {"location": "Harrisburg/Lancaster, PA",  "country": "US", "region": "Pennsylvania"},
+    "224": {"location": "Evanston/Waukegan, IL",     "country": "US", "region": "Illinois"},
+    "225": {"location": "Baton Rouge, LA",           "country": "US", "region": "Louisiana"},
+    "228": {"location": "Biloxi/Gulfport, MS",       "country": "US", "region": "Mississippi"},
+    "229": {"location": "Albany/Valdosta, GA",       "country": "US", "region": "Georgia"},
+    "231": {"location": "Traverse City/Muskegon, MI","country": "US", "region": "Michigan"},
+    "234": {"location": "Akron/Canton, OH",          "country": "US", "region": "Ohio"},
+    "239": {"location": "Naples/Ft. Myers, FL",      "country": "US", "region": "Florida"},
+    "240": {"location": "Bethesda/Gaithersburg, MD", "country": "US", "region": "Maryland"},
+    "248": {"location": "Pontiac/Auburn Hills, MI",  "country": "US", "region": "Michigan"},
+    "251": {"location": "Mobile, AL",                "country": "US", "region": "Alabama"},
+    "252": {"location": "Rocky Mount/Greenville, NC","country": "US", "region": "North Carolina"},
+    "253": {"location": "Tacoma, WA",                "country": "US", "region": "Washington"},
+    "254": {"location": "Waco/Killeen, TX",          "country": "US", "region": "Texas"},
+    "256": {"location": "Huntsville/Decatur, AL",    "country": "US", "region": "Alabama"},
+    "260": {"location": "Fort Wayne, IN",            "country": "US", "region": "Indiana"},
+    "262": {"location": "Racine/Kenosha, WI",        "country": "US", "region": "Wisconsin"},
+    "267": {"location": "Philadelphia (overlay), PA","country": "US", "region": "Pennsylvania"},
+    "269": {"location": "Kalamazoo/Battle Creek, MI","country": "US", "region": "Michigan"},
+    "270": {"location": "Bowling Green/Paducah, KY", "country": "US", "region": "Kentucky"},
+    "272": {"location": "Scranton/Wilkes-Barre, PA", "country": "US", "region": "Pennsylvania"},
+    "276": {"location": "Bristol/Martinsville, VA",  "country": "US", "region": "Virginia"},
+    "278": {"location": "Michigan (overlay)",        "country": "US", "region": "Michigan"},
+    "281": {"location": "Houston (suburbs), TX",     "country": "US", "region": "Texas"},
+    "283": {"location": "Cincinnati (overlay), OH",  "country": "US", "region": "Ohio"},
+    "301": {"location": "Bethesda/Rockville, MD",    "country": "US", "region": "Maryland"},
+    "302": {"location": "Delaware",                  "country": "US", "region": "Delaware"},
+    "303": {"location": "Denver/Boulder, CO",        "country": "US", "region": "Colorado"},
+    "304": {"location": "West Virginia",             "country": "US", "region": "West Virginia"},
+    "305": {"location": "Miami, FL",                 "country": "US", "region": "Florida"},
+    "307": {"location": "Wyoming",                   "country": "US", "region": "Wyoming"},
+    "308": {"location": "Grand Island/Kearney, NE",  "country": "US", "region": "Nebraska"},
+    "309": {"location": "Peoria/Rock Island, IL",    "country": "US", "region": "Illinois"},
+    "310": {"location": "Santa Monica/Malibu, CA",   "country": "US", "region": "California"},
+    "312": {"location": "Chicago (downtown), IL",    "country": "US", "region": "Illinois"},
+    "313": {"location": "Detroit, MI",               "country": "US", "region": "Michigan"},
+    "314": {"location": "St. Louis, MO",             "country": "US", "region": "Missouri"},
+    "315": {"location": "Syracuse/Utica, NY",        "country": "US", "region": "New York"},
+    "316": {"location": "Wichita, KS",               "country": "US", "region": "Kansas"},
+    "317": {"location": "Indianapolis, IN",          "country": "US", "region": "Indiana"},
+    "318": {"location": "Shreveport/Monroe, LA",     "country": "US", "region": "Louisiana"},
+    "319": {"location": "Cedar Rapids/Iowa City, IA","country": "US", "region": "Iowa"},
+    "320": {"location": "St. Cloud/Alexandria, MN",  "country": "US", "region": "Minnesota"},
+    "321": {"location": "Orlando/Space Coast, FL",   "country": "US", "region": "Florida"},
+    "323": {"location": "Los Angeles (E), CA",       "country": "US", "region": "California"},
+    "325": {"location": "Abilene/San Angelo, TX",    "country": "US", "region": "Texas"},
+    "326": {"location": "Dayton (overlay), OH",      "country": "US", "region": "Ohio"},
+    "330": {"location": "Youngstown/Akron, OH",      "country": "US", "region": "Ohio"},
+    "331": {"location": "Aurora/Naperville, IL",     "country": "US", "region": "Illinois"},
+    "332": {"location": "New York City (overlay)",   "country": "US", "region": "New York"},
+    "334": {"location": "Montgomery/Dothan, AL",     "country": "US", "region": "Alabama"},
+    "336": {"location": "Greensboro/Winston-Salem, NC","country":"US","region": "North Carolina"},
+    "337": {"location": "Lafayette/Lake Charles, LA","country": "US", "region": "Louisiana"},
+    "339": {"location": "Boston suburbs (overlay), MA","country":"US","region": "Massachusetts"},
+    "340": {"location": "US Virgin Islands",         "country": "US", "region": "US Virgin Islands"},
+    "341": {"location": "Oakland/Fremont, CA",       "country": "US", "region": "California"},
+    "346": {"location": "Houston (overlay), TX",     "country": "US", "region": "Texas"},
+    "347": {"location": "New York City (overlay)",   "country": "US", "region": "New York"},
+    "351": {"location": "Lowell/Lawrence, MA",       "country": "US", "region": "Massachusetts"},
+    "352": {"location": "Gainesville/Ocala, FL",     "country": "US", "region": "Florida"},
+    "360": {"location": "Olympia/Bellingham, WA",    "country": "US", "region": "Washington"},
+    "361": {"location": "Corpus Christi, TX",        "country": "US", "region": "Texas"},
+    "364": {"location": "Owensboro/Bowling Green, KY","country":"US","region": "Kentucky"},
+    "380": {"location": "Columbus (overlay), OH",    "country": "US", "region": "Ohio"},
+    "385": {"location": "Salt Lake City (overlay), UT","country":"US","region": "Utah"},
+    "386": {"location": "Daytona Beach/Gainesville, FL","country":"US","region": "Florida"},
+    "401": {"location": "Rhode Island",              "country": "US", "region": "Rhode Island"},
+    "402": {"location": "Omaha/Lincoln, NE",         "country": "US", "region": "Nebraska"},
+    "404": {"location": "Atlanta, GA",               "country": "US", "region": "Georgia"},
+    "405": {"location": "Oklahoma City, OK",         "country": "US", "region": "Oklahoma"},
+    "406": {"location": "Montana",                   "country": "US", "region": "Montana"},
+    "407": {"location": "Orlando, FL",               "country": "US", "region": "Florida"},
+    "408": {"location": "San Jose, CA",              "country": "US", "region": "California"},
+    "409": {"location": "Beaumont/Galveston, TX",    "country": "US", "region": "Texas"},
+    "410": {"location": "Baltimore, MD",             "country": "US", "region": "Maryland"},
+    "412": {"location": "Pittsburgh, PA",            "country": "US", "region": "Pennsylvania"},
+    "413": {"location": "Springfield/Holyoke, MA",   "country": "US", "region": "Massachusetts"},
+    "414": {"location": "Milwaukee, WI",             "country": "US", "region": "Wisconsin"},
+    "415": {"location": "San Francisco, CA",         "country": "US", "region": "California"},
+    "417": {"location": "Springfield/Joplin, MO",   "country": "US", "region": "Missouri"},
+    "419": {"location": "Toledo/Lima, OH",           "country": "US", "region": "Ohio"},
+    "423": {"location": "Chattanooga/Kingsport, TN", "country": "US", "region": "Tennessee"},
+    "424": {"location": "Los Angeles (overlay), CA", "country": "US", "region": "California"},
+    "425": {"location": "Bellevue/Redmond, WA",      "country": "US", "region": "Washington"},
+    "430": {"location": "Tyler/Texarkana, TX",       "country": "US", "region": "Texas"},
+    "432": {"location": "Midland/Odessa, TX",        "country": "US", "region": "Texas"},
+    "434": {"location": "Charlottesville/Lynchburg, VA","country":"US","region": "Virginia"},
+    "435": {"location": "St. George/Logan, UT",      "country": "US", "region": "Utah"},
+    "440": {"location": "Cleveland suburbs, OH",     "country": "US", "region": "Ohio"},
+    "442": {"location": "Oceanside/El Centro, CA",   "country": "US", "region": "California"},
+    "443": {"location": "Baltimore (overlay), MD",   "country": "US", "region": "Maryland"},
+    "445": {"location": "Philadelphia (overlay), PA","country": "US", "region": "Pennsylvania"},
+    "447": {"location": "Champaign/Springfield, IL", "country": "US", "region": "Illinois"},
+    "448": {"location": "New Jersey (overlay)",      "country": "US", "region": "New Jersey"},
+    "458": {"location": "Eugene/Medford, OR",        "country": "US", "region": "Oregon"},
+    "463": {"location": "Indianapolis (overlay), IN","country": "US", "region": "Indiana"},
+    "469": {"location": "Dallas (overlay), TX",      "country": "US", "region": "Texas"},
+    "470": {"location": "Atlanta (overlay), GA",     "country": "US", "region": "Georgia"},
+    "475": {"location": "Bridgeport (overlay), CT",  "country": "US", "region": "Connecticut"},
+    "478": {"location": "Macon/Columbus, GA",        "country": "US", "region": "Georgia"},
+    "479": {"location": "Fort Smith/Fayetteville, AR","country":"US","region": "Arkansas"},
+    "480": {"location": "Scottsdale/Tempe, AZ",      "country": "US", "region": "Arizona"},
+    "484": {"location": "Allentown/Reading, PA",     "country": "US", "region": "Pennsylvania"},
+    "501": {"location": "Little Rock, AR",           "country": "US", "region": "Arkansas"},
+    "502": {"location": "Louisville, KY",            "country": "US", "region": "Kentucky"},
+    "503": {"location": "Portland/Salem, OR",        "country": "US", "region": "Oregon"},
+    "504": {"location": "New Orleans, LA",           "country": "US", "region": "Louisiana"},
+    "505": {"location": "Albuquerque/Santa Fe, NM",  "country": "US", "region": "New Mexico"},
+    "507": {"location": "Rochester/Mankato, MN",     "country": "US", "region": "Minnesota"},
+    "508": {"location": "Worcester/Cape Cod, MA",    "country": "US", "region": "Massachusetts"},
+    "509": {"location": "Spokane/Yakima, WA",        "country": "US", "region": "Washington"},
+    "510": {"location": "Oakland/Berkeley, CA",      "country": "US", "region": "California"},
+    "512": {"location": "Austin, TX",                "country": "US", "region": "Texas"},
+    "513": {"location": "Cincinnati, OH",            "country": "US", "region": "Ohio"},
+    "515": {"location": "Des Moines, IA",            "country": "US", "region": "Iowa"},
+    "516": {"location": "Nassau County/Long Island, NY","country":"US","region": "New York"},
+    "517": {"location": "Lansing/Jackson, MI",       "country": "US", "region": "Michigan"},
+    "518": {"location": "Albany/Schenectady, NY",    "country": "US", "region": "New York"},
+    "520": {"location": "Tucson/Sierra Vista, AZ",   "country": "US", "region": "Arizona"},
+    "530": {"location": "Redding/Chico, CA",         "country": "US", "region": "California"},
+    "531": {"location": "Omaha (overlay), NE",       "country": "US", "region": "Nebraska"},
+    "534": {"location": "Eau Claire/Wausau, WI",     "country": "US", "region": "Wisconsin"},
+    "539": {"location": "Tulsa (overlay), OK",       "country": "US", "region": "Oklahoma"},
+    "540": {"location": "Roanoke/Winchester, VA",    "country": "US", "region": "Virginia"},
+    "541": {"location": "Eugene/Bend, OR",           "country": "US", "region": "Oregon"},
+    "551": {"location": "Jersey City (overlay), NJ", "country": "US", "region": "New Jersey"},
+    "559": {"location": "Fresno/Visalia, CA",        "country": "US", "region": "California"},
+    "561": {"location": "West Palm Beach, FL",       "country": "US", "region": "Florida"},
+    "562": {"location": "Long Beach/Whittier, CA",   "country": "US", "region": "California"},
+    "563": {"location": "Davenport/Dubuque, IA",     "country": "US", "region": "Iowa"},
+    "564": {"location": "Olympia (overlay), WA",     "country": "US", "region": "Washington"},
+    "567": {"location": "Toledo (overlay), OH",      "country": "US", "region": "Ohio"},
+    "570": {"location": "Scranton/Stroudsburg, PA",  "country": "US", "region": "Pennsylvania"},
+    "571": {"location": "Arlington/Reston, VA",      "country": "US", "region": "Virginia"},
+    "572": {"location": "Oklahoma (overlay)",        "country": "US", "region": "Oklahoma"},
+    "573": {"location": "Columbia/Jefferson City, MO","country":"US","region": "Missouri"},
+    "574": {"location": "South Bend/Elkhart, IN",    "country": "US", "region": "Indiana"},
+    "575": {"location": "Las Cruces/Roswell, NM",    "country": "US", "region": "New Mexico"},
+    "580": {"location": "Lawton/Enid, OK",           "country": "US", "region": "Oklahoma"},
+    "585": {"location": "Rochester, NY",             "country": "US", "region": "New York"},
+    "586": {"location": "Warren/Sterling Heights, MI","country":"US","region": "Michigan"},
+    "601": {"location": "Jackson/Meridian, MS",      "country": "US", "region": "Mississippi"},
+    "602": {"location": "Phoenix, AZ",               "country": "US", "region": "Arizona"},
+    "603": {"location": "New Hampshire",             "country": "US", "region": "New Hampshire"},
+    "605": {"location": "South Dakota",              "country": "US", "region": "South Dakota"},
+    "606": {"location": "Ashland/Pikeville, KY",     "country": "US", "region": "Kentucky"},
+    "607": {"location": "Binghamton/Ithaca, NY",     "country": "US", "region": "New York"},
+    "608": {"location": "Madison/La Crosse, WI",     "country": "US", "region": "Wisconsin"},
+    "609": {"location": "Trenton/Atlantic City, NJ", "country": "US", "region": "New Jersey"},
+    "610": {"location": "Allentown/Chester, PA",     "country": "US", "region": "Pennsylvania"},
+    "612": {"location": "Minneapolis, MN",           "country": "US", "region": "Minnesota"},
+    "614": {"location": "Columbus, OH",              "country": "US", "region": "Ohio"},
+    "615": {"location": "Nashville, TN",             "country": "US", "region": "Tennessee"},
+    "616": {"location": "Grand Rapids, MI",          "country": "US", "region": "Michigan"},
+    "617": {"location": "Boston, MA",                "country": "US", "region": "Massachusetts"},
+    "618": {"location": "East St. Louis/Carbondale, IL","country":"US","region": "Illinois"},
+    "619": {"location": "San Diego, CA",             "country": "US", "region": "California"},
+    "620": {"location": "Dodge City/Garden City, KS","country":"US","region": "Kansas"},
+    "623": {"location": "Glendale/Peoria, AZ",       "country": "US", "region": "Arizona"},
+    "626": {"location": "Pasadena/Pomona, CA",       "country": "US", "region": "California"},
+    "627": {"location": "San Jose (overlay), CA",    "country": "US", "region": "California"},
+    "628": {"location": "San Francisco (overlay), CA","country":"US","region": "California"},
+    "629": {"location": "Nashville (overlay), TN",   "country": "US", "region": "Tennessee"},
+    "630": {"location": "Aurora/Wheaton, IL",        "country": "US", "region": "Illinois"},
+    "631": {"location": "Suffolk County/Long Island, NY","country":"US","region": "New York"},
+    "636": {"location": "St. Charles/Jefferson City, MO","country":"US","region": "Missouri"},
+    "641": {"location": "Mason City/Marshalltown, IA","country":"US","region": "Iowa"},
+    "645": {"location": "New York City (overlay)",   "country": "US", "region": "New York"},
+    "646": {"location": "New York City (overlay)",   "country": "US", "region": "New York"},
+    "650": {"location": "San Mateo/Palo Alto, CA",   "country": "US", "region": "California"},
+    "651": {"location": "St. Paul, MN",              "country": "US", "region": "Minnesota"},
+    "657": {"location": "Anaheim/Fullerton, CA",     "country": "US", "region": "California"},
+    "659": {"location": "Birmingham (overlay), AL",  "country": "US", "region": "Alabama"},
+    "660": {"location": "Sedalia/Chillicothe, MO",   "country": "US", "region": "Missouri"},
+    "661": {"location": "Bakersfield/Lancaster, CA", "country": "US", "region": "California"},
+    "662": {"location": "Greenville/Tupelo, MS",     "country": "US", "region": "Mississippi"},
+    "667": {"location": "Baltimore (overlay), MD",   "country": "US", "region": "Maryland"},
+    "669": {"location": "San Jose (overlay), CA",    "country": "US", "region": "California"},
+    "671": {"location": "Guam",                      "country": "US", "region": "Guam"},
+    "678": {"location": "Atlanta (overlay), GA",     "country": "US", "region": "Georgia"},
+    "680": {"location": "Syracuse (overlay), NY",    "country": "US", "region": "New York"},
+    "681": {"location": "West Virginia (overlay)",   "country": "US", "region": "West Virginia"},
+    "682": {"location": "Fort Worth (overlay), TX",  "country": "US", "region": "Texas"},
+    "689": {"location": "Orlando (overlay), FL",     "country": "US", "region": "Florida"},
+    "701": {"location": "North Dakota",              "country": "US", "region": "North Dakota"},
+    "702": {"location": "Las Vegas, NV",             "country": "US", "region": "Nevada"},
+    "703": {"location": "Arlington/Alexandria, VA",  "country": "US", "region": "Virginia"},
+    "704": {"location": "Charlotte, NC",             "country": "US", "region": "North Carolina"},
+    "706": {"location": "engagement/Columbus, GA",      "country": "US", "region": "Georgia"},
+    "707": {"location": "Santa Rosa/Napa, CA",       "country": "US", "region": "California"},
+    "708": {"location": "Chicago suburbs (S), IL",   "country": "US", "region": "Illinois"},
+    "712": {"location": "Sioux City/Council Bluffs, IA","country":"US","region": "Iowa"},
+    "713": {"location": "Houston, TX",               "country": "US", "region": "Texas"},
+    "714": {"location": "Anaheim/Santa Ana, CA",     "country": "US", "region": "California"},
+    "715": {"location": "Wausau/Eau Claire, WI",     "country": "US", "region": "Wisconsin"},
+    "716": {"location": "Buffalo/Niagara Falls, NY", "country": "US", "region": "New York"},
+    "717": {"location": "Harrisburg/Lancaster, PA",  "country": "US", "region": "Pennsylvania"},
+    "718": {"location": "New York City (outer boroughs)","country":"US","region": "New York"},
+    "719": {"location": "Colorado Springs/Pueblo, CO","country":"US","region": "Colorado"},
+    "720": {"location": "Denver (overlay), CO",      "country": "US", "region": "Colorado"},
+    "724": {"location": "Pittsburgh suburbs, PA",    "country": "US", "region": "Pennsylvania"},
+    "725": {"location": "Las Vegas (overlay), NV",   "country": "US", "region": "Nevada"},
+    "726": {"location": "San Antonio (overlay), TX", "country": "US", "region": "Texas"},
+    "727": {"location": "St. Petersburg/Clearwater, FL","country":"US","region": "Florida"},
+    "728": {"location": "Tampa (overlay), FL",       "country": "US", "region": "Florida"},
+    "731": {"location": "Jackson/Dyersburg, TN",     "country": "US", "region": "Tennessee"},
+    "732": {"location": "New Brunswick/Toms River, NJ","country":"US","region": "New Jersey"},
+    "734": {"location": "Ann Arbor/Ypsilanti, MI",   "country": "US", "region": "Michigan"},
+    "737": {"location": "Austin (overlay), TX",      "country": "US", "region": "Texas"},
+    "740": {"location": "Zanesville/Athens, OH",     "country": "US", "region": "Ohio"},
+    "743": {"location": "Greensboro (overlay), NC",  "country": "US", "region": "North Carolina"},
+    "747": {"location": "San Fernando Valley, CA",   "country": "US", "region": "California"},
+    "752": {"location": "Sacramento (overlay), CA",  "country": "US", "region": "California"},
+    "754": {"location": "Fort Lauderdale (overlay), FL","country":"US","region": "Florida"},
+    "757": {"location": "Norfolk/Virginia Beach, VA","country": "US", "region": "Virginia"},
+    "760": {"location": "Riverside/San Bernardino (E), CA","country":"US","region": "California"},
+    "762": {"location": "engagement (overlay), GA",     "country": "US", "region": "Georgia"},
+    "763": {"location": "Minneapolis suburbs (N), MN","country":"US","region": "Minnesota"},
+    "765": {"location": "Lafayette/Muncie, IN",      "country": "US", "region": "Indiana"},
+    "769": {"location": "Jackson (overlay), MS",     "country": "US", "region": "Mississippi"},
+    "770": {"location": "Atlanta suburbs, GA",       "country": "US", "region": "Georgia"},
+    "771": {"location": "Washington DC (overlay)",   "country": "US", "region": "District of Columbia"},
+    "772": {"location": "Vero Beach/Fort Pierce, FL","country": "US", "region": "Florida"},
+    "773": {"location": "Chicago (N/NW), IL",        "country": "US", "region": "Illinois"},
+    "774": {"location": "Worcester (overlay), MA",   "country": "US", "region": "Massachusetts"},
+    "775": {"location": "Reno/Carson City, NV",      "country": "US", "region": "Nevada"},
+    "779": {"location": "Rockford/Peoria (overlay), IL","country":"US","region": "Illinois"},
+    "781": {"location": "Boston suburbs (N/S), MA",  "country": "US", "region": "Massachusetts"},
+    "785": {"location": "Topeka/Manhattan, KS",      "country": "US", "region": "Kansas"},
+    "786": {"location": "Miami (overlay), FL",       "country": "US", "region": "Florida"},
+    "787": {"location": "Puerto Rico",               "country": "US", "region": "Puerto Rico"},
+    "801": {"location": "Salt Lake City, UT",        "country": "US", "region": "Utah"},
+    "802": {"location": "Vermont",                   "country": "US", "region": "Vermont"},
+    "803": {"location": "Columbia/Aiken, SC",        "country": "US", "region": "South Carolina"},
+    "804": {"location": "Richmond/Petersburg, VA",   "country": "US", "region": "Virginia"},
+    "805": {"location": "Ventura/San Luis Obispo, CA","country":"US","region": "California"},
+    "806": {"location": "Lubbock/Amarillo, TX",      "country": "US", "region": "Texas"},
+    "808": {"location": "Hawaii",                    "country": "US", "region": "Hawaii"},
+    "810": {"location": "Flint/Port Huron, MI",      "country": "US", "region": "Michigan"},
+    "812": {"location": "Evansville/Bloomington, IN","country": "US", "region": "Indiana"},
+    "813": {"location": "Tampa/St. Petersburg, FL",  "country": "US", "region": "Florida"},
+    "814": {"location": "Erie/State College, PA",    "country": "US", "region": "Pennsylvania"},
+    "815": {"location": "Rockford/Joliet, IL",       "country": "US", "region": "Illinois"},
+    "816": {"location": "Kansas City, MO",           "country": "US", "region": "Missouri"},
+    "817": {"location": "Fort Worth/Arlington, TX",  "country": "US", "region": "Texas"},
+    "818": {"location": "San Fernando Valley/Burbank, CA","country":"US","region": "California"},
+    "820": {"location": "San Luis Obispo (overlay), CA","country":"US","region": "California"},
+    "821": {"location": "South Carolina (overlay)",  "country": "US", "region": "South Carolina"},
+    "825": {"location": "Alberta (overlay)",         "country": "CA", "region": "Alberta"},
+    "826": {"location": "Virginia (overlay)",        "country": "US", "region": "Virginia"},
+    "828": {"location": "Asheville/Hickory, NC",     "country": "US", "region": "North Carolina"},
+    "830": {"location": "Del Rio/New Braunfels, TX", "country": "US", "region": "Texas"},
+    "831": {"location": "Monterey/Santa Cruz, CA",   "country": "US", "region": "California"},
+    "832": {"location": "Houston (overlay), TX",     "country": "US", "region": "Texas"},
+    "838": {"location": "Albany (overlay), NY",      "country": "US", "region": "New York"},
+    "839": {"location": "South Carolina (overlay)",  "country": "US", "region": "South Carolina"},
+    "840": {"location": "San Bernardino (overlay), CA","country":"US","region": "California"},
+    "843": {"location": "Charleston/Myrtle Beach, SC","country":"US","region": "South Carolina"},
+    "845": {"location": "Poughkeepsie/Kingston, NY", "country": "US", "region": "New York"},
+    "847": {"location": "Evanston/Waukegan, IL",     "country": "US", "region": "Illinois"},
+    "848": {"location": "New Brunswick (overlay), NJ","country":"US","region": "New Jersey"},
+    "850": {"location": "Tallahassee/Pensacola, FL", "country": "US", "region": "Florida"},
+    "854": {"location": "Charleston (overlay), SC",  "country": "US", "region": "South Carolina"},
+    "856": {"location": "Camden/Vineland, NJ",       "country": "US", "region": "New Jersey"},
+    "857": {"location": "Boston (overlay), MA",      "country": "US", "region": "Massachusetts"},
+    "858": {"location": "San Diego (N), CA",         "country": "US", "region": "California"},
+    "859": {"location": "Lexington/Covington, KY",   "country": "US", "region": "Kentucky"},
+    "860": {"location": "Hartford/New London, CT",   "country": "US", "region": "Connecticut"},
+    "861": {"location": "Connecticut (overlay)",     "country": "US", "region": "Connecticut"},
+    "862": {"location": "Newark (overlay), NJ",      "country": "US", "region": "New Jersey"},
+    "863": {"location": "Lakeland/Fort Pierce, FL",  "country": "US", "region": "Florida"},
+    "864": {"location": "Greenville/Spartanburg, SC","country": "US", "region": "South Carolina"},
+    "865": {"location": "Knoxville/Oak Ridge, TN",   "country": "US", "region": "Tennessee"},
+    "870": {"location": "Jonesboro/Pine Bluff, AR",  "country": "US", "region": "Arkansas"},
+    "872": {"location": "Chicago (overlay), IL",     "country": "US", "region": "Illinois"},
+    "878": {"location": "Pittsburgh (overlay), PA",  "country": "US", "region": "Pennsylvania"},
+    "901": {"location": "Memphis, TN",               "country": "US", "region": "Tennessee"},
+    "903": {"location": "Tyler/Texarkana, TX",       "country": "US", "region": "Texas"},
+    "904": {"location": "Jacksonville, FL",          "country": "US", "region": "Florida"},
+    "906": {"location": "Upper Peninsula, MI",       "country": "US", "region": "Michigan"},
+    "907": {"location": "Alaska",                    "country": "US", "region": "Alaska"},
+    "908": {"location": "Elizabeth/Union, NJ",       "country": "US", "region": "New Jersey"},
+    "909": {"location": "San Bernardino/Riverside, CA","country":"US","region": "California"},
+    "910": {"location": "Wilmington/Fayetteville, NC","country":"US","region": "North Carolina"},
+    "912": {"location": "Savannah/Brunswick, GA",    "country": "US", "region": "Georgia"},
+    "913": {"location": "Overland Park/Kansas City KS, KS","country":"US","region": "Kansas"},
+    "914": {"location": "Yonkers/White Plains, NY",  "country": "US", "region": "New York"},
+    "915": {"location": "El Paso, TX",               "country": "US", "region": "Texas"},
+    "916": {"location": "Sacramento, CA",            "country": "US", "region": "California"},
+    "917": {"location": "New York City (cellular)",  "country": "US", "region": "New York"},
+    "918": {"location": "Tulsa/Muskogee, OK",        "country": "US", "region": "Oklahoma"},
+    "919": {"location": "Raleigh/Durham, NC",        "country": "US", "region": "North Carolina"},
+    "920": {"location": "Green Bay/Appleton, WI",    "country": "US", "region": "Wisconsin"},
+    "925": {"location": "Concord/Walnut Creek, CA",  "country": "US", "region": "California"},
+    "927": {"location": "Orlando (overlay), FL",     "country": "US", "region": "Florida"},
+    "928": {"location": "Flagstaff/Yuma, AZ",        "country": "US", "region": "Arizona"},
+    "929": {"location": "New York City (overlay)",   "country": "US", "region": "New York"},
+    "930": {"location": "Bloomington/Evansville, IN","country": "US", "region": "Indiana"},
+    "931": {"location": "Clarksville/Cookeville, TN","country": "US", "region": "Tennessee"},
+    "934": {"location": "Suffolk County (overlay), NY","country":"US","region": "New York"},
+    "936": {"location": "Lufkin/Huntsville, TX",     "country": "US", "region": "Texas"},
+    "937": {"location": "Dayton/Springfield, OH",    "country": "US", "region": "Ohio"},
+    "938": {"location": "Huntsville (overlay), AL",  "country": "US", "region": "Alabama"},
+    "939": {"location": "Puerto Rico (overlay)",     "country": "US", "region": "Puerto Rico"},
+    "940": {"location": "Wichita Falls/Denton, TX",  "country": "US", "region": "Texas"},
+    "941": {"location": "Sarasota/Fort Myers, FL",   "country": "US", "region": "Florida"},
+    "943": {"location": "Florida (overlay)",         "country": "US", "region": "Florida"},
+    "945": {"location": "Dallas (overlay), TX",      "country": "US", "region": "Texas"},
+    "947": {"location": "Troy/Pontiac, MI",          "country": "US", "region": "Michigan"},
+    "948": {"location": "Virginia Beach (overlay), VA","country":"US","region": "Virginia"},
+    "949": {"location": "Irvine/Mission Viejo, CA",  "country": "US", "region": "California"},
+    "951": {"location": "Riverside/Moreno Valley, CA","country":"US","region": "California"},
+    "952": {"location": "Minneapolis suburbs (SW), MN","country":"US","region": "Minnesota"},
+    "954": {"location": "Fort Lauderdale/Broward, FL","country":"US","region": "Florida"},
+    "956": {"location": "Laredo/McAllen, TX",        "country": "US", "region": "Texas"},
+    "959": {"location": "Hartford (overlay), CT",    "country": "US", "region": "Connecticut"},
+    "970": {"location": "Fort Collins/Grand Junction, CO","country":"US","region": "Colorado"},
+    "971": {"location": "Portland (overlay), OR",    "country": "US", "region": "Oregon"},
+    "972": {"location": "Dallas (overlay), TX",      "country": "US", "region": "Texas"},
+    "973": {"location": "Newark/Morristown, NJ",     "country": "US", "region": "New Jersey"},
+    "975": {"location": "Kansas City (overlay), MO", "country": "US", "region": "Missouri"},
+    "978": {"location": "Lowell/Lawrence, MA",       "country": "US", "region": "Massachusetts"},
+    "979": {"location": "Bryan/College Station, TX", "country": "US", "region": "Texas"},
+    "980": {"location": "Charlotte (overlay), NC",   "country": "US", "region": "North Carolina"},
+    "983": {"location": "Colorado (overlay)",        "country": "US", "region": "Colorado"},
+    "984": {"location": "Raleigh (overlay), NC",     "country": "US", "region": "North Carolina"},
+    "985": {"location": "Houma/Hammond, LA",         "country": "US", "region": "Louisiana"},
+    "986": {"location": "Idaho (overlay)",           "country": "US", "region": "Idaho"},
+    "989": {"location": "Saginaw/Midland, MI",       "country": "US", "region": "Michigan"},
+    # ── Canada (NANP) ─────────────────────────────────────────────────────────
+    "204": {"location": "Winnipeg/Manitoba",         "country": "CA", "region": "Manitoba"},
+    "226": {"location": "London/Windsor, ON",        "country": "CA", "region": "Ontario"},
+    "236": {"location": "British Columbia (overlay)","country": "CA", "region": "British Columbia"},
+    "249": {"location": "Northern Ontario",          "country": "CA", "region": "Ontario"},
+    "250": {"location": "Victoria/British Columbia", "country": "CA", "region": "British Columbia"},
+    "263": {"location": "Quebec (overlay)",          "country": "CA", "region": "Quebec"},
+    "289": {"location": "Hamilton/Niagara, ON",      "country": "CA", "region": "Ontario"},
+    "306": {"location": "Saskatchewan",              "country": "CA", "region": "Saskatchewan"},
+    "343": {"location": "Ottawa (overlay), ON",      "country": "CA", "region": "Ontario"},
+    "354": {"location": "Quebec (overlay)",          "country": "CA", "region": "Quebec"},
+    "365": {"location": "Hamilton (overlay), ON",    "country": "CA", "region": "Ontario"},
+    "367": {"location": "Quebec City (overlay)",     "country": "CA", "region": "Quebec"},
+    "368": {"location": "Alberta (overlay)",         "country": "CA", "region": "Alberta"},
+    "382": {"location": "London (overlay), ON",      "country": "CA", "region": "Ontario"},
+    "387": {"location": "Alberta (overlay)",         "country": "CA", "region": "Alberta"},
+    "403": {"location": "Calgary/Lethbridge, AB",    "country": "CA", "region": "Alberta"},
+    "416": {"location": "Toronto, ON",               "country": "CA", "region": "Ontario"},
+    "418": {"location": "Quebec City, QC",           "country": "CA", "region": "Quebec"},
+    "428": {"location": "New Brunswick",             "country": "CA", "region": "New Brunswick"},
+    "431": {"location": "Manitoba (overlay)",        "country": "CA", "region": "Manitoba"},
+    "437": {"location": "Toronto (overlay), ON",     "country": "CA", "region": "Ontario"},
+    "438": {"location": "Montreal (overlay), QC",    "country": "CA", "region": "Quebec"},
+    "450": {"location": "Montérégie/Laval, QC",      "country": "CA", "region": "Quebec"},
+    "506": {"location": "New Brunswick",             "country": "CA", "region": "New Brunswick"},
+    "514": {"location": "Montreal, QC",              "country": "CA", "region": "Quebec"},
+    "519": {"location": "Windsor/London, ON",        "country": "CA", "region": "Ontario"},
+    "548": {"location": "Kitchener-Waterloo, ON",    "country": "CA", "region": "Ontario"},
+    "579": {"location": "Montérégie (overlay), QC",  "country": "CA", "region": "Quebec"},
+    "581": {"location": "Quebec City (overlay), QC", "country": "CA", "region": "Quebec"},
+    "584": {"location": "Manitoba (overlay)",        "country": "CA", "region": "Manitoba"},
+    "587": {"location": "Alberta (overlay)",         "country": "CA", "region": "Alberta"},
+    "604": {"location": "Vancouver, BC",             "country": "CA", "region": "British Columbia"},
+    "613": {"location": "Ottawa, ON",                "country": "CA", "region": "Ontario"},
+    "639": {"location": "Saskatchewan (overlay)",    "country": "CA", "region": "Saskatchewan"},
+    "647": {"location": "Toronto (overlay), ON",     "country": "CA", "region": "Ontario"},
+    "672": {"location": "British Columbia (overlay)","country": "CA", "region": "British Columbia"},
+    "683": {"location": "Ottawa (overlay), ON",      "country": "CA", "region": "Ontario"},
+    "705": {"location": "Sudbury/Barrie, ON",        "country": "CA", "region": "Ontario"},
+    "709": {"location": "Newfoundland",              "country": "CA", "region": "Newfoundland and Labrador"},
+    "742": {"location": "Ontario (overlay)",         "country": "CA", "region": "Ontario"},
+    "753": {"location": "Ottawa (overlay), ON",      "country": "CA", "region": "Ontario"},
+    "778": {"location": "Vancouver (overlay), BC",   "country": "CA", "region": "British Columbia"},
+    "780": {"location": "Edmonton/Northern AB",      "country": "CA", "region": "Alberta"},
+    "782": {"location": "Nova Scotia/PEI",           "country": "CA", "region": "Nova Scotia"},
+    "807": {"location": "Thunder Bay, ON",           "country": "CA", "region": "Ontario"},
+    "819": {"location": "Gatineau/Sherbrooke, QC",   "country": "CA", "region": "Quebec"},
+    "825": {"location": "Alberta (overlay)",         "country": "CA", "region": "Alberta"},
+    "867": {"location": "Yukon/NWT/Nunavut",         "country": "CA", "region": "Northern Canada"},
+    "873": {"location": "Quebec (overlay)",          "country": "CA", "region": "Quebec"},
+    "902": {"location": "Nova Scotia/PEI",           "country": "CA", "region": "Nova Scotia"},
+    "905": {"location": "Mississauga/Brampton, ON",  "country": "CA", "region": "Ontario"},
+    # ── NANP Caribbean ────────────────────────────────────────────────────────
+    "242": {"location": "Bahamas",                   "country": "BS", "region": "Bahamas"},
+    "246": {"location": "Barbados",                  "country": "BB", "region": "Barbados"},
+    "264": {"location": "Anguilla",                  "country": "AI", "region": "Anguilla"},
+    "268": {"location": "Antigua and Barbuda",       "country": "AG", "region": "Antigua and Barbuda"},
+    "284": {"location": "British Virgin Islands",    "country": "VG", "region": "British Virgin Islands"},
+    "345": {"location": "Cayman Islands",            "country": "KY", "region": "Cayman Islands"},
+    "441": {"location": "Bermuda",                   "country": "BM", "region": "Bermuda"},
+    "473": {"location": "Grenada",                   "country": "GD", "region": "Grenada"},
+    "649": {"location": "Turks and Caicos Islands",  "country": "TC", "region": "Turks and Caicos"},
+    "664": {"location": "Montserrat",                "country": "MS", "region": "Montserrat"},
+    "721": {"location": "Sint Maarten",              "country": "SX", "region": "Sint Maarten"},
+    "758": {"location": "Saint Lucia",               "country": "LC", "region": "Saint Lucia"},
+    "767": {"location": "Dominica",                  "country": "DM", "region": "Dominica"},
+    "784": {"location": "Saint Vincent and the Grenadines","country":"VC","region": "St. Vincent"},
+    "809": {"location": "Dominican Republic",        "country": "DO", "region": "Dominican Republic"},
+    "829": {"location": "Dominican Republic (overlay)","country":"DO","region": "Dominican Republic"},
+    "849": {"location": "Dominican Republic (overlay)","country":"DO","region": "Dominican Republic"},
+    "868": {"location": "Trinidad and Tobago",       "country": "TT", "region": "Trinidad and Tobago"},
+    "869": {"location": "St. Kitts and Nevis",       "country": "KN", "region": "St. Kitts and Nevis"},
+    "876": {"location": "Jamaica",                   "country": "JM", "region": "Jamaica"},
+    "900": {"location": "Premium-rate (900 service)","country": "US", "region": "N/A — toll service"},
+}
+
+# NANP reserved/non-geographic prefixes that are never valid subscriber numbers
+_NANP_NON_GEOGRAPHIC = frozenset({
+    "800", "833", "844", "855", "866", "877", "888",   # toll-free
+    "900",                                               # premium-rate
+    "911", "988",                                        # emergency/crisis
+    "555",                                               # fictional/test
+})
+
+# International country dialing code prefixes for non-NANP E.164 numbers.
+# Key = prefix string (1–3 digits after the leading '+'), value = country/region.
+# This covers the most common codes; exact matching is done longest-prefix-first.
+_INTL_COUNTRY_CODES: List[Tuple[str, str]] = sorted([
+    ("1",    "NANP (US/Canada/Caribbean)"),
+    ("20",   "Egypt"), ("27",   "South Africa"), ("30",   "Greece"),
+    ("31",   "Netherlands"), ("32",   "Belgium"), ("33",   "France"),
+    ("34",   "Spain"), ("36",   "Hungary"), ("39",   "Italy"),
+    ("40",   "Romania"), ("41",   "Switzerland"), ("43",   "Austria"),
+    ("44",   "United Kingdom"), ("45",   "Denmark"), ("46",   "Sweden"),
+    ("47",   "Norway"), ("48",   "Poland"), ("49",   "Germany"),
+    ("51",   "Peru"), ("52",   "Mexico"), ("53",   "Cuba"),
+    ("54",   "Argentina"), ("55",   "Brazil"), ("56",   "Chile"),
+    ("57",   "Colombia"), ("58",   "Venezuela"), ("60",   "Malaysia"),
+    ("61",   "Australia"), ("62",   "Indonesia"), ("63",   "Philippines"),
+    ("64",   "New Zealand"), ("65",   "Singapore"), ("66",   "Thailand"),
+    ("7",    "Russia/Kazakhstan"), ("81",   "Japan"), ("82",   "South Korea"),
+    ("84",   "Vietnam"), ("86",   "China"), ("90",   "Turkey"),
+    ("91",   "India"), ("92",   "Pakistan"), ("93",   "Afghanistan"),
+    ("94",   "Sri Lanka"), ("95",   "Myanmar"), ("98",   "Iran"),
+    ("212",  "Morocco"), ("213",  "Algeria"), ("216",  "Tunisia"),
+    ("218",  "Libya"), ("220",  "Gambia"), ("221",  "Senegal"),
+    ("222",  "Mauritania"), ("223",  "Mali"), ("224",  "Guinea"),
+    ("225",  "Ivory Coast"), ("226",  "Burkina Faso"), ("227",  "Niger"),
+    ("228",  "Togo"), ("229",  "Benin"), ("230",  "Mauritius"),
+    ("231",  "Liberia"), ("232",  "Sierra Leone"), ("233",  "Ghana"),
+    ("234",  "Nigeria"), ("235",  "Chad"), ("236",  "Central African Republic"),
+    ("237",  "Cameroon"), ("238",  "Cape Verde"), ("239",  "Sao Tome"),
+    ("240",  "Equatorial Guinea"), ("241",  "Gabon"), ("242",  "Republic of Congo"),
+    ("243",  "Democratic Republic of Congo"), ("244",  "Angola"),
+    ("245",  "Guinea-Bissau"), ("246",  "British Indian Ocean Territory"),
+    ("247",  "Ascension Island"), ("248",  "Seychelles"), ("249",  "Sudan"),
+    ("250",  "Rwanda"), ("251",  "Ethiopia"), ("252",  "Somalia"),
+    ("253",  "Djibouti"), ("254",  "Kenya"), ("255",  "Tanzania"),
+    ("256",  "Uganda"), ("257",  "Burundi"), ("258",  "Mozambique"),
+    ("260",  "Zambia"), ("261",  "Madagascar"), ("262",  "Réunion/Mayotte"),
+    ("263",  "Zimbabwe"), ("264",  "Namibia"), ("265",  "Malawi"),
+    ("266",  "Lesotho"), ("267",  "Botswana"), ("268",  "Eswatini"),
+    ("269",  "Comoros"), ("290",  "Saint Helena"), ("291",  "Eritrea"),
+    ("297",  "Aruba"), ("298",  "Faroe Islands"), ("299",  "Greenland"),
+    ("350",  "Gibraltar"), ("351",  "Portugal"), ("352",  "Luxembourg"),
+    ("353",  "Ireland"), ("354",  "Iceland"), ("355",  "Albania"),
+    ("356",  "Malta"), ("357",  "Cyprus"), ("358",  "Finland"),
+    ("359",  "Bulgaria"), ("370",  "Lithuania"), ("371",  "Latvia"),
+    ("372",  "Estonia"), ("373",  "Moldova"), ("374",  "Armenia"),
+    ("375",  "Belarus"), ("376",  "Andorra"), ("377",  "Monaco"),
+    ("378",  "San Marino"), ("380",  "Ukraine"), ("381",  "Serbia"),
+    ("382",  "Montenegro"), ("385",  "Croatia"), ("386",  "Slovenia"),
+    ("387",  "Bosnia and Herzegovina"), ("389",  "North Macedonia"),
+    ("420",  "Czech Republic"), ("421",  "Slovakia"), ("423",  "Liechtenstein"),
+    ("500",  "Falkland Islands"), ("501",  "Belize"), ("502",  "Guatemala"),
+    ("503",  "El Salvador"), ("504",  "Honduras"), ("505",  "Nicaragua"),
+    ("506",  "Costa Rica"), ("507",  "Panama"), ("508",  "Saint Pierre and Miquelon"),
+    ("509",  "Haiti"), ("590",  "Guadeloupe"), ("591",  "Bolivia"),
+    ("592",  "Guyana"), ("593",  "Ecuador"), ("594",  "French Guiana"),
+    ("595",  "Paraguay"), ("596",  "Martinique"), ("597",  "Suriname"),
+    ("598",  "Uruguay"), ("599",  "Netherlands Antilles"),
+    ("670",  "East Timor"), ("672",  "Norfolk Island"), ("673",  "Brunei"),
+    ("674",  "Nauru"), ("675",  "Papua New Guinea"), ("676",  "Tonga"),
+    ("677",  "Solomon Islands"), ("678",  "Vanuatu"), ("679",  "Fiji"),
+    ("680",  "Palau"), ("681",  "Wallis and Futuna"), ("682",  "Cook Islands"),
+    ("683",  "Niue"), ("685",  "Samoa"), ("686",  "Kiribati"),
+    ("687",  "New Caledonia"), ("688",  "Tuvalu"), ("689",  "French Polynesia"),
+    ("690",  "Tokelau"), ("691",  "Micronesia"), ("692",  "Marshall Islands"),
+    ("850",  "North Korea"), ("852",  "Hong Kong"), ("853",  "Macao"),
+    ("855",  "Cambodia"), ("856",  "Laos"), ("880",  "Bangladesh"),
+    ("886",  "Taiwan"), ("960",  "Maldives"), ("961",  "Lebanon"),
+    ("962",  "Jordan"), ("963",  "Syria"), ("964",  "Iraq"),
+    ("965",  "Kuwait"), ("966",  "Saudi Arabia"), ("967",  "Yemen"),
+    ("968",  "Oman"), ("970",  "Palestinian Territory"), ("971",  "UAE"),
+    ("972",  "Israel"), ("973",  "Bahrain"), ("974",  "Qatar"),
+    ("975",  "Bhutan"), ("976",  "Mongolia"), ("977",  "Nepal"),
+    ("992",  "Tajikistan"), ("993",  "Turkmenistan"), ("994",  "Azerbaijan"),
+    ("995",  "Georgia (country)"), ("996",  "Kyrgyzstan"), ("998",  "Uzbekistan"),
+], key=lambda x: -len(x[0]))   # longest prefix first for greedy matching
+
+
+class PhoneValidator:
+    """
+    Validates raw phone number strings and enriches them with location data.
+
+    Supported formats
+    -----------------
+    NANP (10- or 11-digit North American):
+      (555) 867-5309 / 555-867-5309 / 555.867.5309 / +1 555 867 5309 / 15558675309
+    International E.164:
+      +44 20 7946 0958 / +81-3-1234-5678
+
+    Returns a dict:
+      valid        — bool
+      reason       — explanation when not valid
+      raw          — original input
+      normalized   — digits only, no leading +
+      e164         — E.164 canonical string (+XXXXXXXXXX) or ""
+      format_type  — "NANP" | "NANP-local" | "international" | "unknown"
+      area_code    — 3-digit NANP area code, or ""
+      country      — ISO 2-letter code or descriptive string
+      region       — state / province / territory
+      location     — city/region description
+    """
+
+    _STRIP_RE      = re.compile(r"[\s\-.()/]")
+    _SEQUENTIAL_RE = re.compile(r"^(\d)\1{9,}$")  # 000-000-0000, 111-111-1111, …
+
+    @classmethod
+    def validate(cls, raw: str) -> Dict[str, Any]:
+        base: Dict[str, Any] = {
+            "valid": False, "reason": "", "raw": raw,
+            "normalized": "", "e164": "", "format_type": "unknown",
+            "area_code": "", "country": "", "region": "", "location": "",
+        }
+        if not raw or not isinstance(raw, str):
+            base["reason"] = "empty input"
+            return base
+
+        cleaned   = cls._STRIP_RE.sub("", raw.strip())
+        has_plus  = cleaned.startswith("+")
+        digits    = cleaned.lstrip("+")
+
+        if not digits.isdigit():
+            base["reason"] = "non-digit characters remain after stripping separators"
+            return base
+        if len(digits) < 7:
+            base["reason"] = f"too short ({len(digits)} digits)"
+            return base
+        if len(digits) > 15:
+            base["reason"] = f"too long ({len(digits)} digits, E.164 max is 15)"
+            return base
+        if cls._SEQUENTIAL_RE.match(digits):
+            base["reason"] = "repeated-digit placeholder"
+            return base
+
+        base["normalized"] = digits
+
+        # Leading + or >11 digits → treat as international E.164
+        if has_plus or len(digits) > 11:
+            return cls._classify_international(base, digits)
+
+        # 11-digit starting with 1 → NANP with country code
+        if len(digits) == 11 and digits[0] == "1":
+            digits = digits[1:]
+
+        if len(digits) == 10:
+            return cls._classify_nanp(base, digits)
+
+        # 7-digit local (no area code)
+        if len(digits) == 7:
+            base.update({"valid": True, "format_type": "NANP-local",
+                         "location": "US/Canada (local — no area code)", "country": "US"})
+            return base
+
+        base["reason"] = f"ambiguous length ({len(digits)} digits)"
+        return base
+
+    @classmethod
+    def _classify_nanp(cls, base: Dict, digits: str) -> Dict:
+        nxx  = digits[:3]
+        exch = digits[3:6]
+
+        if digits[0] in ("0", "1"):
+            base["reason"] = f"NANP area code cannot start with {digits[0]}"
+            return base
+        if exch[0] in ("0", "1"):
+            base["reason"] = f"NANP exchange code cannot start with {exch[0]}"
+            return base
+        if exch[1:] == "11":
+            base["reason"] = f"N11 special-service code ({exch})"
+            return base
+        if nxx in _NANP_NON_GEOGRAPHIC:
+            base["reason"] = f"non-subscriber NANP prefix ({nxx})"
+            return base
+
+        info = _NANP_AREA_CODES.get(nxx)
+        if info is None:
+            base["reason"] = f"unrecognised NANP area code {nxx}"
+            return base
+
+        base.update({
+            "valid": True, "format_type": "NANP",
+            "e164":  f"+1{digits}", "area_code": nxx,
+            "country": info["country"], "region": info["region"],
+            "location": info["location"],
+        })
+        return base
+
+    @classmethod
+    def _classify_international(cls, base: Dict, digits: str) -> Dict:
+        # Strip a leading "1" only if it results in a valid NANP number
+        if digits.startswith("1") and len(digits) == 11:
+            return cls._classify_nanp(base, digits[1:])
+
+        for prefix, country_name in _INTL_COUNTRY_CODES:
+            if digits.startswith(prefix):
+                # Re-check if this is actually a NANP +1 number
+                if prefix == "1" and len(digits) == 11:
+                    return cls._classify_nanp(base, digits[1:])
+                base.update({
+                    "valid": True, "format_type": "international",
+                    "e164":  f"+{digits}", "country": country_name,
+                    "region": "", "location": country_name,
+                })
+                return base
+
+        base["reason"] = "unrecognised international country code"
+        return base
+
+    @classmethod
+    def validate_all(cls, numbers: List[str]) -> Tuple[List[Dict], List[Dict]]:
+        """Validate a list; returns (valid_results, invalid_results)."""
+        valid, invalid = [], []
+        for n in numbers:
+            r = cls.validate(n)
+            (valid if r["valid"] else invalid).append(r)
+        return valid, invalid
+
+
+# ─── Domain Classifier ────────────────────────────────────────────────────────
+
+class DomainClassifier:
+    """
+    Classifies domains, subdomains, and email addresses as:
+
+      primary   — is the target domain, a verified subdomain of it, or belongs
+                  to a company that was acquired by / merged with the target.
+      secondary — everything else found during the scan.
+
+    Acquisition data is sourced from:
+      • data.associated_domains  — relationship field (acquired/merged/subsidiary…)
+      • data.associated_companies — domain/website fields on trusted relationships
+    """
+
+    _TRUSTED_RELS = frozenset({
+        "acquired", "acquisition", "merged", "merger", "subsidiary",
+        "division", "brand", "dba", "formerly", "parent", "affiliate",
+    })
+
+    def __init__(self, target_domain: str, data: "ReconData") -> None:
+        self.target   = target_domain.lower().strip().lstrip(".")
+        self._primary: Set[str] = {self.target}
+        self._build(data)
+
+    def _build(self, data: "ReconData") -> None:
+        # From associated_domains
+        for dom, meta in data.associated_domains.items():
+            rel = meta.get("relationship", "").lower()
+            if any(t in rel for t in self._TRUSTED_RELS):
+                self._primary.add(dom.lower().strip().lstrip("."))
+
+        # From associated_companies
+        for comp in data.associated_companies:
+            rel = comp.get("relationship", comp.get("type", "")).lower()
+            if not any(t in rel for t in self._TRUSTED_RELS):
+                continue
+            for key in ("domain", "website"):
+                val = comp.get(key, "")
+                if isinstance(val, str) and val.strip():
+                    self._primary.add(
+                        val.lower().strip().lstrip(".").rstrip("/")
+                        .replace("https://", "").replace("http://", "").split("/")[0]
+                    )
+            # Support list-valued "domains" key
+            for d in comp.get("domains", []):
+                if isinstance(d, str) and d.strip():
+                    self._primary.add(d.lower().strip())
+
+    @staticmethod
+    def _registrable_root(domain: str) -> str:
+        """
+        Return the registrable root (eTLD+1).
+        Simple heuristic: use last 3 parts when second-level is ≤3 chars
+        (handles .co.uk, .com.au, etc.), otherwise last 2 parts.
+        """
+        parts = domain.lower().lstrip(".").split(".")
+        if len(parts) >= 3 and len(parts[-2]) <= 3 and len(parts[-1]) >= 2:
+            return ".".join(parts[-3:])
+        return ".".join(parts[-2:]) if len(parts) >= 2 else domain
+
+    def _is_primary(self, candidate: str) -> bool:
+        candidate = candidate.lower().strip().lstrip(".")
+        for pd in self._primary:
+            if candidate == pd or candidate.endswith("." + pd):
+                return True
+        return False
+
+    def classify_domain(self, domain: str) -> str:
+        return "primary" if self._is_primary(domain) else "secondary"
+
+    def classify_subdomain(self, fqdn: str) -> str:
+        return self.classify_domain(fqdn)
+
+    def classify_email(self, email: str) -> str:
+        if "@" not in email:
+            return "secondary"
+        _, dom = email.lower().strip().rsplit("@", 1)
+        return "primary" if self._is_primary(dom) else "secondary"
+
+    def add_primary(self, domain: str) -> None:
+        """Manually extend primary scope (e.g. from user-supplied M&A list)."""
+        self._primary.add(domain.lower().strip().lstrip("."))
+
+    @property
+    def primary_domains(self) -> Set[str]:
+        return frozenset(self._primary)
+
+
+# ─── Intel Aggregator ─────────────────────────────────────────────────────────
+
+class IntelAggregator:
+    """
+    Post-processing pass that runs after all tool phases complete.
+
+    What it does
+    ------------
+    1. Pulls every data point from every ReconData collection.
+    2. Classifies subdomains, domains, and email addresses as
+       PRIMARY (target domain or verified acquisition) or SECONDARY (everything
+       else), using DomainClassifier.
+    3. Validates every phone number with PhoneValidator. Valid numbers carry full
+       location metadata (area-code table for NANP, country-code table for E.164).
+       Invalid numbers are preserved separately with a rejection reason.
+    4. Inserts classification-derived entries into the FindingStore so they appear
+       in findings_report.json alongside security findings.
+    5. Writes reports/findings.json — a single, unified file combining:
+         - Security findings (FindingStore, all tools)
+         - Classified intelligence: subdomains, domains, emails, phones, IPs,
+           employees, certificates, crawled URLs, technologies, ASNs, open ports,
+           DNS records, WHOIS data, physical addresses, breach records.
+
+    Primary vs Secondary
+    --------------------
+    Only domains/subdomains/emails that belong to the target domain (or a company
+    known to have been acquired by / merged with it) are counted as PRIMARY.
+    All other hits are SECONDARY and saved in their own section of findings.json.
+    """
+
+    # Category labels reused in FindingStore entries
+    CAT_SUBDOMAIN = "Subdomain"
+    CAT_DOMAIN    = "Domain"
+    CAT_EMAIL     = "Email Address"
+    CAT_PHONE     = "Phone Number"
+    CAT_IP        = "IP Address"
+    CAT_EMPLOYEE  = "Employee / Person"
+    CAT_CERT      = "TLS Certificate"
+    CAT_URL       = "Crawled URL"
+    CAT_TECH      = "Technology"
+    CAT_ASN       = "ASN / Network"
+    CAT_BREACH    = "Credential Breach"
+    CAT_PORT      = "Open Port"
+    CAT_DNS       = "DNS Record"
+    CAT_WHOIS     = "WHOIS Data"
+    CAT_PHYSICAL  = "Physical Address"
+
+    def __init__(
+        self,
+        output_dir: Path,
+        log: ReconLogger,
+        data: ReconData,
+        numverify_key: str = "",
+        abstractapi_phone_key: str = "",
+    ) -> None:
+        self.output_dir             = output_dir
+        self.log                    = log
+        self.data                   = data
+        self.classifier             = DomainClassifier(data.domain, data)
+        self._numverify_key         = numverify_key
+        self._abstractapi_phone_key = abstractapi_phone_key
+
+    # ─── Public entry point ───────────────────────────────────────────────────
+
+    def run(self) -> Path:
+        """Execute the full aggregation pass. Returns path to findings.json."""
+        self.log.set_tool_context("OSift")
+        self.log.info("[AGGREGATE] Intel aggregation & classification pass starting")
+
+        self._filter_wildcard_fps()
+        intel = self._gather_all()
+        # Expose validated phone data on data so generate_final_report
+        # can write phone_numbers.csv without re-validating.
+        self.data._aggregated_phones = intel["phone_numbers"]
+        self._insert_classification_findings(intel)
+        out   = self._write_findings_file(intel)
+        self._write_vantage_flat(intel)
+
+        st = intel["stats"]
+        self.log.success(
+            f"[AGGREGATE] findings.json — {st['total_items']} items | "
+            f"primary={st['primary_count']} secondary={st['secondary_count']} | "
+            f"phones valid={st['phones_valid']} invalid={st['phones_invalid']} | "
+            f"security findings={st['security_findings']}"
+        )
+        return out
+
+    # ─── Wildcard false-positive filter ──────────────────────────────────────
+
+    def _filter_wildcard_fps(self) -> None:
+        """
+        For each domain that has wildcard DNS (data.wildcard_ips is non-empty),
+        resolve every collected subdomain and remove those that are confirmed
+        wildcard false positives — i.e. they resolve ONLY to the known wildcard
+        IPs. Subdomains that do not resolve at all are kept (they may come from
+        passive or historical sources and should be preserved for review).
+        """
+        if not self.data.wildcard_ips:
+            return
+
+        def _resolve(fqdn: str) -> Set[str]:
+            ips: Set[str] = set()
+            if DNS_AVAILABLE:
+                try:
+                    import dns.resolver as _dnsres
+                    _r = _dnsres.Resolver()
+                    _r.timeout = 3
+                    _r.lifetime = 5
+                    _r.nameservers = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1"]
+                    for _rt in ("A", "AAAA"):
+                        try:
+                            for _rdata in _r.resolve(fqdn, _rt):
+                                ips.add(str(_rdata))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            if not ips:
+                try:
+                    for _ai in socket.getaddrinfo(fqdn, None):
+                        ips.add(_ai[4][0])
+                except Exception:
+                    pass
+            return ips
+
+        for domain, wc_ips in self.data.wildcard_ips.items():
+            if not wc_ips:
+                continue
+            wc_set = set(wc_ips)
+            to_remove: List[str] = []
+            subs = [
+                s for s in self.data.subdomains
+                if s.endswith(f".{domain}")
+            ]
+            for sub in subs:
+                resolved = _resolve(sub)
+                if resolved and resolved.issubset(wc_set):
+                    to_remove.append(sub)
+            for sub in to_remove:
+                del self.data.subdomains[sub]
+            if to_remove:
+                self.log.info(
+                    f"[AGGREGATE] Wildcard validation: removed {len(to_remove)} "
+                    f"false-positive subdomain(s) for {domain} "
+                    f"(wildcard IPs: {', '.join(sorted(wc_set))})"
+                )
+
+    # ─── Theme gatherers ──────────────────────────────────────────────────────
+
+    def _gather_all(self) -> Dict[str, Any]:
+        d = self.data
+
+        # All _gather_* methods are read-only against self.data — safe to run
+        # concurrently.  _gather_phones is the slowest (external API calls) so
+        # it runs alongside the others.  We use a thread pool keyed by name so
+        # exceptions are surfaced with context.
+        _tasks: Dict[str, Any] = {
+            "subs":   self._gather_subdomains,
+            "doms":   self._gather_domains,
+            "emails": self._gather_emails,
+            "phones": self._gather_phones,
+            "ips":    self._gather_ips,
+            "emps":   self._gather_employees,
+            "certs":  self._gather_certs,
+            "urls":   self._gather_urls,
+            "tech":   self._gather_technologies,
+            "asns":   self._gather_asns,
+            "ports":  self._gather_ports,
+            "dns":    self._gather_dns,
+            "whois":  self._gather_whois,
+            "phys":   self._gather_physical,
+            "breach": self._gather_breaches,
+        }
+        _results: Dict[str, Any] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_tasks)) as _pool:
+            _fmap = {_pool.submit(fn): name for name, fn in _tasks.items()}
+            for _fut in concurrent.futures.as_completed(_fmap):
+                _name = _fmap[_fut]
+                try:
+                    _results[_name] = _fut.result()
+                except Exception as _exc:
+                    self.log.warning(f"[AGGREGATE] _gather_{_name} error: {_exc}")
+                    _results[_name] = {} if _name in ("subs", "doms", "emails", "phones") else []
+
+        subs   = _results["subs"]
+        doms   = _results["doms"]
+        emails = _results["emails"]
+        phones = _results["phones"]
+        ips    = _results["ips"]
+        emps   = _results["emps"]
+        certs  = _results["certs"]
+        urls   = _results["urls"]
+        tech   = _results["tech"]
+        asns   = _results["asns"]
+        ports  = _results["ports"]
+        dns    = _results["dns"]
+        whois  = _results["whois"]
+        phys   = _results["phys"]
+        breach = _results["breach"]
+        sec    = d.findings.all_findings()
+
+        # Aggregate primary/secondary counts across classified themes
+        primary_count = (
+            len(subs["primary"]) + len(doms["primary"]) + len(emails["primary"])
+        )
+        secondary_count = (
+            len(subs["secondary"]) + len(doms["secondary"]) + len(emails["secondary"])
+        )
+        total_items = (
+            primary_count + secondary_count
+            + len(phones["valid"]) + len(phones["invalid"])
+            + len(ips) + len(emps) + len(certs) + len(urls)
+            + len(tech) + len(asns) + len(ports) + len(dns)
+            + len(whois) + len(phys) + len(breach) + len(sec)
+        )
+
+        return {
+            "meta": {
+                "osift_version":          VERSION,
+                "generated_at":           datetime.datetime.now(datetime.UTC).isoformat(),
+                "target_domain":          d.domain,
+                "target_company":         d.company,
+                "primary_domains_in_scope": sorted(self.classifier.primary_domains),
+                "scan_started":           d.start_time,
+                "scan_ended":             d.end_time or datetime.datetime.now(datetime.UTC).isoformat(),
+                "tools_run":              TOOL_REGISTRY.all_tools(),
+            },
+            "stats": {
+                "total_items":        total_items,
+                "primary_count":      primary_count,
+                "secondary_count":    secondary_count,
+                "phones_valid":       len(phones["valid"]),
+                "phones_invalid":     len(phones["invalid"]),
+                "security_findings":  len(sec),
+                "validated_findings": d.findings.validated_count(),
+                "subdomains":         len(subs["primary"]) + len(subs["secondary"]),
+                "domains":            len(doms["primary"]) + len(doms["secondary"]),
+                "emails":             len(emails["primary"]) + len(emails["secondary"]),
+                "ips":                len(ips),
+                "employees":          len(emps),
+                "certificates":       len(certs),
+                "breaches":           len(breach),
+            },
+            "subdomains":      subs,
+            "domains":         doms,
+            "email_addresses": emails,
+            "phone_numbers":   phones,
+            "ip_addresses":    ips,
+            "employees":       emps,
+            "certificates":    certs,
+            "crawled_urls":    urls,
+            "technologies":    tech,
+            "asn_networks":    asns,
+            "open_ports":      ports,
+            "dns_records":     dns,
+            "whois_data":      whois,
+            "physical_addresses": phys,
+            "breaches":        breach,
+            "security_findings": {
+                "all":         sec,
+                "by_severity": d.findings.by_severity(),
+                "by_category": d.findings.by_category(),
+                "stats":       d.findings.stats(),
+            },
+        }
+
+    # ── Subdomains ────────────────────────────────────────────────────────────
+
+    def _gather_subdomains(self) -> Dict[str, List]:
+        primary: List[Dict] = []
+        secondary: List[Dict] = []
+        for fqdn, meta in sorted(self.data.subdomains.items()):
+            cls_ = self.classifier.classify_subdomain(fqdn)
+            rec  = {
+                "fqdn":         fqdn,
+                "classification": cls_,
+                "ips":          meta.get("ips", []),
+                "ports":        meta.get("ports", []),
+                "http_status":  meta.get("http_status"),
+                "sources":      meta.get("sources", []),
+                "technologies": meta.get("technologies", []),
+                "cdn_provider": meta.get("cdn_provider"),
+                "cdn_type":     meta.get("cdn_type"),
+                "tls_san":      meta.get("tls_san", False),
+                "shodan_tags":  meta.get("shodan_tags", []),
+                "cloud":        meta.get("cloud"),
+                "reputation":   meta.get("reputation"),
+            }
+            (primary if cls_ == "primary" else secondary).append(rec)
+        return {"primary": primary, "secondary": secondary,
+                "primary_count": len(primary), "secondary_count": len(secondary)}
+
+    # ── Domains ───────────────────────────────────────────────────────────────
+
+    def _gather_domains(self) -> Dict[str, List]:
+        primary: List[Dict] = []
+        secondary: List[Dict] = []
+        seen: Set[str] = set()
+
+        def _add(dom: str, relationship: str, source: str,
+                 ips: Optional[List] = None) -> None:
+            dom = dom.lower().strip().lstrip(".")
+            if not dom or dom in seen:
+                return
+            seen.add(dom)
+            cls_ = self.classifier.classify_domain(dom)
+            rec  = {"domain": dom, "classification": cls_,
+                    "relationship": relationship, "source": source,
+                    "ips": ips or []}
+            (primary if cls_ == "primary" else secondary).append(rec)
+
+        # The target itself is always primary
+        _add(self.data.domain, "target", "scan_target")
+
+        # Explicit associated_domains
+        for dom, meta in self.data.associated_domains.items():
+            _add(dom, meta.get("relationship", ""), meta.get("source", "associated"),
+                 meta.get("ips", []))
+
+        # Infer root domains from every discovered subdomain
+        for fqdn in self.data.subdomains:
+            root = DomainClassifier._registrable_root(fqdn)
+            if root != fqdn:          # it IS a subdomain — add its root
+                _add(root, "dns_inference", "subdomain_root")
+
+        return {"primary": primary, "secondary": secondary,
+                "primary_count": len(primary), "secondary_count": len(secondary)}
+
+    # ── Emails ────────────────────────────────────────────────────────────────
+
+    def _gather_emails(self) -> Dict[str, List]:
+        primary: List[Dict] = []
+        secondary: List[Dict] = []
+        for email, meta in sorted(self.data.email_addresses.items()):
+            cls_ = self.classifier.classify_email(email)
+            # sources may be stored as a list or a single string
+            sources = meta.get("sources") or []
+            if isinstance(sources, str):
+                sources = [sources]
+            if meta.get("source") and meta["source"] not in sources:
+                sources = [meta["source"]] + sources
+
+            rec = {
+                "email":           email,
+                "classification":  cls_,
+                "sources":         sources,
+                "breach":          meta.get("breach", False),
+                "breaches":        meta.get("breaches", []),
+                "first_name":      meta.get("first_name", ""),
+                "last_name":       meta.get("last_name",  ""),
+                "position":        meta.get("position",   ""),
+                "department":      meta.get("department", ""),
+                "seniority":       meta.get("seniority",  ""),
+                "confidence":      meta.get("confidence"),
+                "verified":        meta.get("verified",   meta.get("verified_status")),
+            }
+            (primary if cls_ == "primary" else secondary).append(rec)
+        return {"primary": primary, "secondary": secondary,
+                "primary_count": len(primary), "secondary_count": len(secondary)}
+
+    # ── Phones ────────────────────────────────────────────────────────────────
+
+    def _gather_phones(self) -> Dict[str, List]:
+        """
+        Collect every raw phone string from phone_numbers list AND from
+        employee/person records, validate each one, and split into valid/invalid.
+
+        Validation pipeline
+        -------------------
+        1. PhoneValidator (local NANP/E.164 structural check) -- primary gate.
+        2. numverify API  (external carrier-level validation)  -- secondary check.
+           numverify is called only for numbers that pass local validation.
+           If numverify is unreachable or returns an error, the local result is
+           used as-is (fail-open: external validation is advisory).
+           An optional API key is accepted via --numverify-key; without a key
+           the unauthenticated free endpoint is used.
+        3. Abstract API   (fallback external service, requires --abstractapi-phone-key).
+        """
+        seen: Set[str] = set()
+        raw_numbers: List[Tuple[str, str]] = []  # (raw, source)
+
+        for raw in self.data.phone_numbers:
+            if raw and raw not in seen:
+                seen.add(raw)
+                raw_numbers.append((raw, "recon_data"))
+
+        # Also extract phones from employee records
+        for emp in self.data.employees:
+            phone = (emp.get("phone") or emp.get("phone_number") or "").strip()
+            if phone and phone not in seen:
+                seen.add(phone)
+                raw_numbers.append((phone, "employee_record"))
+
+        # Extract phones from WHOIS data
+        for domain, wd in self.data.whois_data.items():
+            for key in ("registrant_phone", "admin_phone", "tech_phone", "phone"):
+                ph = (wd.get(key) or "").strip()
+                if ph and ph not in seen:
+                    seen.add(ph)
+                    raw_numbers.append((ph, f"whois:{domain}"))
+
+        valid: List[Dict] = []
+        invalid: List[Dict] = []
+
+        for raw, source in raw_numbers:
+            # Step 1 -- local structural validation (PhoneValidator)
+            result = PhoneValidator.validate(raw)
+            result["source"] = source
+
+            # Step 2 -- external validation via numverify / Abstract API
+            # Only cross-validate numbers that pass local structural checks.
+            # External services are never used for self-validation -- they are
+            # independent third-party carrier lookup services.
+            if result["valid"]:
+                ext = self._numverify_validate(result.get("e164") or raw)
+                result["external_validation"] = ext
+                # Demote only when the external service was reachable AND
+                # explicitly returned valid=False (fail-open for network errors).
+                if ext.get("queried") and not ext.get("valid"):
+                    result["valid"]  = False
+                    result["reason"] = (
+                        f"{ext.get('service', 'external')}: "
+                        f"{ext.get('reason', 'marked invalid by external service')}"
+                    )
+
+            (valid if result["valid"] else invalid).append(result)
+
+        # Sort valid by country -> region -> e164
+        valid.sort(key=lambda x: (
+            x.get("country", "ZZ"),
+            x.get("region",  ""),
+            x.get("e164",    x.get("raw", "")),
+        ))
+        return {"valid": valid, "invalid": invalid,
+                "valid_count": len(valid), "invalid_count": len(invalid)}
+
+    def _numverify_validate(self, number: str) -> Dict[str, Any]:
+        """
+        Cross-validate a phone number with an external carrier lookup service.
+
+        Services attempted in order:
+          1. numverify  (http://apilayer.net/api/validate)
+             Free tier available without API key; --numverify-key unlocks higher
+             rate limits.  No self-validation -- this is a third-party GSMA/ITU
+             carrier database lookup.
+          2. Abstract API (https://phonevalidation.abstractapi.com/v1/)
+             Free-tier key required (--abstractapi-phone-key).
+
+        Returns:
+          queried   -- True if an external service was successfully reached
+          valid     -- bool: external verdict (only meaningful when queried=True)
+          reason    -- explanation when invalid
+          carrier   -- carrier name (if returned)
+          line_type -- "mobile" | "landline" | "voip" | ""
+          service   -- which external service responded
+        """
+        result: Dict[str, Any] = {
+            "queried": False, "valid": False, "reason": "",
+            "carrier": "", "line_type": "", "service": "",
+        }
+
+        # Normalise: keep digits only, no leading +
+        e164_digits = re.sub(r"\D", "", number)
+        if not e164_digits:
+            result["reason"] = "empty number after normalisation"
+            return result
+
+        try:
+            import requests as _req
+        except ImportError:
+            result["reason"] = "requests library not available for external validation"
+            return result
+
+        # -- numverify (primary) -----------------------------------------------
+        numverify_key = getattr(self, "_numverify_key", "") or ""
+        try:
+            params: Dict[str, str] = {"number": e164_digits}
+            if numverify_key:
+                params["access_key"] = numverify_key
+            resp = _req.get(
+                "http://apilayer.net/api/validate",
+                params=params,
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # numverify returns {"valid": true/false, "carrier": "...", ...}
+                if isinstance(data.get("valid"), bool):
+                    result.update({
+                        "queried":   True,
+                        "valid":     data["valid"],
+                        "carrier":   data.get("carrier", ""),
+                        "line_type": data.get("line_type", ""),
+                        "service":   "numverify",
+                    })
+                    if not result["valid"]:
+                        result["reason"] = "numverify: number not in service or unallocated"
+                    return result
+        except Exception:
+            pass  # network error -- try fallback
+
+        # -- Abstract API (fallback) -------------------------------------------
+        abstractapi_key = getattr(self, "_abstractapi_phone_key", "") or ""
+        if abstractapi_key:
+            try:
+                resp = _req.get(
+                    "https://phonevalidation.abstractapi.com/v1/",
+                    params={"api_key": abstractapi_key, "phone": e164_digits},
+                    timeout=8,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data.get("valid"), bool):
+                        result.update({
+                            "queried":   True,
+                            "valid":     data["valid"],
+                            "carrier":   (data.get("carrier") or {}).get("name", ""),
+                            "line_type": data.get("type", ""),
+                            "service":   "abstractapi",
+                        })
+                        if not result["valid"]:
+                            result["reason"] = "abstractapi: number not valid"
+                        return result
+            except Exception:
+                pass
+
+        # Both services unreachable -- fail-open (do not invalidate on network error)
+        result["reason"] = "external validation unavailable (network error or no API key)"
+        return result
+
+    # ── IPs ───────────────────────────────────────────────────────────────────
+
+    def _gather_ips(self) -> List[Dict]:
+        records = []
+        for ip, meta in sorted(self.data.ip_addresses.items()):
+            records.append({
+                "ip":             ip,
+                "fqdns":          meta.get("fqdns", meta.get("hostnames", [])),
+                "asn":            meta.get("asn"),
+                "org":            meta.get("org"),
+                "country":        meta.get("country", meta.get("geo", {}).get("country") if isinstance(meta.get("geo"), dict) else None),
+                "city":           meta.get("city",    meta.get("geo", {}).get("city")    if isinstance(meta.get("geo"), dict) else None),
+                "open_ports":     sorted(set(self.data.open_ports.get(ip, []))),
+                "cdn_provider":   meta.get("cdn_provider", meta.get("cdn")),
+                "cloud_provider": meta.get("cloud_provider", meta.get("cloud")),
+                "sources":        meta.get("sources", []) or ([meta["source"]] if meta.get("source") else []),
+                "tags":           meta.get("shodan_tags", meta.get("tags", [])),
+                "reputation":     meta.get("reputation"),
+            })
+        return records
+
+    # ── Employees ─────────────────────────────────────────────────────────────
+
+    def _gather_employees(self) -> List[Dict]:
+        seen: Set[str] = set()
+        records = []
+        for emp in self.data.employees:
+            # Deduplicate by email then by name
+            key = (emp.get("email") or "").lower().strip()
+            if not key:
+                key = f"{emp.get('first_name', emp.get('name', ''))}_{emp.get('last_name', '')}".lower().strip("_")
+            if key in seen or not key:
+                continue
+            seen.add(key)
+            records.append({
+                "name":       (emp.get("name") or
+                               f"{emp.get('first_name','')} {emp.get('last_name','')}".strip()),
+                "first_name": emp.get("first_name", ""),
+                "last_name":  emp.get("last_name",  ""),
+                "email":      emp.get("email",      ""),
+                "title":      emp.get("title",      emp.get("position", "")),
+                "department": emp.get("department", ""),
+                "seniority":  emp.get("seniority",  ""),
+                "linkedin":   emp.get("linkedin",   ""),
+                "twitter":    emp.get("twitter",    ""),
+                "source":     emp.get("source",     ""),
+            })
+        return records
+
+    # ── Certificates ──────────────────────────────────────────────────────────
+
+    def _gather_certs(self) -> List[Dict]:
+        seen: Set[str] = set()
+        records = []
+        for cert in self.data.certificates:
+            fp = (cert.get("fingerprint") or cert.get("serial_number")
+                  or cert.get("serial") or str(cert.get("subject", "")))
+            if fp in seen:
+                continue
+            seen.add(fp)
+            records.append({
+                "subject":     cert.get("subject", ""),
+                "issuer":      cert.get("issuer",  ""),
+                "not_before":  cert.get("not_before",  cert.get("valid_from", "")),
+                "not_after":   cert.get("not_after",   cert.get("valid_to",   cert.get("expiry", ""))),
+                "san":         cert.get("san", cert.get("subject_alt_names", [])),
+                "fingerprint": cert.get("fingerprint", ""),
+                "wildcard":    cert.get("wildcard",    False),
+                "self_signed": cert.get("self_signed", False),
+                "source":      cert.get("source",      ""),
+            })
+        return records
+
+    # ── Crawled URLs ──────────────────────────────────────────────────────────
+
+    def _gather_urls(self) -> List[Dict]:
+        # Preserve up to 5000 URLs; prefer those with non-200 status or technology data
+        all_urls = sorted(self.data.crawled_urls.items())
+        interesting = [(u, m) for u, m in all_urls
+                       if m.get("status_code") not in (200, None)
+                       or m.get("technologies")]
+        rest        = [(u, m) for u, m in all_urls if (u, m) not in interesting]
+        combined    = (interesting + rest)[:5000]
+        return [
+            {
+                "url":          url,
+                "status_code":  meta.get("status_code"),
+                "content_type": meta.get("content_type", ""),
+                "technologies": meta.get("technologies", []),
+                "redirected_to":meta.get("redirected_to", ""),
+                "source":       meta.get("source", ""),
+            }
+            for url, meta in combined
+        ]
+
+    # ── Technologies ──────────────────────────────────────────────────────────
+
+    def _gather_technologies(self) -> List[Dict]:
+        return [
+            {"technology": tech, "seen_on": sorted(set(hosts))[:100]}
+            for tech, hosts in sorted(self.data.technologies.items())
+        ]
+
+    # ── ASNs ──────────────────────────────────────────────────────────────────
+
+    def _gather_asns(self) -> List[Dict]:
+        records = []
+        for asn, meta in sorted(self.data.asn_info.items()):
+            records.append({
+                "asn":     asn,
+                "org":     meta.get("org", ""),
+                "country": meta.get("country", ""),
+                "cidrs":   meta.get("cidrs", meta.get("ranges", [])),
+            })
+        return records
+
+    # ── Open Ports ────────────────────────────────────────────────────────────
+
+    def _gather_ports(self) -> List[Dict]:
+        return [
+            {"ip": ip, "open_ports": sorted(set(ports))}
+            for ip, ports in sorted(self.data.open_ports.items())
+        ]
+
+    # ── DNS Records ───────────────────────────────────────────────────────────
+
+    def _gather_dns(self) -> List[Dict]:
+        """
+        Flatten dns_records into a list of per-record dicts suitable for
+        findings.json.  Structured fields from _query_structured (priority,
+        exchange, policy, etc.) are preserved as-is so downstream consumers
+        don't have to re-parse raw strings.  The synthetic keys written by
+        _get_dns_records (DNSSEC, security_summary, DMARC, DKIM, BIMI,
+        MTA-STS, TLS-RPT, SRV_SERVICES) are each serialised faithfully.
+        """
+        # Record types whose values are summary dicts (not lists of rdata records)
+        _SUMMARY_KEYS = {"DNSSEC", "security_summary"}
+
+        records: List[Dict] = []
+
+        for domain, rec_dict in sorted(self.data.dns_records.items()):
+            if not isinstance(rec_dict, dict):
+                # Legacy format: plain list of strings
+                if isinstance(rec_dict, list):
+                    for entry in rec_dict:
+                        records.append({"domain": domain, "type": "unknown",
+                                        "value": str(entry)})
+                continue
+
+            for rtype, values in rec_dict.items():
+                if rtype in _SUMMARY_KEYS:
+                    # Emit as a single summary record (dict value, not a list)
+                    records.append({
+                        "domain": domain,
+                        "type":   rtype,
+                        "value":  values,   # dict preserved verbatim
+                    })
+                elif isinstance(values, list):
+                    for val in values:
+                        if isinstance(val, dict):
+                            # Structured record from _query_structured —
+                            # carry all parsed fields forward
+                            records.append({"domain": domain, "type": rtype, **val})
+                        else:
+                            records.append({"domain": domain, "type": rtype,
+                                            "value": str(val)})
+                else:
+                    records.append({"domain": domain, "type": rtype,
+                                    "value": str(values)})
+
+        # Zone transfer entries
+        for zt in self.data.zone_transfers:
+            ns      = zt.get("ns", "")
+            for entry in zt.get("entries", []):
+                if isinstance(entry, dict):
+                    # Spread entry fields but keep type="AXFR" (entry["type"] is
+                    # the individual record type within the zone, stored as "rtype")
+                    row = {"domain": self.data.domain, "type": "AXFR", "ns": ns}
+                    for k, v in entry.items():
+                        row["rtype" if k == "type" else k] = v
+                else:
+                    row = {"domain": self.data.domain, "type": "AXFR",
+                           "ns": ns, "value": str(entry)}
+                records.append(row)
+
+        return records
+
+    # ── WHOIS ──────────────────────────────────────────────────────────────────
+
+    def _gather_whois(self) -> List[Dict]:
+        records = []
+        for domain, wd in sorted(self.data.whois_data.items()):
+            if isinstance(wd, dict):
+                records.append({"domain": domain, **wd})
+        return records
+
+    # ── Physical Addresses ────────────────────────────────────────────────────
+
+    def _gather_physical(self) -> List[Dict]:
+        seen: Set[str] = set()
+        records = []
+        for addr in self.data.physical_addresses:
+            if not isinstance(addr, dict):
+                continue
+            key = str(addr)
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append(addr)
+        return records
+
+    # ── Breaches ──────────────────────────────────────────────────────────────
+
+    def _gather_breaches(self) -> List[Dict]:
+        seen: Set[Tuple] = set()
+        records = []
+        for b in self.data.breach_data:
+            key = (
+                (b.get("email") or "").lower(),
+                (b.get("breach_name") or b.get("breach") or "").lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            records.append({
+                "email":        b.get("email", ""),
+                "breach_name":  b.get("breach_name", b.get("breach", "")),
+                "breach_date":  b.get("breach_date", ""),
+                "data_classes": b.get("data_classes", []),
+                "domain":       b.get("domain", ""),
+                "source_tool":  b.get("tool",    b.get("source", "")),
+                "tool_version": b.get("tool_version", ""),
+                "timestamp":    b.get("timestamp", ""),
+            })
+        return records
+
+    # ─── Classification → FindingStore ────────────────────────────────────────
+
+    def _insert_classification_findings(self, intel: Dict) -> None:
+        """
+        Push classification-derived facts into the FindingStore so they are
+        included in findings_report.json and the executive summary.
+        """
+        ts = datetime.datetime.now(datetime.UTC).isoformat()
+        data = self.data
+
+        # Primary subdomain findings are deferred to generate_final_report where
+        # the confirmed (DNS-resolved or HTTP-responding) set is available.
+        # Secondary subdomains and secondary domains are not emitted as findings.
+
+        # Primary emails only — secondary emails are excluded from findings
+        _scope_domains_pe = set(data.domains if data.domains else [data.domain])
+        for rec in intel["email_addresses"]["primary"]:
+            _pe_email = rec["email"]
+            _pe_dom   = _pe_email.split("@", 1)[1].lower() if "@" in _pe_email else ""
+            _pe_title = (
+                "Email Address Identified"
+                if any(_pe_dom == _d or _pe_dom.endswith("." + _d) for _d in _scope_domains_pe)
+                else "Email Address Identified (Unknown)"
+            )
+            _pe_srcs = [_s for _s in (rec.get("sources") or []) if _s] or ["OSift"]
+            add_finding(data, _pe_srcs[0], "primary_email", self.CAT_EMAIL, "info",
+                        _pe_title,
+                        host=data.domain,
+                        email=_pe_email,
+                        affected=_pe_email,
+                        timestamp=ts,
+                        verified=rec.get("verified"),
+                        breach=rec.get("breach", False))
+            for _pe_src in _pe_srcs[1:]:
+                add_finding(data, _pe_src, "primary_email", self.CAT_EMAIL, "info",
+                            _pe_title,
+                            host=data.domain,
+                            email=_pe_email,
+                            timestamp=ts)
+
+        # Valid phone numbers — emit as "Phone Number Pattern Spotted - Confirmed"
+        # using type="phone_confirmed" so findings from the crawl path (same type)
+        # merge with these when the same E.164 number appears in both places.
+        for rec in intel["phone_numbers"]["valid"]:
+            _pv_e164     = (rec.get("e164") or rec.get("raw") or "").strip()
+            _pv_affected = _build_phone_affected(rec)
+            if not _pv_affected:
+                continue
+            ext = rec.get("external_validation") or {}
+            add_finding(data, "phone-validator", "phone_confirmed", self.CAT_PHONE, "info",
+                        "Phone Number Pattern Spotted - Confirmed",
+                        host=data.domain,
+                        phone=_pv_e164,
+                        affected=_pv_affected,
+                        timestamp=ts,
+                        phone_e164=rec.get("e164"),
+                        phone_raw=rec.get("raw"),
+                        area_code=rec.get("area_code"),
+                        location=rec.get("location", ""),
+                        country=rec.get("country", ""),
+                        region=rec.get("region", ""),
+                        format_type=rec.get("format_type", ""),
+                        carrier=ext.get("carrier", ""),
+                        line_type=ext.get("line_type", ""),
+                        phone_source=rec.get("source", ""))
+
+        # Credential breaches
+        for rec in intel["breaches"]:
+            if not rec.get("email"):
+                continue
+            add_finding(
+                data,
+                rec.get("source_tool") or "hibp",
+                "credential_breach", self.CAT_BREACH, "high",
+                f"Credential breach: account found in \"{rec['breach_name']}\" "
+                f"({rec.get('breach_date') or 'date unknown'})",
+                email=rec["email"], affected=rec["email"],
+                timestamp=rec.get("timestamp") or ts,
+                breach_name=rec.get("breach_name"),
+                data_classes=rec.get("data_classes", []),
+                output_file=rec.get("output_file", ""),
+            )
+
+        # DNS security posture findings
+        self._emit_dns_security_findings(ts)
+
+    def _emit_dns_security_findings(self, ts: str) -> None:
+        """
+        Inspect the security_summary block written by DNSEnumerator._get_dns_records
+        and raise FindingStore entries for every missing or weak DNS security control.
+
+        Severity mapping
+        ----------------
+        high    — directly exploitable absence (no SPF, no DMARC, no CAA)
+        medium  — weak policy that meaningfully reduces protection
+                  (SPF +all, DMARC p=none, CAA present but no issuewild)
+        low     — hardening recommendation (no DNSSEC, no MTA-STS, no TLS-RPT,
+                  no BIMI, missing DKIM selectors)
+        info    — positive confirmation of a control being correctly configured
+        """
+        domain = self.data.domain
+        rec_dict = self.data.dns_records.get(domain)
+        if not isinstance(rec_dict, dict):
+            return
+        ss = rec_dict.get("security_summary")
+        if not isinstance(ss, dict):
+            return
+
+        data = self.data
+        _dns_rec_file = str(
+            self.output_dir / "dns" / "records" / f"{_safe_filename(domain)}_records.json"
+        )
+
+        # ── SPF ───────────────────────────────────────────────────────────────
+        if not ss.get("spf_present"):
+            add_finding(
+                data, "OSift-DNS", "dns_no_spf", self.CAT_DNS, "high",
+                "No SPF record found. Without SPF, any host can send email "
+                "claiming to be from this domain, enabling phishing and spoofing attacks.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            policy = ss.get("spf_policy", "")
+            if "pass_all" in policy:
+                add_finding(
+                    data, "OSift-DNS", "dns_spf_pass_all", self.CAT_DNS, "high",
+                    "SPF record uses '+all', allowing any server to send mail as this domain. "
+                    "This completely negates SPF protection and enables trivial spoofing.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            elif "softfail" in policy:
+                add_finding(
+                    data, "OSift-DNS", "dns_spf_softfail", self.CAT_DNS, "medium",
+                    "SPF record uses '~all' (softfail). Mail from unauthorised sources will be "
+                    "flagged but not rejected. Consider upgrading to '-all' (hardfail).",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            elif "neutral" in policy:
+                add_finding(
+                    data, "OSift-DNS", "dns_spf_neutral", self.CAT_DNS, "medium",
+                    "SPF record uses '?all' (neutral), providing no meaningful protection against spoofing.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            elif "no_all_mechanism" in policy:
+                add_finding(
+                    data, "OSift-DNS", "dns_spf_no_all", self.CAT_DNS, "medium",
+                    "SPF record has no 'all' mechanism. Receiving servers may treat unlisted senders inconsistently.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            else:
+                add_finding(
+                    data, "OSift-DNS", "dns_spf_ok", self.CAT_DNS, "info",
+                    f"SPF record present with strict policy ({policy}).",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+
+        # ── DMARC ─────────────────────────────────────────────────────────────
+        if not ss.get("dmarc_present"):
+            add_finding(
+                data, "OSift-DNS", "dns_no_dmarc", self.CAT_DNS, "high",
+                "No DMARC record found. Without DMARC, receiving servers have no policy for "
+                "handling SPF/DKIM failures, leaving the domain open to spoofing.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            dmarc_policy = ss.get("dmarc_policy", "")
+            if dmarc_policy == "none":
+                add_finding(
+                    data, "OSift-DNS", "dns_dmarc_none", self.CAT_DNS, "medium",
+                    "DMARC policy is 'p=none' (monitor only). Failing messages are not rejected "
+                    "or quarantined. Escalate to 'quarantine' or 'reject' once RUA reports confirm "
+                    "legitimate senders are covered.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            elif dmarc_policy == "quarantine":
+                add_finding(
+                    data, "OSift-DNS", "dns_dmarc_quarantine", self.CAT_DNS, "low",
+                    "DMARC policy is 'p=quarantine'. Consider upgrading to 'p=reject' for maximum spoofing protection.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            elif dmarc_policy == "reject":
+                add_finding(
+                    data, "OSift-DNS", "dns_dmarc_ok", self.CAT_DNS, "info",
+                    "DMARC policy is 'p=reject' — optimal configuration. Spoofed messages are rejected outright.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            else:
+                add_finding(
+                    data, "OSift-DNS", "dns_dmarc_present", self.CAT_DNS, "info",
+                    f"DMARC record present (policy: {dmarc_policy or 'unrecognised'}).",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+
+        # ── CAA ───────────────────────────────────────────────────────────────
+        if not ss.get("caa_present"):
+            add_finding(
+                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "high",
+                "No CAA record found. Without CAA, any public Certificate Authority can issue "
+                "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            issuers    = ss.get("caa_issuers", [])
+            caa_list   = rec_dict.get("CAA", [])
+            wild_issuers = [
+                r.get("value", "")
+                for r in caa_list
+                if isinstance(r, dict) and r.get("tag") == "issuewild"
+            ]
+            if not wild_issuers:
+                add_finding(
+                    data, "OSift-DNS", "dns_caa_no_issuewild", self.CAT_DNS, "medium",
+                    f"CAA record restricts issuance for the apex domain (issuers: {', '.join(issuers) or 'none'}) "
+                    f"but has no 'issuewild' tag. Wildcard certificates may still be issued by any CA.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            else:
+                add_finding(
+                    data, "OSift-DNS", "dns_caa_ok", self.CAT_DNS, "info",
+                    f"CAA record restricts issuance to: {', '.join(issuers)} (wildcard: {', '.join(wild_issuers)}).",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+
+        # ── DNSSEC ────────────────────────────────────────────────────────────
+        dnssec = rec_dict.get("DNSSEC", {})
+        if not dnssec.get("signed"):
+            add_finding(
+                data, "OSift-DNS", "dns_no_dnssec", self.CAT_DNS, "low",
+                "DNSSEC is not enabled. Without DNSSEC, DNS responses can be forged "
+                "(cache poisoning / MITM). Enable DNSSEC at your registrar to protect against this.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            has_key = dnssec.get("dnskey_present")
+            has_ds  = dnssec.get("ds_present")
+            add_finding(
+                data, "OSift-DNS", "dns_dnssec_ok", self.CAT_DNS, "info",
+                f"DNSSEC is enabled (DNSKEY: {'yes' if has_key else 'no'}, DS: {'yes' if has_ds else 'no'}).",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+
+        # ── DKIM ─────────────────────────────────────────────────────────────
+        dkim_selectors = ss.get("dkim_selectors", [])
+        dkim_recs      = rec_dict.get("DKIM", [])
+        if not dkim_selectors:
+            add_finding(
+                data, "OSift-DNS", "dns_no_dkim", self.CAT_DNS, "medium",
+                "No DKIM public keys found across common selectors. Without DKIM, email from "
+                "this domain cannot be cryptographically authenticated by receivers.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            # Check for revoked keys (empty p= tag)
+            revoked = [
+                r.get("selector", "?")
+                for r in dkim_recs
+                if isinstance(r, dict) and r.get("dkim_pubkey_absent")
+            ]
+            if revoked:
+                add_finding(
+                    data, "OSift-DNS", "dns_dkim_revoked_key", self.CAT_DNS, "medium",
+                    f"DKIM selector(s) {revoked} have an empty public key (p=), indicating the key "
+                    f"has been intentionally revoked. Confirm this is deliberate and no mail flows "
+                    f"depend on the revoked selector.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                )
+            add_finding(
+                data, "OSift-DNS", "dns_dkim_ok", self.CAT_DNS, "info",
+                f"DKIM public key(s) found on selector(s): {', '.join(dkim_selectors)}.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+
+        # ── MTA-STS ───────────────────────────────────────────────────────────
+        if not ss.get("mta_sts"):
+            add_finding(
+                data, "OSift-DNS", "dns_no_mta_sts", self.CAT_DNS, "low",
+                "No MTA-STS policy found. MTA-STS forces SMTP connections to use TLS, "
+                "preventing downgrade attacks on inbound mail.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            add_finding(
+                data, "OSift-DNS", "dns_mta_sts_ok", self.CAT_DNS, "info",
+                "MTA-STS policy record present.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+
+        # ── TLS-RPT ───────────────────────────────────────────────────────────
+        if not ss.get("tls_rpt"):
+            add_finding(
+                data, "OSift-DNS", "dns_no_tls_rpt", self.CAT_DNS, "low",
+                "No TLS-RPT reporting record found. TLS-RPT delivers aggregate reports about "
+                "STARTTLS failures to a nominated address, enabling visibility into mail delivery issues.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+        else:
+            add_finding(
+                data, "OSift-DNS", "dns_tls_rpt_ok", self.CAT_DNS, "info",
+                "TLS-RPT reporting record present.",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+
+        # ── BIMI ─────────────────────────────────────────────────────────────
+        if ss.get("bimi_present"):
+            bimi_recs = rec_dict.get("BIMI", [])
+            logo = next(
+                (r.get("bimi_logo_url", "") for r in bimi_recs if isinstance(r, dict)),
+                "",
+            )
+            add_finding(
+                data, "OSift-DNS", "dns_bimi_present", self.CAT_DNS, "info",
+                "BIMI record found" + (f" — logo: {logo}" if logo else "") + ".",
+                domain=domain, affected=domain, timestamp=ts,
+                output_file=_dns_rec_file,
+            )
+
+    # ─── File writer ──────────────────────────────────────────────────────────
+
+    def _write_findings_file(self, intel: Dict) -> Path:
+        """
+        Write reports/findings.json — the single, unified output file that
+        combines every intelligence theme and all security findings.
+
+        NOTE: _insert_classification_findings() must be called before this method
+        so that phone/breach/subdomain findings are already in the FindingStore
+        when we snapshot it here.
+        """
+        reports_dir = self.output_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        out_path = reports_dir / "findings.json"
+
+        # Re-snapshot FindingStore now that classification findings have been inserted.
+        # Normalise output_file to relative paths so the file is portable.
+        _ia_path_base = _project_dir if _project_dir else self.output_dir
+        _raw_sec = self.data.findings.all_findings()
+        all_sec: List[Dict] = []
+        for _fsi in _raw_sec:
+            _ofsi = (_fsi.get("output_file") or "").strip()
+            if _ofsi:
+                _fsic = dict(_fsi)
+                _fsic["output_file"] = ",".join(
+                    _rel_path(p.strip(), _ia_path_base)
+                    for p in _ofsi.split(",") if p.strip()
+                )
+                all_sec.append(_fsic)
+            else:
+                all_sec.append(_fsi)
+        by_sev     = self.data.findings.by_severity()
+        by_cat     = self.data.findings.by_category()
+        sec_stats  = self.data.findings.stats()
+        # Patch stats
+        intel["stats"]["security_findings"]  = len(all_sec)
+        intel["stats"]["validated_findings"] = self.data.findings.validated_count()
+
+        doc: Dict[str, Any] = {
+            "_schema":  "OSift-UnifiedFindings/1.0",
+            "_description": (
+                "Single unified findings file produced by OSift. "
+                "Contains classified intelligence (primary/secondary) for domains, "
+                "subdomains, and email addresses; validated phone numbers with "
+                "location data; and all security findings from every tool, "
+                "deduplicated and annotated with full provenance."
+            ),
+
+            # ── Header ────────────────────────────────────────────────────────
+            "meta":  intel["meta"],
+            "stats": intel["stats"],
+
+            # ── Classified intelligence ───────────────────────────────────────
+            "intelligence": {
+
+                "subdomains": {
+                    "_note": (
+                        "PRIMARY = belongs to target domain or a verified acquired entity. "
+                        "SECONDARY = any other subdomain found during the scan."
+                    ),
+                    "primary_count":   intel["subdomains"]["primary_count"],
+                    "secondary_count": intel["subdomains"]["secondary_count"],
+                    "primary":         intel["subdomains"]["primary"],
+                    "secondary":       intel["subdomains"]["secondary"],
+                },
+
+                "domains": {
+                    "_note": (
+                        "PRIMARY = target domain or verified acquisition/merger. "
+                        "SECONDARY = any other domain encountered."
+                    ),
+                    "primary_count":   intel["domains"]["primary_count"],
+                    "secondary_count": intel["domains"]["secondary_count"],
+                    "primary":         intel["domains"]["primary"],
+                    "secondary":       intel["domains"]["secondary"],
+                },
+
+                "email_addresses": {
+                    "_note": (
+                        "PRIMARY = email domain matches target or verified acquisition. "
+                        "SECONDARY = all other email addresses."
+                    ),
+                    "primary_count":   intel["email_addresses"]["primary_count"],
+                    "secondary_count": intel["email_addresses"]["secondary_count"],
+                    "primary":         intel["email_addresses"]["primary"],
+                    "secondary":       intel["email_addresses"]["secondary"],
+                },
+
+                "phone_numbers": {
+                    "_note": (
+                        "Every phone number is validated against the full NANP "
+                        "area-code table (US/Canada/Caribbean) and the E.164 "
+                        "international country-code table. Numbers that do not "
+                        "match any legitimate code are saved in 'invalid' with "
+                        "a rejection reason."
+                    ),
+                    "valid_count":   intel["phone_numbers"]["valid_count"],
+                    "invalid_count": intel["phone_numbers"]["invalid_count"],
+                    "valid":         intel["phone_numbers"]["valid"],
+                    "invalid":       intel["phone_numbers"]["invalid"],
+                },
+
+                "ip_addresses":     intel["ip_addresses"],
+                "employees":        intel["employees"],
+                "certificates":     intel["certificates"],
+                "crawled_urls":     intel["crawled_urls"],
+                "technologies":     intel["technologies"],
+                "asn_networks":     intel["asn_networks"],
+                "open_ports":       intel["open_ports"],
+                "dns_records":      intel["dns_records"],
+                "whois_data":       intel["whois_data"],
+                "physical_addresses": intel["physical_addresses"],
+                "breaches":         intel["breaches"],
+            },
+
+            # ── Security findings ─────────────────────────────────────────────
+            "security_findings": {
+                "_note": (
+                    "Deduplicated security findings from all tools. "
+                    "Each entry carries tool name, version, and ISO timestamp. "
+                    "When 2+ tools independently report the same finding a "
+                    "'validations' list records each additional tool's attribution."
+                ),
+                "stats":       sec_stats,
+                "by_severity": by_sev,
+                "by_category": by_cat,
+                "all":         all_sec,
+            },
+        }
+
+        out_path.write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")
+        self.log.success(f"[AGGREGATE] Unified findings → {out_path}")
+        return out_path
+
+    def _write_vantage_flat(self, intel: Dict) -> None:
+        """
+        Write <output_dir>/findings.json — a flat JSON array in Vantage's expected
+        format so the web UI can display every discovered data item as an
+        informational finding in real time.
+
+        Vantage schema per item:
+          title, datetime, ip, port, hostname, risk, command, description, output
+        """
+        ts   = intel["meta"].get("generated_at", datetime.datetime.now(datetime.UTC).isoformat())
+        rows: List[Dict] = []
+
+        def _row(title: str, description: str, *,
+                 ip: str = "", port: str = "", hostname: str = "",
+                 risk: str = "info", command: str = "osift",
+                 output: str = "") -> Dict:
+            return {
+                "title":       title,
+                "datetime":    ts,
+                "ip":          ip,
+                "port":        port,
+                "hostname":    hostname,
+                "risk":        risk,
+                "command":     command,
+                "description": description,
+                "output":      output,
+            }
+
+        # ── Subdomains ────────────────────────────────────────────────────────
+        for cls_key in ("primary", "secondary"):
+            for rec in intel["subdomains"].get(cls_key, []):
+                fqdn    = rec.get("fqdn", "")
+                ips     = rec.get("ips", [])
+                sources = ", ".join(rec.get("sources", []))
+                tech    = ", ".join(rec.get("technologies", []))
+                ports   = ", ".join(str(p) for p in rec.get("ports", []))
+                desc    = f"Classification: {cls_key}"
+                if sources: desc += f" | Sources: {sources}"
+                if tech:    desc += f" | Tech: {tech}"
+                if ports:   desc += f" | Ports: {ports}"
+                rows.append(_row(
+                    f"Subdomain: {fqdn}", desc,
+                    ip=ips[0] if ips else "",
+                    hostname=fqdn,
+                    command="osift/amass",
+                ))
+
+        # ── Domains ───────────────────────────────────────────────────────────
+        for cls_key in ("primary", "secondary"):
+            for rec in intel["domains"].get(cls_key, []):
+                dom  = rec.get("domain", rec.get("fqdn", ""))
+                rel  = rec.get("relationship", "")
+                src  = rec.get("source", "")
+                desc = f"Classification: {cls_key}"
+                if rel: desc += f" | Relationship: {rel}"
+                if src: desc += f" | Source: {src}"
+                rows.append(_row(
+                    f"Domain: {dom}", desc,
+                    hostname=dom,
+                    command="osift",
+                ))
+
+        # ── Email Addresses ───────────────────────────────────────────────────
+        for cls_key in ("primary", "secondary"):
+            for rec in intel["email_addresses"].get(cls_key, []):
+                email   = rec.get("email", "")
+                name    = f"{rec.get('first_name','')} {rec.get('last_name','')}".strip()
+                pos     = rec.get("position", "")
+                sources = ", ".join(rec.get("sources", []))
+                breach  = rec.get("breach", False)
+                desc    = f"Classification: {cls_key}"
+                if name:    desc += f" | Name: {name}"
+                if pos:     desc += f" | Position: {pos}"
+                if sources: desc += f" | Sources: {sources}"
+                if breach:  desc += " | BREACHED"
+                rows.append(_row(
+                    f"Email: {email}", desc,
+                    hostname=email.split("@")[-1] if "@" in email else "",
+                    risk="medium" if breach else "info",
+                    command="osift/theHarvester",
+                ))
+
+        # ── Phone Numbers ─────────────────────────────────────────────────────
+        for rec in intel["phone_numbers"].get("valid", []):
+            display = rec.get("e164") or rec.get("raw", "")
+            loc     = rec.get("location", "")
+            country = rec.get("country",  "")
+            carrier = rec.get("carrier",  "")
+            src     = rec.get("source",   "")
+            desc    = f"Valid phone: {display}"
+            if loc:     desc += f" | Location: {loc}"
+            if country: desc += f" ({country})"
+            if carrier: desc += f" | Carrier: {carrier}"
+            if src:     desc += f" | Source: {src}"
+            rows.append(_row(f"Phone Number: {display}", desc, command="osift"))
+
+        # ── IP Addresses ──────────────────────────────────────────────────────
+        for rec in intel["ip_addresses"]:
+            ip      = rec.get("ip", "")
+            org     = rec.get("org", "")
+            country = rec.get("country", "")
+            fqdns   = ", ".join(rec.get("fqdns", [])[:5])
+            ports   = ", ".join(str(p) for p in rec.get("open_ports", []))
+            cdn     = rec.get("cdn_provider", "")
+            cloud   = rec.get("cloud_provider", "")
+            desc    = f"IP: {ip}"
+            if org:     desc += f" | Org: {org}"
+            if country: desc += f" ({country})"
+            if fqdns:   desc += f" | FQDNs: {fqdns}"
+            if ports:   desc += f" | Open ports: {ports}"
+            if cdn:     desc += f" | CDN: {cdn}"
+            if cloud:   desc += f" | Cloud: {cloud}"
+            rows.append(_row(f"IP Address: {ip}", desc, ip=ip, command="osift"))
+
+        # ── Employees ─────────────────────────────────────────────────────────
+        for rec in intel["employees"]:
+            name   = rec.get("name", "")
+            title  = rec.get("title", "")
+            dept   = rec.get("department", "")
+            email  = rec.get("email", "")
+            src    = rec.get("source", "")
+            desc   = f"Person: {name}"
+            if title: desc += f" | Title: {title}"
+            if dept:  desc += f" | Dept: {dept}"
+            if email: desc += f" | Email: {email}"
+            if src:   desc += f" | Source: {src}"
+            rows.append(_row(
+                f"Employee: {name}", desc,
+                command="osift/theHarvester",
+            ))
+
+        # ── TLS Certificates ──────────────────────────────────────────────────
+        for rec in intel["certificates"]:
+            subj       = rec.get("subject", "")
+            issuer     = rec.get("issuer",  "")
+            not_after  = rec.get("not_after",  "")
+            san        = rec.get("san", [])
+            san_str    = ", ".join(san[:10]) if isinstance(san, list) else str(san)
+            wildcard   = rec.get("wildcard",    False)
+            self_signed = rec.get("self_signed", False)
+            desc = f"Subject: {subj}"
+            if issuer:     desc += f" | Issuer: {issuer}"
+            if not_after:  desc += f" | Expires: {not_after}"
+            if san_str:    desc += f" | SANs: {san_str}"
+            if wildcard:   desc += " | WILDCARD"
+            if self_signed: desc += " | SELF-SIGNED"
+            hostname = subj.lstrip("*.") if subj else ""
+            rows.append(_row(
+                f"TLS Certificate: {subj}", desc,
+                hostname=hostname,
+                risk="low" if self_signed else "info",
+                command="osift/certs",
+            ))
+
+        # ── Technologies ──────────────────────────────────────────────────────
+        for rec in intel["technologies"]:
+            tech     = rec.get("technology", "")
+            seen_on  = rec.get("seen_on", [])
+            seen_str = ", ".join(seen_on[:10])
+            desc     = f"Technology detected: {tech}"
+            if seen_str: desc += f" | Seen on: {seen_str}"
+            rows.append(_row(
+                f"Technology: {tech}", desc,
+                hostname=seen_on[0] if seen_on else "",
+                command="osift/wappalyzer",
+            ))
+
+        # ── ASN Networks ─────────────────────────────────────────────────────
+        for rec in intel["asn_networks"]:
+            asn    = rec.get("asn", "")
+            org    = rec.get("org", "")
+            country = rec.get("country", "")
+            cidrs  = ", ".join(rec.get("cidrs", [])[:10])
+            desc   = f"ASN: {asn}"
+            if org:     desc += f" | Org: {org}"
+            if country: desc += f" ({country})"
+            if cidrs:   desc += f" | CIDRs: {cidrs}"
+            rows.append(_row(
+                f"ASN: {asn} — {org}", desc,
+                command="osift/asnmap",
+            ))
+
+        # ── Open Ports ────────────────────────────────────────────────────────
+        for rec in intel["open_ports"]:
+            ip    = rec.get("ip", "")
+            ports = rec.get("open_ports", [])
+            for port in ports:
+                rows.append(_row(
+                    f"Open Port: {port}/tcp on {ip}",
+                    f"Port {port} open on {ip}",
+                    ip=ip, port=str(port),
+                    command="osift/nmap",
+                ))
+
+        # ── DNS Records ───────────────────────────────────────────────────────
+        for rec in intel["dns_records"]:
+            domain = rec.get("domain", "")
+            rtype  = rec.get("type",   "")
+            value  = rec.get("value",  rec.get("address", rec.get("exchange", "")))
+            if isinstance(value, dict):
+                value = json.dumps(value)
+            desc = f"Type: {rtype} | Domain: {domain} | Value: {value}"
+            rows.append(_row(
+                f"DNS Record: {rtype} {domain}",
+                desc,
+                hostname=domain,
+                command="osift/dns",
+            ))
+
+        # ── WHOIS Data ────────────────────────────────────────────────────────
+        for rec in intel["whois_data"]:
+            domain     = rec.get("domain", "")
+            registrar  = rec.get("registrar", "")
+            created    = rec.get("creation_date",    rec.get("created", ""))
+            expires    = rec.get("expiration_date",  rec.get("expires", ""))
+            registrant = rec.get("registrant_name",  rec.get("registrant", ""))
+            desc = f"WHOIS for {domain}"
+            if registrar:  desc += f" | Registrar: {registrar}"
+            if registrant: desc += f" | Registrant: {registrant}"
+            if created:    desc += f" | Created: {created}"
+            if expires:    desc += f" | Expires: {expires}"
+            rows.append(_row(
+                f"WHOIS: {domain}", desc,
+                hostname=domain,
+                command="osift/whois",
+            ))
+
+        # ── Physical Addresses ────────────────────────────────────────────────
+        for rec in intel["physical_addresses"]:
+            addr_parts = [
+                rec.get("street", ""), rec.get("city", ""),
+                rec.get("state", ""),  rec.get("country", ""),
+                rec.get("postal_code", ""),
+            ]
+            addr_str = ", ".join(p for p in addr_parts if p)
+            if not addr_str:
+                addr_str = str(rec)
+            src = rec.get("source", "")
+            desc = f"Address: {addr_str}"
+            if src: desc += f" | Source: {src}"
+            rows.append(_row(
+                f"Physical Address: {addr_str}", desc,
+                command="osift",
+            ))
+
+        # ── Credential Breaches ───────────────────────────────────────────────
+        for rec in intel["breaches"]:
+            email    = rec.get("email",       "")
+            bname    = rec.get("breach_name", "")
+            bdate    = rec.get("breach_date", "")
+            classes  = ", ".join(rec.get("data_classes", []))
+            tool     = rec.get("source_tool", "hibp")
+            desc = f"Credential breach: {email} in \"{bname}\""
+            if bdate:   desc += f" ({bdate})"
+            if classes: desc += f" | Data: {classes}"
+            rows.append(_row(
+                f"Credential Breach: {email} — {bname}", desc,
+                hostname=email.split("@")[-1] if "@" in email else "",
+                risk="high",
+                command=f"osift/{tool}",
+            ))
+
+        # Write the flat file Vantage polls
+        out_path = self.output_dir / "findings.json"
+        out_path.write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
+        self.log.info(f"[AGGREGATE] Vantage findings.json → {out_path} ({len(rows)} items)")
+
+# ─── Raw Output Parser ────────────────────────────────────────────────────────
+
+class RawOutputParser:
+    """
+    Cross-tool raw output harvester.
+
+    Runs as a pre-aggregation pass (before IntelAggregator) after all tool
+    phases have completed.  It walks every file the run produced, extracts
+    structured and unstructured intelligence (emails, phones, subdomains,
+    domains, IPs, URLs), deduplicates against what is already in ReconData,
+    and merges new items in.  The IntelAggregator then operates on the
+    fully-enriched ReconData.
+
+    Extraction strategy per file type
+    ----------------------------------
+    .json   — parsed structurally; known schemas are handled explicitly; all
+              string values are additionally regex-scanned for emails/phones.
+    .txt    — line-by-line: treated as potential FQDN/IP list (common for
+              subfinder, dnsx, brute-force output) and regex-scanned.
+    .jsonl  — each line parsed as JSON, same as .json.
+    .html / .xml — regex-scanned for emails, phones, URLs.
+    All other text files — regex-scanned.
+
+    Binary and very large files (>8 MB) are skipped.
+
+    Primary vs Secondary
+    --------------------
+    The parser does NOT classify at this stage.  It simply adds every item it
+    finds to ReconData (using the same deduplication guards the live tools use).
+    DomainClassifier / IntelAggregator handle classification afterwards.
+    """
+
+    # ── Compiled regex patterns ──────────────────────────────────────────────
+    _EMAIL_RE    = re.compile(
+        r'\b[a-zA-Z0-9._%+\-]{1,64}@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b'
+    )
+    _PHONE_RE    = re.compile(
+        r'(?:'
+        r'\+[1-9]\d{0,2}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}'   # E.164-ish
+        r'|'
+        r'(?:\+1[\s\-.]?)?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4}'                # NANP
+        r')'
+    )
+    _FQDN_RE     = re.compile(
+        r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)'
+        r'+[a-zA-Z]{2,}\b'
+    )
+    _IPV4_RE     = re.compile(
+        r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}'
+        r'(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b'
+    )
+    _URL_RE      = re.compile(
+        r'https?://[^\s"\'<>\])\}]{6,}'
+    )
+    _SUBDOMAIN_RE = re.compile(r'^[a-zA-Z0-9\-]+\.[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}$')
+
+    # File size limit (bytes) beyond which we skip a file
+    _MAX_FILE_SIZE = 8 * 1024 * 1024   # 8 MB
+
+    # Extensions we will never try to read as text
+    _BINARY_EXTS = frozenset({
+        ".der", ".crt", ".pem", ".p12", ".pfx", ".cer",
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
+        ".zip", ".gz", ".tar", ".bz2", ".xz", ".7z", ".rar",
+        ".pdf", ".docx", ".xlsx", ".pptx",
+        ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+        ".pcap", ".pcapng",
+    })
+
+    # Directories we always skip entirely
+    _SKIP_DIRS = frozenset({
+        "logs",        # log files — not structured output
+        "reports",     # our own output — would create a feedback loop
+    })
+
+    # ── Known-bad / noise FQDNs ──────────────────────────────────────────────
+    _NOISE_DOMAINS = frozenset({
+        "example.com", "example.org", "example.net",
+        "exemple.com", "exemple.org", "exemple.net",   # French placeholder
+        "test.com",
+        "localhost", "localhost.localdomain", "invalid", "local",
+        "schema.org", "w3.org", "xmlsoap.org", "openssl.org",
+        "purl.org", "dublincore.org", "iana.org",
+    })
+
+    def __init__(self, output_dir: Path, log: "ReconLogger", data: "ReconData") -> None:
+        self.output_dir = output_dir
+        self.log        = log
+        self.data       = data
+        self._target    = data.domain.lower().strip()
+        # Track what we added so we can report a delta
+        self._new_emails:  int = 0
+        self._new_phones:  int = 0
+        self._new_subs:    int = 0
+        self._new_ips:     int = 0
+        self._new_urls:    int = 0
+
+    # ─── Public entry point ──────────────────────────────────────────────────
+
+    def run(self) -> None:
+        """Walk all output files and merge extracted intelligence into ReconData."""
+        self.log.set_tool_context("OSift-Parser")
+        self.log.info("[PARSER] Raw output parsing pass starting")
+
+        for path in self._iter_files():
+            try:
+                self._process_file(path)
+            except Exception as exc:
+                self.log.debug(f"[PARSER] Skipped {path.name}: {exc}")
+
+        self.log.success(
+            f"[PARSER] Raw parse complete — "
+            f"new: emails={self._new_emails} phones={self._new_phones} "
+            f"subdomains={self._new_subs} IPs={self._new_ips} URLs={self._new_urls}"
+        )
+        self.log.reset_tool_context()
+
+    # ─── File iteration ──────────────────────────────────────────────────────
+
+    def _iter_files(self):
+        """Yield all eligible files under output_dir."""
+        for root, dirs, files in os.walk(self.output_dir):
+            root_path = Path(root)
+            # Prune skip-dirs in-place
+            dirs[:] = [
+                d for d in dirs
+                if d not in self._SKIP_DIRS
+                and not d.startswith(".")
+            ]
+            for fname in files:
+                path = root_path / fname
+                if path.suffix.lower() in self._BINARY_EXTS:
+                    continue
+                try:
+                    if path.stat().st_size > self._MAX_FILE_SIZE:
+                        self.log.debug(f"[PARSER] Skipping large file: {path.name}")
+                        continue
+                except OSError:
+                    continue
+                yield path
+
+    # ─── Per-file dispatch ───────────────────────────────────────────────────
+
+    def _process_file(self, path: Path) -> None:
+        ext = path.suffix.lower()
+        if ext in (".json",):
+            self._process_json_file(path)
+        elif ext == ".jsonl":
+            self._process_jsonl_file(path)
+        elif ext == ".txt":
+            self._process_txt_file(path)
+        else:
+            # HTML, XML, CSV, unknown text — regex-scan only
+            self._regex_scan_text(self._read_text(path), self._path_label(path))
+
+    # ─── JSON processing ─────────────────────────────────────────────────────
+
+    def _process_json_file(self, path: Path) -> None:
+        text = self._read_text(path)
+        if not text:
+            return
+        try:
+            doc = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            # Not valid JSON — fall back to regex scan
+            self._regex_scan_text(text, self._path_label(path))
+            return
+
+        source_label = self._path_label(path)
+        self._extract_from_doc(doc, source_label)
+        # Also regex-scan the raw text to catch inline values in strings
+        self._regex_scan_text(text, source_label)
+
+    def _process_jsonl_file(self, path: Path) -> None:
+        source_label = self._path_label(path)
+        for line in self._read_text(path).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                doc = json.loads(line)
+                self._extract_from_doc(doc, source_label)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        self._regex_scan_text(self._read_text(path), source_label)
+
+    def _process_txt_file(self, path: Path) -> None:
+        text  = self._read_text(path)
+        label = self._path_label(path)
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Subfinder / dnsx style: one FQDN or IP per line
+            if self._IPV4_RE.fullmatch(line):
+                self._add_ip(line, label)
+            elif self._FQDN_RE.fullmatch(line):
+                self._add_fqdn(line, label)
+        # Also regex-scan for everything else
+        self._regex_scan_text(text, label)
+
+    # ─── Structured document walker ──────────────────────────────────────────
+
+    def _extract_from_doc(self, doc: Any, source: str, _depth: int = 0) -> None:
+        """Recursively walk a JSON document extracting intelligence."""
+        if _depth > 12:
+            return
+        if isinstance(doc, dict):
+            self._extract_from_dict(doc, source, _depth)
+        elif isinstance(doc, list):
+            for item in doc:
+                self._extract_from_doc(item, source, _depth + 1)
+        elif isinstance(doc, str):
+            self._extract_from_string(doc, source)
+
+    def _extract_from_dict(self, d: Dict, source: str, depth: int) -> None:
+        """Handle known schema keys explicitly; recurse into all values."""
+        # ── Subdomain / hostname keys ─────────────────────────────────────
+        for key in ("subdomain", "fqdn", "hostname", "host", "name",
+                    "domain", "address", "target", "canonical"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                self._add_fqdn(val.strip(), source)
+
+        for key in ("subdomains", "hostnames", "hosts", "domains", "names"):
+            val = d.get(key)
+            if isinstance(val, list):
+                for item in val:
+                    if isinstance(item, str) and item.strip():
+                        self._add_fqdn(item.strip(), source)
+
+        # ── IP address keys ───────────────────────────────────────────────
+        for key in ("ip", "ip_address", "ipv4", "ipv6", "resolved_ip",
+                    "a", "ptr", "addr"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                self._add_ip(val.strip(), source)
+        for key in ("ips", "ip_addresses", "resolved_ips", "a_records"):
+            val = d.get(key)
+            if isinstance(val, list):
+                for ip in val:
+                    if isinstance(ip, str):
+                        self._add_ip(ip.strip(), source)
+
+        # ── Email keys ────────────────────────────────────────────────────
+        for key in ("email", "email_address", "contact_email",
+                    "registrant_email", "admin_email", "tech_email",
+                    "abuse_contact_email"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                self._add_email(val.strip(), source)
+
+        # ── Phone keys ────────────────────────────────────────────────────
+        for key in ("phone", "phone_number", "telephone",
+                    "registrant_phone", "admin_phone", "tech_phone",
+                    "fax", "fax_number"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                self._add_phone(val.strip())
+
+        # ── URL keys ──────────────────────────────────────────────────────
+        for key in ("url", "final_url", "page_url", "link", "redirect",
+                    "screenshot_url"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                self._add_url(val.strip(), source)
+        for key in ("urls", "links", "redirects"):
+            val = d.get(key)
+            if isinstance(val, list):
+                for u in val:
+                    if isinstance(u, str):
+                        self._add_url(u.strip(), source)
+
+        # ── SAN / certificate alt names ────────────────────────────────────
+        for key in ("san", "subject_alt_names", "dns_names", "alt_names"):
+            val = d.get(key)
+            if isinstance(val, list):
+                for name in val:
+                    if isinstance(name, str):
+                        self._add_fqdn(name.strip().lstrip("*."), source)
+
+        # ── Recurse into all values ───────────────────────────────────────
+        for v in d.values():
+            if isinstance(v, (dict, list)):
+                self._extract_from_doc(v, source, depth + 1)
+            elif isinstance(v, str) and len(v) < 512:
+                # Only scan short strings inline; long blob values skipped here
+                # (the file-level regex scan already covers them)
+                self._extract_from_string(v, source)
+
+    def _extract_from_string(self, s: str, source: str) -> None:
+        """Scan a single string value for actionable intelligence."""
+        s = s.strip()
+        if not s or len(s) > 1024:
+            return
+        # Email
+        if "@" in s and self._EMAIL_RE.fullmatch(s):
+            self._add_email(s, source)
+        # FQDN (bare, no protocol)
+        elif "." in s and " " not in s and self._FQDN_RE.fullmatch(s):
+            self._add_fqdn(s, source)
+        # IP
+        elif self._IPV4_RE.fullmatch(s):
+            self._add_ip(s, source)
+
+    # ─── Regex scanner (for unstructured text) ───────────────────────────────
+
+    def _regex_scan_text(self, text: str, source: str) -> None:
+        if not text:
+            return
+        # Emails
+        for match in self._EMAIL_RE.finditer(text):
+            self._add_email(match.group(), source)
+        # Phones
+        for match in self._PHONE_RE.finditer(text):
+            self._add_phone(match.group().strip())
+        # FQDNs
+        for match in self._FQDN_RE.finditer(text):
+            self._add_fqdn(match.group(), source)
+        # IPs
+        for match in self._IPV4_RE.finditer(text):
+            self._add_ip(match.group(), source)
+        # URLs (HTTP/HTTPS)
+        for match in self._URL_RE.finditer(text):
+            self._add_url(match.group().rstrip(".,;:'\")"), source)
+
+    # ─── ReconData merge helpers ─────────────────────────────────────────────
+
+    def _add_email(self, email: str, source: str) -> None:
+        email = email.lower().strip()
+        if not email or "@" not in email:
+            return
+        local, domain = email.rsplit("@", 1)
+        # Filter noise (common false positives from tool output, schema URIs, etc.)
+        if domain in ("example.com", "exemple.com", "example.org", "exemple.org",
+                      "example.net", "exemple.net", "sentry.io", "localhost",
+                      "w3.org", "schema.org", "foo.bar", "openssh.com"):
+            return
+        if len(local) < 1 or len(domain) < 4:
+            return
+        if email not in self.data.email_addresses:
+            self._new_emails += 1
+        rec = self.data.email_addresses.setdefault(email, {
+            "sources": [], "breach": False, "context": ""
+        })
+        src_list = rec.setdefault("sources", [])
+        if source not in src_list:
+            src_list.append(source)
+
+    def _add_phone(self, raw: str) -> None:
+        raw = raw.strip()
+        if not raw or len(raw) < 7:
+            return
+        # Quick pre-filter: must contain at least 7 digits
+        digits = re.sub(r'\D', '', raw)
+        if len(digits) < 7 or len(digits) > 15:
+            return
+        # 10-digit numbers cannot start with 1 (NANP area codes never begin with 1)
+        if len(digits) == 10 and digits[0] == "1":
+            return
+        # Only store raw strings; validation happens in IntelAggregator._gather_phones
+        if raw not in self.data.phone_numbers:
+            self.data.phone_numbers.append(raw)
+            self._new_phones += 1
+
+    def _add_fqdn(self, fqdn: str, source: str) -> None:
+        fqdn = fqdn.lower().strip().lstrip("*.").rstrip(".")
+        if not fqdn or "." not in fqdn:
+            return
+        if fqdn in self._NOISE_DOMAINS:
+            return
+        # Must look like a real FQDN
+        if not self._FQDN_RE.match(fqdn):
+            return
+        # Classify: is it a subdomain of target or an associated domain root?
+        target = self._target
+        if fqdn == target or fqdn.endswith("." + target):
+            # It's a subdomain (or the target itself)
+            if fqdn != target and fqdn not in self.data.subdomains:
+                self._new_subs += 1
+                self.data.subdomains.setdefault(fqdn, {
+                    "ips": [], "sources": [source], "ports": []
+                })
+            elif fqdn in self.data.subdomains:
+                src_list = self.data.subdomains[fqdn].setdefault("sources", [])
+                if source not in src_list:
+                    src_list.append(source)
+        else:
+            # It's some other FQDN — add to associated_domains if not already there
+            root = DomainClassifier._registrable_root(fqdn)
+            if root not in self.data.associated_domains:
+                self.data.associated_domains[root] = {
+                    "relationship": "discovered",
+                    "source":       source,
+                    "ips":          [],
+                }
+
+    def _add_ip(self, ip: str, source: str) -> None:
+        ip = ip.strip()
+        if not ip or not self._IPV4_RE.fullmatch(ip):
+            return
+        # Filter private/loopback/reserved ranges
+        if self._is_private_ip(ip):
+            return
+        if ip not in self.data.ip_addresses:
+            self._new_ips += 1
+            self.data.ip_addresses[ip] = {"sources": [source], "fqdns": []}
+        else:
+            src_list = self.data.ip_addresses[ip].setdefault("sources", [])
+            if source not in src_list:
+                src_list.append(source)
+
+    def _add_url(self, url: str, source: str) -> None:
+        url = url.strip()
+        if not url or not url.startswith(("http://", "https://")):
+            return
+        # Only keep URLs that reference the target domain or its subdomains
+        # (or are from crawl output which is already scoped)
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(url).hostname or ""
+        except Exception:
+            return
+        is_in_scope = (host == self._target or host.endswith("." + self._target))
+        if not is_in_scope:
+            return
+        if url not in self.data.crawled_urls:
+            self._new_urls += 1
+            self.data.crawled_urls[url] = {"source": source}
+
+    # ─── Utility ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_private_ip(ip: str) -> bool:
+        """Return True for RFC-1918, loopback, link-local, and other reserved ranges."""
+        try:
+            parts = list(map(int, ip.split(".")))
+        except (ValueError, AttributeError):
+            return False
+        a, b = parts[0], parts[1]
+        return (
+            a == 10
+            or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 168)
+            or a == 127
+            or (a == 169 and b == 254)
+            or a == 0
+            or a >= 224
+        )
+
+    def _read_text(self, path: Path) -> str:
+        """Read a file as UTF-8, falling back to latin-1 on decode errors."""
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def _path_label(self, path: Path) -> str:
+        """Return the tool name for provenance (first output subdirectory only).
+
+        Sources should identify the *tool* that produced the data, not the
+        specific file that holds it — callers use this as the ``tool=`` argument
+        to ``add_finding()`` and as source labels on subdomain records.
+        """
+        try:
+            rel = path.relative_to(self.output_dir)
+            return rel.parts[0] if rel.parts else path.stem
+        except ValueError:
+            return path.stem
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 12: TREVORspray — M365/Azure AD Credential Spray
+# TREVORspray by Black Lantern Security @blacklanternsecurity (https://github.com/blacklanternsecurity/TREVORspray)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_trevorspray(domain: str, emails: list, output_dir: "Path", data: "ReconData",
+                    log: "ReconLogger", timeout: int = 600) -> None:
+    """
+    Phase 12: TREVORspray — credential spray against Azure AD / M365 / OWA.
+    Only runs when Microsoft cloud presence is detected for the target domain.
+    Uses discovered email addresses from prior enumeration phases.
+    """
+    trevorspray_path = shutil.which("trevorspray")
+    if not trevorspray_path:
+        log.info("[TREVORspray] Not installed — skipping (pip install trevorspray)")
+        return
+    if not emails:
+        log.info("[TREVORspray] No emails discovered — skipping")
+        return
+
+    # Detect M365/Azure presence via MX records
+    has_m365 = False
+    try:
+        mx_result = subprocess.run(
+            ["dig", "+short", "MX", domain],
+            capture_output=True, text=True, timeout=10,
+        )
+        has_m365 = bool(re.search(
+            r'protection\.outlook\.com|microsoft|exchange', mx_result.stdout, re.I
+        ))
+    except Exception:
+        pass
+    if not has_m365:
+        try:
+            import urllib.request as _ur3
+            resp = _ur3.urlopen(
+                f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration",
+                timeout=8,
+            )
+            has_m365 = bool(json.loads(resp.read().decode()).get("issuer"))
+        except Exception:
+            pass
+    if not has_m365:
+        log.info(f"[TREVORspray] No M365/Azure presence detected for {domain} — skipping")
+        return
+
+    trev_dir = output_dir / "trevorspray"
+    trev_dir.mkdir(parents=True, exist_ok=True)
+    email_file = trev_dir / "emails.txt"
+    email_file.write_text("\n".join(emails[:500]) + "\n", encoding="utf-8")
+
+    yr = datetime.datetime.now().year
+    domain_base = domain.split(".")[0].capitalize()
+    spray_passwords = [
+        f"Winter{yr}!", f"Spring{yr}!", f"Summer{yr}!", f"Fall{yr}!",
+        f"{yr}!", "Password1!", "Welcome1!", "Company1!", f"{domain_base}1!",
+    ]
+    pass_file = trev_dir / "spray_passwords.txt"
+    pass_file.write_text("\n".join(spray_passwords) + "\n", encoding="utf-8")
+    results_file = trev_dir / "trevorspray_results.txt"
+
+    cmd = [
+        trevorspray_path,
+        "-u", str(email_file),
+        "-p", str(pass_file),
+        "--delay", "1800",
+        "--threads", "2",
+        "-o", str(results_file),
+    ]
+    log.info(f"[TREVORspray] Spraying {len(emails)} account(s) against {domain}")
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
+        raw = proc.stdout
+        results_file.write_text(raw, encoding="utf-8")
+
+        valid_creds = []
+        for line in raw.splitlines():
+            m = re.search(r'SUCCESS[:\s]+(\S+@\S+)[:\s]+(\S+)', line, re.I)
+            if m:
+                valid_creds.append({"email": m.group(1), "password": m.group(2)})
+
+        if valid_creds:
+            log.warning(
+                f"[TREVORspray] CRITICAL: {len(valid_creds)} valid credential(s) found!"
+            )
+            add_finding(
+                data,
+                tool="trevorspray",
+                type_="valid_credentials",
+                category=CAT_BREACH,
+                severity="critical",
+                detail=(
+                    f"TREVORspray confirmed {len(valid_creds)} valid credential(s) against "
+                    f"{domain}. Accounts: "
+                    + ", ".join(c["email"] for c in valid_creds[:5])
+                ),
+                domain=domain,
+                output_file=str(results_file),
+                data=valid_creds,
+            )
+        else:
+            log.info("[TREVORspray] No valid credentials found")
+    except subprocess.TimeoutExpired:
+        log.warning(f"[TREVORspray] Timed out after {timeout}s")
+    except Exception as exc:
+        log.warning(f"[TREVORspray] Error: {exc}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 13: GitDorker — GitHub Secret Scanning
+# GitDorker by obheda12 (https://github.com/obheda12/GitDorker)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_gitdorker(domain: str, company: str, output_dir: "Path", data: "ReconData",
+                  log: "ReconLogger", github_token: str = "", timeout: int = 300) -> None:
+    """
+    Phase 13: GitDorker — GitHub Search API dork queries for exposed secrets.
+    Requires a GitHub personal access token (--github-token or GITHUB_TOKEN env var).
+    """
+    gitdorker_candidates = [
+        shutil.which("gitdorker"),
+        shutil.which("GitDorker.py"),
+        "/opt/GitDorker/GitDorker.py",
+    ]
+    gitdorker_path = next(
+        (p for p in gitdorker_candidates if p and os.path.exists(p)), None
+    )
+    if not gitdorker_path:
+        log.info(
+            "[GitDorker] Not found — install with: "
+            "git clone https://github.com/obheda12/GitDorker /opt/GitDorker"
+        )
+        return
+
+    if not github_token:
+        github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    if not github_token:
+        log.info("[GitDorker] No GitHub token — set GITHUB_TOKEN env var or use --github-token")
+        return
+
+    gd_dir = output_dir / "gitdorker"
+    gd_dir.mkdir(parents=True, exist_ok=True)
+    out_file = gd_dir / f"gitdorker_{domain.replace('.', '_')}.txt"
+
+    queries = [domain, domain.split(".")[0]]
+    if company and company.lower() not in [q.lower() for q in queries]:
+        queries.append(company)
+
+    dorks_file = "/opt/GitDorker/Dorks/medium_dorks.txt"
+    if not os.path.exists(dorks_file):
+        dorks_file = "/opt/GitDorker/Dorks/bheh_dorks.txt"
+
+    cmd = [
+        sys.executable, gitdorker_path,
+        "-tf", github_token,
+        "-q", " OR ".join(f'"{q}"' for q in queries),
+        "-o", str(out_file),
+    ]
+    if os.path.exists(dorks_file):
+        cmd += ["-d", dorks_file]
+
+    log.info(f"[GitDorker] Searching GitHub for {domain} secrets")
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
+        raw = proc.stdout
+        out_file.write_text(raw, encoding="utf-8")
+
+        matches = list(dict.fromkeys(re.findall(r'https://github\.com/\S+', raw)))
+        if matches:
+            log.warning(
+                f"[GitDorker] HIGH: {len(matches)} repo(s) found for {domain}"
+            )
+            add_finding(
+                data,
+                tool="gitdorker",
+                type_="exposed_secrets",
+                category=CAT_SENSITIVE,
+                severity="high",
+                detail=(
+                    f"GitDorker found {len(matches)} public repository/repositories potentially "
+                    f"exposing secrets/keys referencing '{domain}'. "
+                    f"Top matches: " + ", ".join(matches[:5])
+                ),
+                domain=domain,
+                output_file=str(out_file),
+                data=matches,
+            )
+        else:
+            log.info(f"[GitDorker] No exposed secrets found for {domain}")
+    except subprocess.TimeoutExpired:
+        log.warning(f"[GitDorker] Timed out after {timeout}s")
+    except Exception as exc:
+        log.warning(f"[GitDorker] Error: {exc}")
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    # Install the persistent sticky banner. This must happen before any other
+    # output so the scroll region is configured correctly from the start.
+    BANNER_MGR.install()
+
+    parser = argparse.ArgumentParser(
+        description="OSift — Comprehensive OSINT Reconnaissance Framework",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  Linux/macOS  : sudo python3 OSift.py -c "Acme Corp" -d acme.com
+  Windows      : python OSift.py -c "Acme Corp" -d acme.com         (run as Admin)
+
+  With breach + credential keys:
+    python3 OSift.py -c "Acme Corp" -d acme.com \\
+        --hibp-key YOUR_KEY --dehashed-user user@email.com --dehashed-key API_KEY
+
+  With infrastructure intelligence (Tier-1):
+    python3 OSift.py -c "Acme Corp" -d acme.com \\
+        --shodan-key SHODAN_KEY \\
+        --censys-id CENSYS_ID --censys-secret CENSYS_SECRET \\
+        --fullhunt-key FULLHUNT_KEY \\
+        --securitytrails-key ST_KEY \\
+        --netlas-key NETLAS_KEY
+
+  With threat intelligence (Tier-2):
+    python3 OSift.py -c "Acme Corp" -d acme.com \\
+        --virustotal-key VT_KEY \\
+        --urlscan-key URLSCAN_KEY \\
+        --otx-key OTX_KEY
+
+  With email & people intelligence (Tier-3):
+    python3 OSift.py -c "Acme Corp" -d acme.com \\
+        --hunter-key HUNTER_KEY \\
+        --hibp-key HIBP_KEY
+
+  Full stack (all APIs, no crawl, no brute-force):
+    python3 OSift.py -c "Acme Corp" -d acme.com \\
+        --skip-crawl --skip-brute \\
+        --shodan-key SK --censys-id CI --censys-secret CS \\
+        --fullhunt-key FK --securitytrails-key STK --netlas-key NK \\
+        --virustotal-key VTK --urlscan-key UK --otx-key OK \\
+        --hunter-key HK --hibp-key HIBPK
+
+  Tuning:
+    --max-pages 500 --max-depth 4
+    --skip-crawl      skip built-in web crawler
+    --skip-brute      skip DNS brute force
+    --skip-amass      skip Amass
+    --skip-api        skip all Phase 10 OSINT API calls
+    --skip-pd         skip all Phase 11 ProjectDiscovery tools
+    --skip-passive    skip all Phase 1.5 passive OSINT tools
+    --wordlist custom.txt  use custom DNS wordlist
+
+Phase 1.5 — Passive OSINT Tool Suite (auto-detected on PATH):
+    theHarvester  emails/subdomains/IPs from 40+ sources (apt install theharvester)
+    xurlfind3r    passive URL discovery — Wayback, CommonCrawl, OTX, URLScan
+                  (go install github.com/hueristiq/xurlfind3r/cmd/xurlfind3r@latest)
+    puredns       DNS brute-force + mass resolver (go install github.com/d3mondev/puredns/v2@latest)
+    waybackurls   Wayback Machine CDX URL mining (go install github.com/tomnomnom/waybackurls@latest)
+    wappalyzer    Technology fingerprinting — 3000+ signatures (pip install wappalyzer)
+    cloud_enum    Cloud bucket/blob enumeration (pip install cloud-enum)
+    EmailHarvester multi-engine email search (pip install EmailHarvester)
+    maigret       Social media username enumeration (pip install maigret)
+    TruffleHog    GitHub secret scanning — 800+ detectors (brew install trufflehog)
+    Maltego       seed file export for GUI link analysis (https://maltego.com)
+    --harvester-limit N    results per source for theHarvester (default: 500)
+    --github-org ORG       GitHub org for TruffleHog secret scanning
+    --skip-wayback         skip waybackurls
+    --skip-wappalyzer      skip Wappalyzer fingerprinting
+    --skip-cloud-enum      skip cloud_enum bucket enumeration
+    --skip-xurlfind3r      skip xurlfind3r but still run theHarvester
+
+Phase 11 — ProjectDiscovery (auto-installed via go if missing):
+    --chaos-key KEY        Chaos DB API key for chaos subdomain dataset
+    --cloudlist-config /path/to/cloudlist.yaml  cloud provider asset enumeration
+    Uncover engine keys via environment variables:
+      FOFA_KEY, QUAKE_TOKEN, ZOOMEYE_API_KEY, NETLAS_API_KEY, CRIMINALIP_API_KEY
+    (Shodan/Censys keys are shared from --shodan-key / --censys-id / --censys-secret)
+
+API key sources (all free tiers available):
+  Shodan        : https://account.shodan.io
+  Censys        : https://app.censys.io/account
+  FullHunt      : https://fullhunt.io/user/api
+  SecurityTrails: https://securitytrails.com/app/api
+  Netlas        : https://app.netlas.io/profile/
+  VirusTotal    : https://www.virustotal.com/gui/my-apikey
+  URLScan.io    : https://urlscan.io/user/profile/
+  AlienVault OTX: https://otx.alienvault.com/settings
+  Hunter.io     : https://hunter.io/api-keys
+  HIBP (domain) : https://haveibeenpwned.com/API/Key  (paid)
+  Dehashed      : https://www.dehashed.com/profile     (paid)
+
+⚠  Only use against targets you own or have explicit written authorization to test.
+        """,
+    )
+    # ── PASS 1: lightweight pre-parse — only reads --settings (and -h/--help) ──
+    # We must resolve the settings file BEFORE the real parse so we can determine
+    # whether --company / --domain are truly required.  parse_known_args ignores
+    # every flag it doesn't recognise, so it never errors on unknown arguments.
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--settings", default="")
+    pre_args, _ = pre_parser.parse_known_args()
+
+    # Resolve settings file path (explicit flag > default neighbour file)
+    _settings_path: Optional[Path] = None
+    _loaded_settings: Dict[str, Any] = {}
+
+    if pre_args.settings:
+        _settings_path = Path(pre_args.settings)
+        # If the user explicitly named a file, fail fast if it doesn't exist
+        if not _settings_path.exists():
+            parser.error(f"Settings file not found: {_settings_path}")
+    elif SETTINGS_FILE_DEFAULT.exists():
+        _settings_path = SETTINGS_FILE_DEFAULT
+
+    if _settings_path is not None:
+        print(f"[SETTINGS] Loading settings from: {_settings_path}")
+        _loaded_settings = load_settings(_settings_path)
+
+    # Determine whether --company / --domain are satisfied by the settings file
+    # so we can set required=True only when they are genuinely missing.
+    _company_in_settings = bool(_loaded_settings.get("company", "").strip())
+    # Support both new list format ("domains") and legacy string ("domain")
+    _settings_domains: List[str] = _loaded_settings.get("domains", [])
+    if not _settings_domains:
+        _sd = _loaded_settings.get("domain", "").strip()
+        if _sd:
+            _settings_domains = [_sd]
+    _domain_in_settings = bool(_settings_domains)
+
+    # ── PASS 2: full parser — required flags are conditional ──────────────────
+    parser.add_argument(
+        "-c", "--company",
+        required=not _company_in_settings,
+        default="",
+        help=(
+            "Target company name"
+            + ("" if not _company_in_settings
+               else f"  [settings: {_loaded_settings['company']!r}]")
+        ),
+    )
+    parser.add_argument(
+        "-d", "--domain",
+        dest="domains",
+        nargs="+",
+        metavar="DOMAIN",
+        required=not _domain_in_settings,
+        default=_settings_domains,
+        help=(
+            "Target FQDN(s) — one or more (e.g. acme.com acme.co.uk)"
+            + ("" if not _domain_in_settings
+               else f"  [settings: {_settings_domains}]")
+        ),
+    )
+    parser.add_argument("--max-pages",  type=int, default=200,    help="Max pages to crawl (default: 200)")
+    parser.add_argument("--max-depth",  type=int, default=3,      help="Max crawl depth (default: 3)")
+
+    # ── Phase 7 legacy keys ───────────────────────────────────────────────────
+    parser.add_argument("--hibp-key",             default="",     help="Have I Been Pwned API key (paid — domain search)")
+    parser.add_argument("--dehashed-user",        default="",     help="Dehashed account email")
+    parser.add_argument("--dehashed-key",         default="",     help="Dehashed API key")
+
+    # ── Phase 10: OSINT API Intelligence Engine (all optional) ───────────────
+    api_grp = parser.add_argument_group(
+        "Phase 10 — OSINT API Intelligence (all optional)",
+        "Provide API keys to enable each intelligence source. "
+        "Any combination works; missing keys cause that source to be skipped.",
+    )
+
+    # Tier-1 — Attack Surface & Infrastructure
+    api_grp.add_argument(
+        "--shodan-key",
+        default="", metavar="KEY",
+        help="Shodan API key — host/port/vuln/cert data (free dev key available at shodan.io)",
+    )
+    api_grp.add_argument(
+        "--censys-id",
+        default="", metavar="API_ID",
+        help="Censys API ID   — TLS cert + host data (free community tier at censys.io)",
+    )
+    api_grp.add_argument(
+        "--censys-secret",
+        default="", metavar="SECRET",
+        help="Censys API Secret — required together with --censys-id",
+    )
+    api_grp.add_argument(
+        "--fullhunt-key",
+        default="", metavar="KEY",
+        help="FullHunt API key — EASM: subdomains, hosts, tech stack (fullhunt.io)",
+    )
+    api_grp.add_argument(
+        "--securitytrails-key",
+        default="", metavar="KEY",
+        help="SecurityTrails API key — DNS history, subdomain DB, WHOIS history (securitytrails.com)",
+    )
+    api_grp.add_argument(
+        "--netlas-key",
+        default="", metavar="KEY",
+        help="Netlas API key — internet scan: responses, certs, DNS, WHOIS, IoC (netlas.io)",
+    )
+
+    # Tier-2 — Threat Intelligence & Reputation
+    api_grp.add_argument(
+        "--virustotal-key",
+        default="", metavar="KEY",
+        help="VirusTotal API key — domain/IP reputation, passive DNS, 70+ AV vendors (virustotal.com)",
+    )
+    api_grp.add_argument(
+        "--urlscan-key",
+        default="", metavar="KEY",
+        help="URLScan.io API key — scan history, tech stack, verdicts; searches work without a key (urlscan.io)",
+    )
+    api_grp.add_argument(
+        "--otx-key",
+        default="", metavar="KEY",
+        help="AlienVault OTX API key — threat feeds, passive DNS, malware; free account at otx.alienvault.com",
+    )
+
+    # Tier-3 — Email & People Intelligence
+    api_grp.add_argument(
+        "--hunter-key",
+        default="", metavar="KEY",
+        help="Hunter.io API key — email discovery, company enrichment (hunter.io)",
+    )
+    # Note: --hibp-key above is reused for both Phase 7 and Phase 10 HIBPDomainAPI
+
+    # ── ProjectDiscovery tool keys ────────────────────────────────────────────
+    pd_grp = parser.add_argument_group(
+        "Phase 11 — ProjectDiscovery Toolkit (all optional)",
+        "Keys/config for ProjectDiscovery tools. Missing tools are auto-installed "
+        "via 'go install' if Go is present; otherwise the user is prompted.",
+    )
+    pd_grp.add_argument(
+        "--chaos-key",
+        default="", metavar="KEY",
+        help="Chaos DB API key for chaos subdomain dataset (projectdiscovery.io/chaos)",
+    )
+    pd_grp.add_argument(
+        "--cloudlist-config",
+        default="", metavar="PATH",
+        help="Path to cloudlist YAML config with cloud provider credentials",
+    )
+    pd_grp.add_argument(
+        "--skip-pd",
+        action="store_true",
+        help="Skip all ProjectDiscovery tool phases entirely",
+    )
+
+    # ── Phase 1.5 — Passive OSINT Tool Suite ─────────────────────────────────
+    passive_grp = parser.add_argument_group(
+        "Phase 1.5 — Passive OSINT Tool Suite",
+        "theHarvester, xurlfind3r, EmailHarvester, maigret, TruffleHog, Maltego seed export. "
+        "Tools are auto-detected on PATH; missing tools are skipped with an "
+        "install hint.  All tools run passively (no direct target contact).",
+    )
+    passive_grp.add_argument(
+        "--harvester-limit",
+        default=500, type=int, metavar="N",
+        help="Max results per source for theHarvester (default: 500)",
+    )
+    passive_grp.add_argument(
+        "--skip-passive",
+        action="store_true",
+        help="Skip all Phase 1.5 passive OSINT tools (theHarvester, xurlfind3r, EmailHarvester, puredns, waybackurls, wappalyzer, cloud_enum, maigret, TruffleHog, Maltego)",
+    )
+    passive_grp.add_argument(
+        "--skip-xurlfind3r",
+        action="store_true",
+        help="Skip xurlfind3r URL discovery (still runs theHarvester)",
+    )
+    passive_grp.add_argument(
+        "--skip-wayback",
+        action="store_true",
+        help="Skip waybackurls Wayback Machine CDX mining (Wave B)",
+    )
+    passive_grp.add_argument(
+        "--skip-wappalyzer",
+        action="store_true",
+        help="Skip Wappalyzer technology fingerprinting (Wave C)",
+    )
+    passive_grp.add_argument(
+        "--skip-cloud-enum",
+        action="store_true",
+        help="Skip cloud_enum cloud storage bucket enumeration (Wave C)",
+    )
+    passive_grp.add_argument(
+        "--github-org",
+        default="", metavar="ORG",
+        help=(
+            "GitHub organisation name for TruffleHog secret scanning. "
+            "If omitted, OSift attempts to infer it from the company name. "
+            "Example: --github-org mycompany"
+        ),
+    )
+
+    # ── Phone validation API keys ─────────────────────────────────────────────
+    phone_grp = parser.add_argument_group(
+        "Phone validation",
+        "Optional API keys for external phone number validation services. "
+        "Without a key, numverify's unauthenticated free endpoint is used. "
+        "If both services are unreachable, local structural validation is kept.",
+    )
+    phone_grp.add_argument(
+        "--numverify-key",
+        default="", metavar="KEY",
+        help=(
+            "numverify API access key (https://numverify.com). "
+            "Free tier works without a key at lower rate limits. "
+            "Stored in settings file as 'numverify_key'."
+        ),
+    )
+    phone_grp.add_argument(
+        "--abstractapi-phone-key",
+        default="", metavar="KEY",
+        help=(
+            "Abstract API phone validation key (https://app.abstractapi.com/api/phone-validation). "
+            "Used as fallback when numverify is unavailable. "
+            "Stored in settings file as 'abstractapi_phone_key'."
+        ),
+    )
+
+    # ── Execution flags ───────────────────────────────────────────────────────
+    parser.add_argument("--skip-crawl",           action="store_true", help="Skip web crawling")
+    parser.add_argument("--skip-amass",           action="store_true", help="Skip Amass enumeration")
+    parser.add_argument("--skip-brute",           action="store_true", help="Skip DNS brute forcing")
+    parser.add_argument("--skip-api",             action="store_true", help="Skip Phase 10 OSINT API intelligence entirely")
+    parser.add_argument("--skip-dns-enrich",      action="store_true", help="Skip Phase 11 DNS enrichment (dig + dnsx)")
+    parser.add_argument("--no-spray",             action="store_true", help="Skip Phase 12 TREVORspray credential spraying")
+    parser.add_argument("--no-gitdorker",         action="store_true", help="Skip Phase 13 GitDorker GitHub secret scanning")
+    parser.add_argument("--github-token",         default="",     metavar="TOKEN", help="GitHub personal access token for GitDorker (Phase 13)")
+    parser.add_argument("--wordlist",             default="",     help="Custom wordlist for DNS brute force")
+    parser.add_argument("--output-base",          default="",     help="Override base output directory path")
+    parser.add_argument("--project-dir",          default="",     help="Vantage project root; evidence paths stored relative to this directory")
+    parser.add_argument(
+        "--edgar-email",
+        default="",
+        metavar="EMAIL",
+        help=(
+            "Email address sent in SEC EDGAR User-Agent header (required by SEC policy). "
+            "Defaults to a generic placeholder if omitted."
+        ),
+    )
+    parser.add_argument(
+        "--settings",
+        default="",
+        metavar="FILE",
+        help=(
+            "Path to an OSift JSON settings file containing API keys and options. "
+            "CLI arguments always take precedence over the file. "
+            f"Default location checked automatically: {SETTINGS_FILE_DEFAULT.name}"
+        ),
+    )
+
+    # Full parse — will error here if a truly-required flag is still missing
+    args = parser.parse_args()
+
+    # ── Merge settings into args (CLI values win over file values) ─────────────
+    if _loaded_settings:
+        merge_settings_into_args(args, _loaded_settings)
+        # Validate co-dependent pairs (Censys id+secret, Dehashed user+key)
+        _check_required_pairs(args)
+    else:
+        print("[SETTINGS] No settings file found — using CLI arguments only")
+
+    # ── Final guard: company and domain must be non-empty one way or another ──
+    # (Catches the edge case where settings file exists but both fields are blank
+    #  and neither was supplied on the CLI.)
+    missing = []
+    if not args.company.strip():
+        missing.append("-c / --company  (target company name)")
+    if not args.domains:
+        missing.append("-d / --domain   (target FQDN, e.g. acme.com)")
+    if missing:
+        parser.error(
+            "The following required values were not provided on the command line "
+            "and were not found in the settings file:\n  "
+            + "\n  ".join(missing)
+        )
+
+    # ── Setup directories ──────────────────────────────────────────────────
+    global _project_dir
+    base_path    = Path(args.output_base) if args.output_base else None
+    project_dir  = Path(args.project_dir).resolve() if args.project_dir else None
+    _project_dir = project_dir  # expose for write_targets_snapshot()
+    output_dir   = setup_directory_structure(args.company, args.domains[0], base_path)
+    log          = ReconLogger(output_dir)
+
+    # ── Initialise checkpoint manager ──────────────────────────────────────
+    global _pm
+    _pm = ProgressManager(output_dir / "checkpoint.json")
+    _cp_state = _pm.get_state()
+    if _cp_state.get("completed_phases"):
+        _cp_done = _cp_state["completed_phases"]
+        _vc.log(
+            f"Checkpoint found — {len(_cp_done)} phase(s) already complete: "
+            + ", ".join(_cp_done),
+            "INFO",
+        )
+
+    # Re-emit settings load result now that logger is available
+    if _settings_path is not None:
+        log.info(f"[SETTINGS] Settings file: {_settings_path.resolve()}")
+        if _settings_are_active(args):
+            log.info("[SETTINGS] At least one API key is active")
+        else:
+            log.info("[SETTINGS] Settings file loaded but no API keys were set")
+    else:
+        log.info("[SETTINGS] No settings file — all values from CLI or defaults")
+
+    log.info(f"OSift v{VERSION} started")
+    log.info(f"Platform      : {SYSTEM} ({'root' if not IS_WINDOWS else 'Administrator'})")
+    log.info(f"Output dir    : {output_dir.absolute()}")
+    log.info(f"Parent dir    : {output_dir.parent.absolute()}")
+    log.info(f"Target company: {args.company}")
+    log.info(f"Target domains: {', '.join(args.domains)}")
+
+    # ── Check Python deps ──────────────────────────────────────────────────
+    check_python_deps(log)
+
+    # ── INIT: Tool Discovery ───────────────────────────────────────────────
+    _vc.status("os_init_tools", label="INIT: Tool Discovery", status="running")
+    _pm.set_phase_status("os_init_tools", "running", label="INIT: Tool Discovery")
+
+    # ── Detect / auto-install external binaries ────────────────────────────
+    _binary_avail = check_binary_tools(log)
+
+    # ── Check Amass ────────────────────────────────────────────────────────
+    amass_available = False
+    if not args.skip_amass:
+        amass_available = check_amass(log)
+
+    # Build tool availability map for Vantage UI
+    _os_tool_ui: dict = {}
+    for _t_name, _t_candidates, *_ in _BINARY_TOOLS:
+        _t_path = _find_binary(_t_candidates)
+        _os_tool_ui[_t_name] = {"installed": bool(_t_path), "path": _t_path or ""}
+    _amass_p = shutil.which("amass")
+    _os_tool_ui["amass"] = {"installed": bool(_amass_p), "path": _amass_p or ""}
+    for _pd_name in _PD_TOOLS:
+        _pd_path = shutil.which(_pd_name)
+        _os_tool_ui[_pd_name] = {"installed": bool(_pd_path), "path": _pd_path or ""}
+    # Python-native tools (pip packages)
+    for _py_tool, _py_mod in (("wappalyzer", "wappalyzer"), ("maigret", "maigret")):
+        try:
+            import importlib.util as _ilu
+            _py_installed = _ilu.find_spec(_py_mod) is not None
+        except Exception:
+            _py_installed = False
+        _os_tool_ui[_py_tool] = {"installed": _py_installed, "path": f"pip:{_py_tool}"}
+
+    _pm.set_phase_status("os_init_tools", "complete", label="INIT: Tool Discovery")
+    _vc.status("os_init_tools", label="INIT: Tool Discovery", status="complete",
+               tools=_os_tool_ui)
+    write_tools_snapshot(output_dir)
+
+    # ── Custom wordlist ────────────────────────────────────────────────────
+    if args.wordlist and Path(args.wordlist).exists():
+        global DEFAULT_WORDLIST
+        DEFAULT_WORDLIST = [
+            line.strip() for line in
+            Path(args.wordlist).read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip()
+        ]
+        log.info(f"Custom wordlist loaded: {len(DEFAULT_WORDLIST)} entries")
+
+    # ── Initialise data structure ──────────────────────────────────────────
+    data = ReconData(company=args.company, domain=args.domains[0], domains=list(args.domains))
+
+    # Save sanitised config (no secrets)
+    cfg = vars(args).copy()
+    _secret_args = [
+        "dehashed_key", "hibp_key",
+        "shodan_key", "censys_id", "censys_secret",
+        "fullhunt_key", "securitytrails_key", "netlas_key",
+        "virustotal_key", "urlscan_key", "otx_key", "hunter_key",
+        "chaos_key",
+    ]
+    for _k in _secret_args:
+        if _k in cfg and cfg[_k]:
+            cfg[_k] = "***REDACTED***"
+    cfg["platform"]     = SYSTEM
+    cfg["output_dir"]   = str(output_dir.absolute())
+    cfg["settings_file"] = str(_settings_path.resolve()) if _settings_path else None
+    cfg["keys_active"]  = _settings_are_active(args)
+    (output_dir / "logs" / "config.json").write_text(
+        json.dumps(cfg, indent=2, default=str), encoding="utf-8"
+    )
+
+    # ── Instantiate Phase 1.5 Passive OSINT orchestrator ──────────────────
+    _section(log, "PHASE 1.5 BOOTSTRAP: Passive OSINT Tool Suite")
+    passive = PassiveOSINTOrchestrator(
+        domain              = args.domains[0],
+        company             = args.company,
+        output_dir          = output_dir,
+        log                 = log,
+        data                = data,
+        harvester_limit     = args.harvester_limit,
+        xurlfind3r_enabled  = not args.skip_xurlfind3r,
+        skip_passive        = args.skip_passive,
+        github_org          = getattr(args, "github_org", ""),
+        skip_wayback        = getattr(args, "skip_wayback", False),
+        skip_wappalyzer     = getattr(args, "skip_wappalyzer", False),
+        skip_cloud_enum     = getattr(args, "skip_cloud_enum", False),
+    )
+
+    # ── Instantiate ProjectDiscovery orchestrator ──────────────────────────
+    # (tool check + go install happens here; waves run at the appropriate phases)
+    _section(log, "PHASE 11 BOOTSTRAP: ProjectDiscovery Toolkit")
+    pd = ProjectDiscoveryOrchestrator(
+        domain       = args.domains[0],
+        company      = args.company,
+        output_dir   = output_dir,
+        log          = log,
+        data         = data,
+        chaos_key    = args.chaos_key,
+        shodan_key   = args.shodan_key,
+        censys_id    = args.censys_id,
+        censys_secret= args.censys_secret,
+        cloud_config = args.cloudlist_config,
+        max_depth    = args.max_depth,
+        wordlist     = Path(args.wordlist) if args.wordlist and Path(args.wordlist).exists() else None,
+        skip_pd      = args.skip_pd,
+    )
+
+    # ── Phase 1-level tools: run ALL domains concurrently (max 20 threads) ──
+    # Each domain worker runs Phase 1 DNS → PD Wave A → Phase 1.5 → Amass
+    # sequentially within its own thread.  All domain workers run in parallel.
+    # write_targets_snapshot is serialised via _snap_lock to prevent file races.
+    _snap_lock = threading.Lock()
+
+    def _snap(od: Path, d: "ReconData") -> None:
+        with _snap_lock:
+            write_targets_snapshot(od, d)
+
+    def _run_domain_wave1(domain: str, is_primary: bool) -> None:
+        """Run Phase 1 DNS → PD Wave A → Phase 1.5 → Amass for one domain."""
+        _d_sfx     = "" if is_primary else f"_extra_{_safe_filename(domain)}"
+        _p1_key    = f"phase1_dns{_d_sfx}"
+        _pda_key   = f"pd_wave_a{_d_sfx}"
+        _p15_key   = f"phase1_5_wave_a{_d_sfx}"
+        _amass_key = f"phase2_amass{_d_sfx}"
+        _lbl       = "" if is_primary else f" ({domain})"
+
+        # ── Phase 1 DNS ──────────────────────────────────────────────────────
+        _p1_label = "Phase 1: DNS Enumeration" if is_primary else f"Phase 1 DNS: {domain}"
+        if _pm.is_phase_complete(_p1_key):
+            _vc.log(f"Phase 1 DNS already complete{_lbl} — resuming from checkpoint.", "INFO")
+            _vc.status(_p1_key, label=_p1_label, status="complete")
+        else:
+            _pm.set_phase_status(_p1_key, "running", label=_p1_label)
+            _vc.status(_p1_key, label=_p1_label, status="running",
+                       active_tools=["dns", "dns/subdomains"])
+            _section(log, f"PHASE 1: DNS Enumeration{_lbl}")
+            _dns_enum = DNSEnumerator(domain, output_dir, log, data)
+            if is_primary and args.skip_brute:
+                _dns_enum._get_dns_records()
+                _dns_enum._attempt_zone_transfer()
+                _dns_enum._enumerate_from_search_engines()
+                _dns_enum._dnsdumpster_lookup()
+            else:
+                _dns_enum.run()
+            _pm.set_phase_status(_p1_key, "complete", label=_p1_label)
+            _vc.status(_p1_key, label=_p1_label, status="complete")
+            _snap(output_dir, data)
+
+        # ── PD Wave A (subfinder / chaos) ────────────────────────────────────
+        _pda_label = "PD Wave A: Subfinder/Chaos" if is_primary else f"PD Wave A: {domain}"
+        if _pm.is_phase_complete(_pda_key):
+            _vc.status(_pda_key, label=_pda_label, status="complete")
+        else:
+            _pm.set_phase_status(_pda_key, "running", label=_pda_label)
+            _vc.status(_pda_key, label=_pda_label, status="running",
+                       active_tool="dns/subdomains")
+            if is_primary:
+                pd.run_wave_a()
+            else:
+                if pd.avail.get("subfinder"):
+                    PDSubfinder(domain, output_dir, log, data).run()
+                if pd.avail.get("chaos"):
+                    PDChaos(domain, output_dir, log, data, args.chaos_key).run()
+            _pm.set_phase_status(_pda_key, "complete", label=_pda_label)
+            _vc.status(_pda_key, label=_pda_label, status="complete")
+            _snap(output_dir, data)
+
+        # ── Phase 1.5 Wave A (theHarvester / xurlfind3r) ─────────────────────
+        _p15_label = "Phase 1.5: theHarvester/xurlfind3r" if is_primary else f"Passive OSINT: {domain}"
+        if _pm.is_phase_complete(_p15_key):
+            _vc.log(f"Phase 1.5 Wave A already complete{_lbl} — resuming from checkpoint.", "INFO")
+            _vc.status(_p15_key, label=_p15_label, status="complete")
+        elif not args.skip_passive:
+            _pm.set_phase_status(_p15_key, "running", label=_p15_label)
+            _vc.status(_p15_key, label=_p15_label, status="running",
+                       active_tools=["osint/theharvester", "osint/xurlfind3r"])
+            _section(log, f"PHASE 1.5: Passive OSINT Wave A{_lbl}")
+            if is_primary:
+                passive.run_wave_a()
+            else:
+                TheHarvesterRunner(
+                    domain, args.company, output_dir, log, data,
+                    limit=args.harvester_limit,
+                ).run()
+                if not getattr(args, "skip_xurlfind3r", False):
+                    XurlFind3rRunner(domain, args.company, output_dir, log, data).run()
+            _pm.set_phase_status(_p15_key, "complete", label=_p15_label)
+            _vc.status(_p15_key, label=_p15_label, status="complete")
+            _snap(output_dir, data)
+
+        # ── Phase 2 Amass ────────────────────────────────────────────────────
+        _amass_label = "Phase 2: Amass" if is_primary else f"Amass: {domain}"
+        if not args.skip_amass and amass_available:
+            if _pm.is_phase_complete(_amass_key):
+                _vc.log(f"Phase 2 Amass already complete{_lbl} — resuming from checkpoint.", "INFO")
+                _vc.status(_amass_key, label=_amass_label, status="complete")
+            else:
+                _pm.set_phase_status(_amass_key, "running", label=_amass_label)
+                _vc.status(_amass_key, label=_amass_label, status="running",
+                           active_tool="amass")
+                _section(log, f"PHASE 2: Amass{_lbl}")
+                AmassEnumerator(domain, output_dir, log, data).run()
+                _pm.set_phase_status(_amass_key, "complete", label=_amass_label)
+                _vc.status(_amass_key, label=_amass_label, status="complete")
+                _snap(output_dir, data)
+        else:
+            _pm.set_phase_status(_amass_key, "skipped", label=_amass_label)
+            _vc.status(_amass_key, label=_amass_label, status="skipped")
+
+    # Dispatch — single domain runs inline; multiple run concurrently (≤ 20 threads)
+    _all_wave1 = [(args.domains[0], True)] + [(d, False) for d in args.domains[1:]]
+    if len(_all_wave1) == 1:
+        _run_domain_wave1(*_all_wave1[0])
+    else:
+        _section(log, f"PHASE 1–2: Concurrent discovery — {len(_all_wave1)} domains, max 20 threads")
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(20, len(_all_wave1))
+        ) as _w1_pool:
+            _w1_futs = {
+                _w1_pool.submit(_run_domain_wave1, _dom, _prim): _dom
+                for _dom, _prim in _all_wave1
+            }
+            for _fut in concurrent.futures.as_completed(_w1_futs):
+                _w_dom = _w1_futs[_fut]
+                try:
+                    _fut.result()
+                except Exception as _w_ex:
+                    log.error(f"Wave 1 worker failed for {_w_dom}: {_w_ex}", exc_info=True)
+
+    # ── PD Wave B — mass DNS resolution (all passive subs now known) ────────
+    if not _pm.is_phase_complete("pd_wave_b"):
+        _pm.set_phase_status("pd_wave_b", "running", label="PD Wave B: DNS Resolution")
+        _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="running",
+                   active_tool="dns/subdomains")
+        pd.run_wave_b()
+        _pm.set_phase_status("pd_wave_b", "complete", label="PD Wave B: DNS Resolution")
+        _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
+        write_targets_snapshot(output_dir, data)
+    else:
+        _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
+
+    # ── Phase 1.5 Wave B — puredns + waybackurls (subdomains now collected) ─
+    if _pm.is_phase_complete("phase1_5_wave_b"):
+        _vc.log("Phase 1.5 Wave B already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
+    else:
+        _pm.set_phase_status("phase1_5_wave_b", "running", label="Phase 1.5: puredns/waybackurls")
+        _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="running",
+                   active_tools=["dns/puredns", "osint/waybackurls"])
+        _section(log, "PHASE 1.5 Wave B: puredns DNS brute-force + waybackurls")
+        passive.run_wave_b()
+        _pm.set_phase_status("phase1_5_wave_b", "complete", label="Phase 1.5: puredns/waybackurls")
+        _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 3: Certificates ──────────────────────────────────────────────
+    if _pm.is_phase_complete("phase3_certs"):
+        _vc.log("Phase 3 Certificates already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase3_certs", label="Phase 3: Certificates", status="complete")
+    else:
+        _pm.set_phase_status("phase3_certs", "running", label="Phase 3: Certificates")
+        _vc.status("phase3_certs", label="Phase 3: Certificates", status="running",
+                   active_tool="certificates/parsed")
+        _section(log, "PHASE 3: Certificate Collection & Analysis")
+        CertificateCollector(output_dir, log, data).run()
+        _pm.set_phase_status("phase3_certs", "complete", label="Phase 3: Certificates")
+        _vc.status("phase3_certs", label="Phase 3: Certificates", status="complete")
+
+    # ── Phase 4: IP Intelligence ───────────────────────────────────────────
+    if _pm.is_phase_complete("phase4_ip"):
+        _vc.log("Phase 4 IP Intelligence already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
+    else:
+        _pm.set_phase_status("phase4_ip", "running", label="Phase 4: IP Intelligence")
+        _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="running",
+                   active_tool="ip_addresses")
+        _section(log, "PHASE 4: IP Address Intelligence")
+        IPIntelligence(output_dir, log, data).run()
+        _pm.set_phase_status("phase4_ip", "complete", label="Phase 4: IP Intelligence")
+        _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── PD Wave C+E — TLS, CDN, ASN, internet search, cloud (IPs now known)
+    if not _pm.is_phase_complete("pd_wave_ce"):
+        _pm.set_phase_status("pd_wave_ce", "running", label="PD Wave C+E: TLS/CDN/Cloud")
+        _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="running",
+                   active_tools=["certificates/tlsx", "ip_addresses", "api_intel/uncover", "company_info/cloudlist"])
+        pd.run_wave_c_and_e()
+        _pm.set_phase_status("pd_wave_ce", "complete", label="PD Wave C+E: TLS/CDN/Cloud")
+        _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="complete")
+    else:
+        _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="complete")
+
+    # ── PD Wave D — deep katana crawl (live hosts + certs available) ────────
+    if not _pm.is_phase_complete("pd_wave_d"):
+        _pm.set_phase_status("pd_wave_d", "running", label="PD Wave D: Katana Crawl")
+        _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="running",
+                   active_tool="web_crawl/katana")
+        pd.run_wave_d()
+        _pm.set_phase_status("pd_wave_d", "complete", label="PD Wave D: Katana Crawl")
+        _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
+    else:
+        _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
+
+    # ── Phase 5: WHOIS ─────────────────────────────────────────────────────
+    if _pm.is_phase_complete("phase5_whois"):
+        _vc.log("Phase 5 WHOIS already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
+    else:
+        _pm.set_phase_status("phase5_whois", "running", label="Phase 5: WHOIS")
+        _vc.status("phase5_whois", label="Phase 5: WHOIS", status="running",
+                   active_tool="whois")
+        _section(log, "PHASE 5: WHOIS Collection")
+        WhoisCollector(output_dir, log, data).run()
+        _pm.set_phase_status("phase5_whois", "complete", label="Phase 5: WHOIS")
+        _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
+
+    # ── Phase 6: Company Intelligence ─────────────────────────────────────
+    if _pm.is_phase_complete("phase6_company"):
+        _vc.log("Phase 6 Company Intelligence already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
+    else:
+        _pm.set_phase_status("phase6_company", "running", label="Phase 6: Company Intelligence")
+        _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="running",
+                   active_tools=["company_info", "osint/maltego"])
+        _section(log, "PHASE 6: Company Intelligence")
+        CompanyIntelligence(
+            args.company, args.domains[0], output_dir, log, data,
+            edgar_email = args.edgar_email,
+        ).run()
+        passive.run_maltego_export()
+        _pm.set_phase_status("phase6_company", "complete", label="Phase 6: Company Intelligence")
+        _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
+
+    # ── Phase 7: Email & People OSINT ─────────────────────────────────────
+    if _pm.is_phase_complete("phase7_email"):
+        _vc.log("Phase 7 Email & People OSINT already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
+    else:
+        _pm.set_phase_status("phase7_email", "running", label="Phase 7: Email & People OSINT")
+        _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="running",
+                   active_tools=["emails", "breach_data", "osint/maigret", "osint/trufflehog"])
+        _section(log, "PHASE 7: Email & People OSINT")
+        # Run EmailAndPeopleOSINT and the Phase 1.5 email/social tools concurrently.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _p7_ex:
+            _p7_main = _p7_ex.submit(
+                EmailAndPeopleOSINT(
+                    args.domains[0], args.company, output_dir, log, data,
+                    hibp_key      = args.hibp_key,
+                    dehashed_user = args.dehashed_user,
+                    dehashed_key  = args.dehashed_key,
+                ).run
+            )
+            _p7_passive = _p7_ex.submit(passive.run_phase7_tools)
+            for _fut in concurrent.futures.as_completed([_p7_main, _p7_passive]):
+                try:
+                    _fut.result()
+                except Exception as _exc:
+                    log.warning(f"[Phase 7] Worker error: {_exc}")
+        _pm.set_phase_status("phase7_email", "complete", label="Phase 7: Email & People OSINT")
+        _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 8: Web Crawling ──────────────────────────────────────────────
+    if args.skip_crawl:
+        log.info("[CRAWL] Skipped (--skip-crawl)")
+        _pm.set_phase_status("phase8_crawl", "skipped", label="Phase 8: Web Crawling")
+        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="skipped")
+    elif _pm.is_phase_complete("phase8_crawl"):
+        _vc.log("Phase 8 Web Crawling already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="complete")
+    else:
+        _pm.set_phase_status("phase8_crawl", "running", label="Phase 8: Web Crawling")
+        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="running",
+                   active_tool="web_crawl")
+        _section(log, "PHASE 8: Web Crawling & Sensitive Data Discovery")
+        WebCrawler(output_dir, log, data, args.max_pages, args.max_depth).run()
+        _pm.set_phase_status("phase8_crawl", "complete", label="Phase 8: Web Crawling")
+        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="complete")
+
+    # ── Phase 1.5 Wave C — Wappalyzer + cloud_enum (live hosts now known) ───
+    if _pm.is_phase_complete("phase1_5_wave_c"):
+        _vc.log("Phase 1.5 Wave C already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="complete")
+    else:
+        _pm.set_phase_status("phase1_5_wave_c", "running", label="Phase 1.5: Wappalyzer/cloud_enum")
+        _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="running",
+                   active_tools=["web/wappalyzer", "osint/cloud_enum"])
+        _section(log, "PHASE 1.5 Wave C: Wappalyzer tech fingerprinting + cloud_enum bucket scan")
+        passive.run_wave_c()
+        _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: Wappalyzer/cloud_enum")
+        _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="complete")
+
+    # ── Phase 10: OSINT API Intelligence Engine ────────────────────────────
+    if args.skip_api:
+        log.info("[API] Phase 10 skipped (--skip-api)")
+        _pm.set_phase_status("phase10_api", "skipped", label="Phase 10: OSINT API Intelligence")
+        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="skipped")
+    elif _pm.is_phase_complete("phase10_api"):
+        _vc.log("Phase 10 API Intelligence already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="complete")
+    else:
+        _pm.set_phase_status("phase10_api", "running", label="Phase 10: OSINT API Intelligence")
+        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="running",
+                   active_tools=["api_intel/shodan", "api_intel/censys", "api_intel/fullhunt",
+                                  "api_intel/securitytrails", "api_intel/netlas",
+                                  "api_intel/virustotal", "api_intel/urlscan",
+                                  "api_intel/alienvault_otx", "api_intel/hunter_io",
+                                  "api_intel/hibp"])
+        _section(log, "PHASE 10: OSINT API Intelligence Engine")
+        OSINTAPIOrchestrator(
+            domain      = args.domains[0],
+            company     = args.company,
+            output_dir  = output_dir,
+            log         = log,
+            data        = data,
+            shodan_key          = args.shodan_key,
+            censys_id           = args.censys_id,
+            censys_secret       = args.censys_secret,
+            fullhunt_key        = args.fullhunt_key,
+            securitytrails_key  = args.securitytrails_key,
+            netlas_key          = args.netlas_key,
+            virustotal_key      = args.virustotal_key,
+            urlscan_key         = args.urlscan_key,
+            otx_key             = args.otx_key,
+            hunter_key          = args.hunter_key,
+            hibp_key            = args.hibp_key,
+        ).run()
+        _pm.set_phase_status("phase10_api", "complete", label="Phase 10: OSINT API Intelligence")
+        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Additional domains: Phase 10 API Intelligence ─────────────────────
+    if not args.skip_api:
+        for _extra_domain in args.domains[1:]:
+            _d_sfx = f"_extra_{_safe_filename(_extra_domain)}"
+            _phase10_extra_key = f"phase10_api{_d_sfx}"
+            if _pm.is_phase_complete(_phase10_extra_key):
+                _vc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
+            else:
+                _pm.set_phase_status(_phase10_extra_key, "running", label=f"Phase 10 API: {_extra_domain}")
+                _vc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="running")
+                _section(log, f"PHASE 10 API (additional domain): {_extra_domain}")
+                OSINTAPIOrchestrator(
+                    domain              = _extra_domain,
+                    company             = args.company,
+                    output_dir          = output_dir,
+                    log                 = log,
+                    data                = data,
+                    shodan_key          = args.shodan_key,
+                    censys_id           = args.censys_id,
+                    censys_secret       = args.censys_secret,
+                    fullhunt_key        = args.fullhunt_key,
+                    securitytrails_key  = args.securitytrails_key,
+                    netlas_key          = args.netlas_key,
+                    virustotal_key      = args.virustotal_key,
+                    urlscan_key         = args.urlscan_key,
+                    otx_key             = args.otx_key,
+                    hunter_key          = args.hunter_key,
+                    hibp_key            = args.hibp_key,
+                ).run()
+                _pm.set_phase_status(_phase10_extra_key, "complete", label=f"Phase 10 API: {_extra_domain}")
+                _vc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
+
+    # ── PD summary (all waves complete) ───────────────────────────────────
+    pd._write_summary()
+
+    # ── Phase 11: DNS Enrichment (dig + dnsx against all collected FQDNs) ─
+    if getattr(args, "skip_dns_enrich", False):
+        log.info("[DNS Enrich] Phase 11 skipped (--skip-dns-enrich)")
+        _pm.set_phase_status("phase11_dns_enrich", "skipped", label="Phase 11: DNS Enrichment")
+        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="skipped")
+    elif _pm.is_phase_complete("phase11_dns_enrich"):
+        _vc.log("Phase 11 DNS Enrichment already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
+    else:
+        _pm.set_phase_status("phase11_dns_enrich", "running", label="Phase 11: DNS Enrichment")
+        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="running",
+                   step=f"{len(data.subdomains)} FQDNs",
+                   active_tools=["dns/dig", "dns/dnsx_enrich"])
+        _section(log, "PHASE 11: DNS Enrichment (dig + dnsx)")
+        DNSEnrichmentRunner(args.domains[0], output_dir, log, data).run()
+        _pm.set_phase_status("phase11_dns_enrich", "complete", label="Phase 11: DNS Enrichment")
+        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 12: TREVORspray — M365/Azure AD credential spraying ─────────
+    if getattr(args, "no_spray", False):
+        log.info("[TREVORspray] Phase 12 skipped (--no-spray)")
+        _pm.set_phase_status("phase12_trevorspray", "skipped", label="Phase 12: TREVORspray")
+        _vc.status("phase12_trevorspray", label="Phase 12: TREVORspray", status="skipped")
+    elif _pm.is_phase_complete("phase12_trevorspray"):
+        _vc.log("Phase 12 TREVORspray already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase12_trevorspray", label="Phase 12: TREVORspray", status="complete")
+    else:
+        _pm.set_phase_status("phase12_trevorspray", "running", label="Phase 12: TREVORspray")
+        _vc.status("phase12_trevorspray", label="Phase 12: TREVORspray", status="running",
+                   active_tool="osint/trevorspray")
+        _section(log, "PHASE 12: TREVORspray — M365/Azure AD Credential Spray")
+        _spray_emails = list(data.email_addresses.keys())
+        run_trevorspray(
+            domain=args.domains[0],
+            emails=_spray_emails,
+            output_dir=output_dir,
+            data=data,
+            log=log,
+        )
+        _pm.set_phase_status("phase12_trevorspray", "complete", label="Phase 12: TREVORspray")
+        _vc.status("phase12_trevorspray", label="Phase 12: TREVORspray", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 13: GitDorker — GitHub secret scanning ───────────────────────
+    if getattr(args, "no_gitdorker", False):
+        log.info("[GitDorker] Phase 13 skipped (--no-gitdorker)")
+        _pm.set_phase_status("phase13_gitdorker", "skipped", label="Phase 13: GitDorker")
+        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="skipped")
+    elif _pm.is_phase_complete("phase13_gitdorker"):
+        _vc.log("Phase 13 GitDorker already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
+    else:
+        _pm.set_phase_status("phase13_gitdorker", "running", label="Phase 13: GitDorker")
+        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="running",
+                   active_tool="osint/gitdorker")
+        _section(log, "PHASE 13: GitDorker — GitHub Secret Scanning")
+        run_gitdorker(
+            domain=args.domains[0],
+            company=args.company,
+            output_dir=output_dir,
+            data=data,
+            log=log,
+            github_token=getattr(args, "github_token", "") or "",
+        )
+        _pm.set_phase_status("phase13_gitdorker", "complete", label="Phase 13: GitDorker")
+        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 4.5: Shodan CLI — per-IP open-port lookup ───────────────────
+    if _pm.is_phase_complete("phase4_5_shodan_cli"):
+        _vc.log("Phase 4.5 Shodan CLI already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
+    else:
+        _pm.set_phase_status("phase4_5_shodan_cli", "running", label="Phase 4.5: Shodan CLI")
+        _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="running",
+                   step=f"{len(data.ip_addresses)} IPs",
+                   active_tool="osint/shodan_cli")
+        _section(log, "PHASE 4.5: Shodan CLI — per-IP open-port enumeration")
+        ShodanCLIRunner(
+            output_dir  = output_dir,
+            log         = log,
+            data        = data,
+            shodan_key  = args.shodan_key,
+        ).run()
+        _pm.set_phase_status("phase4_5_shodan_cli", "complete", label="Phase 4.5: Shodan CLI")
+        _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 9: Aggregation & Report ─────────────────────────────────────
+    _pm.set_phase_status("phase9_report", "running", label="Phase 9: Aggregation & Report")
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="running")
+    _section(log, "PHASE 9: Aggregation & Final Report")
+    data.end_time = datetime.datetime.now(datetime.UTC).isoformat()
+
+    # Step 9a: Raw output parsing — walk every file produced by every tool,
+    #          extract emails/phones/subdomains/IPs/URLs, merge into ReconData.
+    #          This ensures IntelAggregator sees a fully-populated dataset even
+    #          when a tool wrote results to disk but didn't update ReconData live.
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+               status="running", step="Raw output parsing")
+    _section(log, "PHASE 9a: Cross-Tool Raw Output Parsing")
+    RawOutputParser(output_dir, log, data).run()
+
+    # Step 9b: Intel aggregation — classify, validate phones, write findings.json
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+               status="running", step="Intel aggregation")
+    aggregator   = IntelAggregator(
+        output_dir, log, data,
+        numverify_key         = getattr(args, 'numverify_key', ''),
+        abstractapi_phone_key = getattr(args, 'abstractapi_phone_key', ''),
+    )
+    findings_path = aggregator.run()
+
+    # Step 9c: Sensitive-data summary (per-category JSONL files)
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+               status="running", step="Sensitive data summary")
+    aggregate_sensitive_data(output_dir, log, data)
+
+    # Step 9d: Full data report + executive summary
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+               status="running", step="Generating final report")
+    report_path = generate_final_report(output_dir, log, data, project_dir=project_dir)
+
+    _pm.set_phase_status("phase9_report", "complete", label="Phase 9: Aggregation & Report")
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="complete")
+
+    log.flush_all()
+
+    # ── Final banner ───────────────────────────────────────────────────────
+    all_f    = data.findings.all_findings()
+    pri_subs = sum(1 for f, m in data.subdomains.items()
+                   if DomainClassifier._registrable_root(f) == DomainClassifier._registrable_root(data.domain)
+                   or f.endswith("." + data.domain))
+    sec_subs = len(data.subdomains) - pri_subs
+    phones_v = len([p for p in data.phone_numbers if PhoneValidator.validate(p)["valid"]])
+
+    sep = "=" * 60
+    print(f"{sep}")
+    print("  OSIFT RECONNAISSANCE COMPLETE")
+    print(sep)
+    print(f"  Parent directory  : {output_dir.parent.absolute()}")
+    print(f"  Run directory     : {output_dir.name}")
+    print(f"  Unified findings  : {findings_path.name}")
+    print(f"  Final report      : {report_path.name}")
+    print(f"  ─────────────────────────────────────────────")
+    print(f"  Subdomains        : {len(data.subdomains):>6}  (primary ≈{pri_subs}, secondary ≈{sec_subs})")
+    print(f"  IP addresses      : {len(data.ip_addresses):>6}")
+    print(f"  Email addresses   : {len(data.email_addresses):>6}")
+    print(f"  Employees found   : {len(data.employees):>6}")
+    print(f"  Phone numbers     : {len(data.phone_numbers):>6}  (valid: {phones_v})")
+    print(f"  Certificates      : {len(data.certificates):>6}")
+    print(f"  Crawled URLs      : {len(data.crawled_urls):>6}")
+    print(f"  Technologies      : {len(data.technologies):>6}")
+    print(f"  Security findings : {len(all_f):>6}  ({data.findings.validated_count()} multi-tool validated)")
+    print(f"  Breach records    : {len(data.breach_data):>6}")
+    print(f"{sep}")
+
+
+def _section(log: ReconLogger, title: str):
+    """Print a visual section separator."""
+    sep = "=" * 60
+    log.info(f"{sep}")
+    log.info(f"{title}")
+    log.info(f"{sep}")
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    def _sigint(sig, frame):
+        BANNER_MGR.restore()
+        print("\n\n[!] Interrupted — exiting gracefully.\n")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _sigint)
+    # Windows doesn't have SIGBREAK but has CTRL_C_EVENT via signal.SIGINT above
+    if not IS_WINDOWS:
+        signal.signal(signal.SIGTERM, _sigint)
+
+    main()

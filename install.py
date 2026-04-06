@@ -350,6 +350,9 @@ def main() -> None:
 ╚══════════════════════════════════════════════════════╝
 """))
 
+    # Step 0: Symlinks — created first so they survive any later failure
+_install_symlinks()
+
     # Step 1: Python packages
     install_python_packages()
 
@@ -378,8 +381,8 @@ def main() -> None:
     else:
         info("--skip-github set. Skipping GitHub tool cloning.")
 
-    # Step 5: Symlinks
-    _install_symlinks()
+    # Step 5: Symlinks (already done in Step 0; repeated for idempotency)
+_install_symlinks()
 
     print(_c("32", "\n[DONE]  OSift installation complete.\n"))
     print("Next steps:")

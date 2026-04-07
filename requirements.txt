@@ -1,51 +1,20 @@
-# OSift — OSINT & Reconnaissance Framework
-# Python 3.10+ required
-
-# ── HTTP & networking ──────────────────────────────────────────────────────────
 requests>=2.31.0
 urllib3>=2.0.0
-
-# ── DNS resolution ─────────────────────────────────────────────────────────────
 dnspython>=2.4.0
-
-# ── WHOIS ──────────────────────────────────────────────────────────────────────
 python-whois>=0.9.4
-
-# ── Shodan API client ─────────────────────────────────────────────────────────
 shodan>=1.31.0
-
-# ── Censys API client ─────────────────────────────────────────────────────────
 censys>=2.2.0
-
-# ── HTML / XML parsing ────────────────────────────────────────────────────────
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
-
-# ── TLS / certificate inspection ──────────────────────────────────────────────
 cryptography>=41.0.0
 pyOpenSSL>=23.0.0
-
-# ── Terminal output ───────────────────────────────────────────────────────────
 colorama>=0.4.6
-
-# ── Progress bars ─────────────────────────────────────────────────────────────
 tqdm>=4.66.0
-
-# ── SSH / remote execution ────────────────────────────────────────────────────
 paramiko>=3.3.0
-
-# ── Office document generation (reports) ─────────────────────────────────────
 python-docx>=1.1.0
 openpyxl>=3.1.0
-
-# ── Data manipulation & CSV output ────────────────────────────────────────────
 pandas>=2.1.0
-
-# ── Report templating ─────────────────────────────────────────────────────────
 jinja2>=3.1.0
-
-# ── SEC EDGAR company intelligence ────────────────────────────────────────────
 edgartools>=2.0.0
-
-# ── Web scraping / browser automation (optional) ──────────────────────────────
 selenium>=4.15.0
+webdriver-manager>=4.0.0

@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
 """
-install.py — OSift dependency installer
-========================================
-Installs all Python packages from requirements.txt, required system tools
-via apt (Linux) or brew (macOS), and Go-based ProjectDiscovery tools via
-`go install`. Also clones Python-based tools (TREVORspray, GitDorker,
-theHarvester) to /opt/<toolname>/ for PATH availability.
-
-Usage:
-    python3 install.py
-    python3 install.py --skip-go      # skip ProjectDiscovery Go tools
-    python3 install.py --skip-github  # skip GitHub-cloned tools
-    python3 install.py --pip-only     # Python packages only
+OSift — OSINT Reconnaissance Framework
+Install script for /opt/pr0t31n/OSift/
 """
 
 import argparse
@@ -22,373 +12,571 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.0.0"
+# ─── ANSI colours ────────────────────────────────────────────────────────────
+R  = "\033[1;31m"
+G  = "\033[1;32m"
+Y  = "\033[1;33m"
+B  = "\033[1;34m"
+C  = "\033[1;36m"
+W  = "\033[0m"
+# ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM = platform.system()
-IS_LINUX = SYSTEM == "Linux"
-IS_MACOS = SYSTEM == "Darwin"
+APP_NAME = "OSift"
+APP_DIR  = Path("/opt/pr0t31n/OSift")
+BIN_DIR  = Path("/usr/local/bin")
+OPT_DIR  = Path("/opt")
 
-# ── Colours ───────────────────────────────────────────────────────────────────
-def _c(code: str, text: str) -> str:
-    if sys.stdout.isatty():
-        return f"\033[{code}m{text}\033[0m"
-    return text
+SYMLINKS = {
+    "osift": APP_DIR / "osift.py",
+}
 
-def info(msg: str)    -> None: print(_c("36", f"[INFO]  {msg}"))
-def ok(msg: str)      -> None: print(_c("32", f"[OK]    {msg}"))
-def warn(msg: str)    -> None: print(_c("33", f"[WARN]  {msg}"), file=sys.stderr)
-def error(msg: str)   -> None: print(_c("31", f"[ERROR] {msg}"), file=sys.stderr)
-def section(msg: str) -> None: print(_c("35", f"\n{'='*60}\n  {msg}\n{'='*60}"))
+# system package lists --------------------------------------------------------
+APT_PKGS = [
+    "git", "curl", "wget", "dnsutils", "whois", "amass",
+    "golang-go", "python3-pip", "python3-venv", "nmap", "jq",
+    "ca-certificates", "build-essential", "whatweb",
+]
+DNF_PKGS = [
+    "git", "curl", "wget", "bind-utils", "whois", "golang",
+    "python3-pip", "python3-virtualenv", "nmap", "jq",
+    "ca-certificates", "gcc", "make", "whatweb",
+]
+ZYPPER_PKGS = [
+    "git", "curl", "wget", "bind-utils", "whois", "golang",
+    "python3-pip", "python3-venv", "nmap", "jq",
+    "ca-certificates", "gcc", "make",
+]
+BREW_PKGS = [
+    "git", "curl", "wget", "amass", "go", "jq",
+    "nmap", "theharvester", "whatweb", "whois",
+]
+
+# pip packages ----------------------------------------------------------------
+PIP_PKGS = [
+    "requests>=2.31.0",
+    "urllib3>=2.0.0",
+    "dnspython>=2.4.0",
+    "python-whois>=0.9.4",
+    "shodan>=1.31.0",
+    "censys>=2.2.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "cryptography>=41.0.0",
+    "pyOpenSSL>=23.0.0",
+    "colorama>=0.4.6",
+    "tqdm>=4.66.0",
+    "paramiko>=3.3.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "pandas>=2.1.0",
+    "jinja2>=3.1.0",
+    "edgartools>=2.0.0",
+    "selenium>=4.15.0",
+    "webdriver-manager>=4.0.0",
+]
+
+# Go tools (go install) -------------------------------------------------------
+GO_INSTALL_TOOLS = [
+    "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    "github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+    "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+    "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
+    "github.com/projectdiscovery/tlsx/cmd/tlsx@latest",
+    "github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest",
+    "github.com/projectdiscovery/katana/cmd/katana@latest",
+    "github.com/projectdiscovery/asnmap/cmd/asnmap@latest",
+    "github.com/projectdiscovery/uncover/cmd/uncover@latest",
+    "github.com/projectdiscovery/cloudlist/cmd/cloudlist@latest",
+    "github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest",
+    "github.com/projectdiscovery/chaos-client/cmd/chaos@latest",
+    "github.com/tomnomnom/waybackurls@latest",
+    "github.com/ffuf/ffuf/v2@latest",
+]
+
+# Git tools -------------------------------------------------------------------
+# Each entry: (repo_url, clone_dir, post_clone_action)
+# post_clone_action is a callable that receives the clone path
+GIT_TOOLS = [
+    {
+        "name":   "TREVORspray",
+        "url":    "https://github.com/m8sec/TREVORspray",
+        "dest":   OPT_DIR / "TREVORspray",
+        "action": "pip_install_dot",
+    },
+    {
+        "name":   "GitDorker",
+        "url":    "https://github.com/obheda12/GitDorker",
+        "dest":   OPT_DIR / "GitDorker",
+        "action": None,
+    },
+    {
+        "name":   "theHarvester",
+        "url":    "https://github.com/laramies/theHarvester",
+        "dest":   OPT_DIR / "theHarvester",
+        "action": "pip_install_requirements_base",
+    },
+    {
+        "name":   "puredns",
+        "url":    "https://github.com/d3mondev/puredns",
+        "dest":   OPT_DIR / "puredns",
+        "action": "go_build_output",
+        "output": "/usr/local/bin/puredns",
+        "go_args": ["./..."],
+    },
+    {
+        "name":   "cent",
+        "url":    "https://github.com/xm1k3/cent",
+        "dest":   OPT_DIR / "cent",
+        "action": "go_build",
+    },
+    {
+        "name":   "xurlfind3r",
+        "url":    "https://github.com/hueristiq/xurlfind3r",
+        "dest":   OPT_DIR / "xurlfind3r",
+        "action": "go_build_output",
+        "output": "/usr/local/bin/xurlfind3r",
+        "go_args": ["./cmd/xurlfind3r/"],
+    },
+    {
+        "name":   "GHunt",
+        "url":    "https://github.com/mxrch/GHunt",
+        "dest":   OPT_DIR / "GHunt",
+        "action": None,
+    },
+    {
+        "name":   "maigret",
+        "url":    "https://github.com/soxoj/maigret",
+        "dest":   OPT_DIR / "maigret",
+        "action": "pip_install_dot",
+    },
+    {
+        "name":   "trufflehog",
+        "url":    "https://github.com/trufflesecurity/trufflehog",
+        "dest":   OPT_DIR / "trufflehog",
+        "action": "go_build_output",
+        "output": "/usr/local/bin/trufflehog",
+        "go_args": ["."],
+    },
+    {
+        "name":   "cloud_enum",
+        "url":    "https://github.com/initstring/cloud_enum",
+        "dest":   OPT_DIR / "cloud_enum",
+        "action": "pip_install_requirements",
+    },
+]
+
+# Verify tools ----------------------------------------------------------------
+VERIFY_BINS = [
+    "amass", "nmap", "subfinder", "httpx", "dnsx",
+    "nuclei", "naabu", "waybackurls", "ffuf",
+]
+VERIFY_MODS = [
+    "requests", "dns", "whois", "bs4",
+    "colorama", "tqdm", "paramiko",
+    "openpyxl", "pandas", "jinja2", "selenium",
+]
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+def banner():
+    print(f"""
+{C}╔══════════════════════════════════════════════╗
+║        OSift — OSINT Recon Framework         ║
+║        Install Script                        ║
+╚══════════════════════════════════════════════╝{W}
+""")
 
 
-def run(cmd: list, check: bool = True, env: dict = None,
-        cwd: str = None) -> subprocess.CompletedProcess:
-    info(f"Running: {' '.join(str(c) for c in cmd)}")
-    merged_env = {**os.environ, **(env or {})}
-    result = subprocess.run(cmd, env=merged_env, cwd=cwd)
-    if check and result.returncode != 0:
-        error(f"Command failed (exit {result.returncode}): {' '.join(str(c) for c in cmd)}")
-        sys.exit(result.returncode)
+def info(msg):  print(f"{G}[+]{W} {msg}")
+def warn(msg):  print(f"{Y}[!]{W} {msg}")
+def err(msg):   print(f"{R}[✗]{W} {msg}")
+def step(msg):  print(f"\n{B}━━ {msg} ━━{W}")
+
+
+def run(cmd, **kwargs):
+    print(f"    {C}>{W} {' '.join(str(c) for c in cmd)}")
+    result = subprocess.run(cmd, **kwargs)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(str(c) for c in cmd)}")
     return result
 
 
-def cmd_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+def run_ok(cmd, **kwargs):
+    try:
+        subprocess.run(cmd, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       **kwargs)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
-# ── Python packages ───────────────────────────────────────────────────────────
-def install_python_packages() -> None:
-    section("Installing Python packages (pip)")
-
-    reqs = Path(__file__).parent / "requirements.txt"
-    if not reqs.exists():
-        error(f"requirements.txt not found at {reqs}")
+def require_root():
+    if platform.system() != "Darwin" and os.geteuid() != 0:
+        err("This script must be run as root (or with sudo) on Linux.")
         sys.exit(1)
 
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages", "--upgrade", "pip"])
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", str(reqs)])
-    ok("Python packages installed.")
 
-
-# ── System packages ───────────────────────────────────────────────────────────
-APT_PACKAGES = [
-    "git",
-    "curl",
-    "wget",
-    "dnsutils",        # dig, nslookup, host
-    "whois",
-    "amass",           # subdomain enum — OWASP Amass by Jeff Foley @caffix
-    "golang-go",       # Go — needed for ProjectDiscovery go install
-    "python3-pip",
-    "python3-venv",
-    "nmap",
-    "jq",
-    "ca-certificates",
-    "build-essential",
-]
-
-BREW_PACKAGES = [
-    "git",
-    "curl",
-    "wget",
-    "amass",           # subdomain enum — OWASP Amass by Jeff Foley @caffix
-    "go",              # Go — needed for ProjectDiscovery go install
-    "jq",
-    "nmap",
-    "theharvester",    # email/subdomain OSINT — Christian Martorella @laramies
-    "whatweb",         # web tech fingerprinting — urbanadventurer
-]
-
-
-def install_system_linux() -> None:
-    section("Installing system packages (apt)")
-    if os.geteuid() != 0:
-        warn("Not root — apt installs may fail. Re-run with sudo.")
-    run(["apt-get", "update", "-y"])
-    run(["apt-get", "install", "-y"] + APT_PACKAGES)
-    ok("System packages installed.")
-
-
-def install_system_macos() -> None:
-    section("Installing system packages (brew)")
-    if not cmd_exists("brew"):
-        warn("Homebrew not found. Install from https://brew.sh then re-run.")
-        return
-    for pkg in BREW_PACKAGES:
-        info(f"brew install {pkg}")
-        _brew_user = os.environ.get("SUDO_USER", "")
-        _brew_pfx  = ["sudo", "-u", _brew_user] if _brew_user and _brew_user != "root" else []
-        run(_brew_pfx + ["brew", "install", pkg], check=False)
-    ok("Homebrew packages installed.")
-
-
-# ── ProjectDiscovery Go tools ─────────────────────────────────────────────────
-# All tools by ProjectDiscovery (@projectdiscovery — https://projectdiscovery.io)
-PD_TOOLS = [
-    ("github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",  "subfinder"),
-    ("github.com/projectdiscovery/httpx/cmd/httpx@latest",              "httpx"),
-    ("github.com/projectdiscovery/dnsx/cmd/dnsx@latest",                "dnsx"),
-    ("github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",         "nuclei"),
-    ("github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",           "naabu"),
-    ("github.com/projectdiscovery/tlsx/cmd/tlsx@latest",                "tlsx"),
-    ("github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest",        "cdncheck"),
-    ("github.com/projectdiscovery/katana/cmd/katana@latest",            "katana"),
-    ("github.com/projectdiscovery/asnmap/cmd/asnmap@latest",            "asnmap"),
-    ("github.com/projectdiscovery/uncover/cmd/uncover@latest",          "uncover"),
-    ("github.com/projectdiscovery/cloudlist/cmd/cloudlist@latest",      "cloudlist"),
-    ("github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest",    "shuffledns"),
-    ("github.com/projectdiscovery/chaos-client/cmd/chaos@latest",       "chaos"),
-    # waybackurls — tomnomnom @tomnomnom (https://github.com/tomnomnom/waybackurls)
-    ("github.com/tomnomnom/waybackurls@latest",                         "waybackurls"),
-    # ffuf — web fuzzer by Joohoi @joohoi (https://github.com/ffuf/ffuf)
-    ("github.com/ffuf/ffuf/v2@latest",                                  "ffuf"),
-]
-
-
-def install_go_tools() -> None:
-    section("Installing ProjectDiscovery + Go-based tools (go install)")
-
-    if not cmd_exists("go"):
-        warn("Go not found on PATH — skipping Go tool installation.")
-        warn("Install Go from https://go.dev/dl/ and re-run.")
-        return
-
-    gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
-    gobin = os.path.join(gopath, "bin")
-    info(f"GOPATH={gopath}  GOBIN={gobin}")
-    os.makedirs(gobin, exist_ok=True)
-
-    env = {**os.environ, "GOPATH": gopath, "GOBIN": gobin, "GO111MODULE": "on"}
-
-    for pkg, name in PD_TOOLS:
-        info(f"go install {pkg}  ({name})")
-        result = run(["go", "install", pkg], check=False, env=env)
-        if result.returncode == 0:
-            ok(f"  → {name} installed to {gobin}")
-        else:
-            warn(f"  → {name} install failed (non-fatal; will be skipped at runtime)")
-
-    ok(f"Go tools installation complete. Ensure {gobin} is on your PATH:")
-    info(f"  echo 'export PATH=$PATH:{gobin}' >> ~/.bashrc")
-
-
-# ── GitHub-cloned Python tools ────────────────────────────────────────────────
-# Tools cloned to /opt/<toolname>/ on both Linux and macOS.
-GITHUB_TOOLS = [
-    {
-        "name": "TREVORspray",
-        "repo": "https://github.com/blacklanternsecurity/TREVORspray.git",
-        # M365 credential sprayer — blacklanternsecurity @blacklanternsecurity
-        "dest": "/opt/TREVORspray",
-        "pip_install": True,    # has setup.py / pyproject.toml
-    },
-    {
-        "name": "GitDorker",
-        "repo": "https://github.com/obheda12/GitDorker.git",
-        # GitHub secret scanner — obheda12 (https://github.com/obheda12/GitDorker)
-        "dest": "/opt/GitDorker",
-        "pip_install": False,
-    },
-    {
-        "name": "theHarvester",
-        "repo": "https://github.com/laramies/theHarvester.git",
-        # OSINT email/domain harvester — Christian Martorella @laramies
-        "dest": "/opt/theHarvester",
-        "pip_install": True,
-    },
-    {
-        "name": "puredns",
-        "repo": "https://github.com/d3mondev/puredns.git",
-        # DNS brute-force with wildcard filtering — d3mondev
-        "dest": "/opt/puredns",
-        "pip_install": False,
-        "go_build": True,
-    },
-    {
-        "name": "xurlfind3r",
-        "repo": "https://github.com/hueristiq/xurlfind3r.git",
-        # Passive URL discovery — hueristiq
-        "dest": "/opt/xurlfind3r",
-        "pip_install": False,
-        "go_build": True,
-    },
-    {
-        "name": "maigret",
-        "repo": "https://github.com/soxoj/maigret.git",
-        # Social profile OSINT by username — soxoj
-        "dest": "/opt/maigret",
-        "pip_install": True,
-    },
-    {
-        "name": "trufflehog",
-        "repo": "https://github.com/trufflesecurity/trufflehog.git",
-        # Secret scanning across git history — trufflesecurity
-        "dest": "/opt/trufflehog",
-        "pip_install": False,
-        "go_build": True,
-    },
-    {
-        "name": "cloud_enum",
-        "repo": "https://github.com/initstring/cloud_enum.git",
-        # Cloud bucket enum (S3/Azure/GCP) — initstring
-        "dest": "/opt/cloud_enum",
-        "pip_install": True,
-    },
-]
-
-
-def clone_or_update(repo: str, dest: str) -> bool:
-    """Clone repo to dest, or git pull if it already exists. Returns success."""
-    if os.path.isdir(os.path.join(dest, ".git")):
-        info(f"Updating existing clone: {dest}")
-        result = run(["git", "-C", dest, "pull", "--ff-only"], check=False)
-    else:
-        info(f"Cloning {repo} → {dest}")
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        result = run(["git", "clone", "--depth=1", repo, dest], check=False)
-    return result.returncode == 0
-
-
-def install_github_tools() -> None:
-    section("Cloning GitHub-based tools to /opt/")
-
-    for tool in GITHUB_TOOLS:
-        name  = tool["name"]
-        repo  = tool["repo"]
-        dest  = tool["dest"]
-
-        info(f"--- {name} ---")
-        success = clone_or_update(repo, dest)
-
-        if not success:
-            warn(f"  → Failed to clone/update {name}. Skipping.")
-            continue
-
-        ok(f"  → {name} at {dest}")
-
-        if tool.get("pip_install"):
-            pyproject = os.path.join(dest, "pyproject.toml")
-            setup_py  = os.path.join(dest, "setup.py")
-            reqs_txt  = os.path.join(dest, "requirements.txt")
-
-            if os.path.exists(pyproject) or os.path.exists(setup_py):
-                info(f"  → pip install -e {dest}")
-                run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-e", dest], check=False)
-            elif os.path.exists(reqs_txt):
-                info(f"  → pip install -r {reqs_txt}")
-                run([sys.executable, "-m", "pip", "install", "--break-system-packages", "-r", reqs_txt], check=False)
-
-        if tool.get("go_build"):
-            if cmd_exists("go"):
-                info(f"  → go build in {dest}")
-                run(["go", "build", "-o", f"/usr/local/bin/{name.lower()}", "."],
-                    check=False, cwd=dest)
-            else:
-                warn(f"  → Go not found; cannot build {name}")
-
-    ok("GitHub tool installation complete.")
-
-
-# ── Symlink installation ──────────────────────────────────────────────────────
-def _install_symlinks() -> None:
-    """Create /usr/local/bin symlinks for all-user access (including root)."""
-    from pathlib import Path as _Path
-    import stat as _stat
-    app_dir = _Path(__file__).parent.resolve()
-    bin_dir = _Path("/usr/local/bin")
-
-    # (script_relative_to_app_dir, symlink_name_in_bin_dir)
-    LINKS = [
-        ("osift.py", "osift"),
-    ]
-
+def detect_os():
+    system = platform.system()
+    if system == "Darwin":
+        return "macos"
+    if system == "Windows":
+        return "windows"
+    os_release = {}
     try:
-        bin_dir.mkdir(parents=True, exist_ok=True)
-    except PermissionError:
-        warn("Cannot access /usr/local/bin — run as root to install symlinks.")
-        return
+        with open("/etc/os-release") as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    os_release[k] = v.strip('"')
+    except FileNotFoundError:
+        pass
+    dist_id = os_release.get("ID", "").lower()
+    id_like  = os_release.get("ID_LIKE", "").lower()
+    if dist_id in ("kali", "ubuntu", "debian") or "debian" in id_like:
+        return "apt"
+    if dist_id in ("rhel", "centos", "rocky", "almalinux", "fedora") or "rhel" in id_like or "fedora" in id_like:
+        return "dnf"
+    if dist_id in ("sles", "opensuse", "opensuse-leap", "opensuse-tumbleweed") or "suse" in id_like:
+        return "zypper"
+    return "apt"
 
-    for script_rel, link_name in LINKS:
-        script = app_dir / script_rel
-        link   = bin_dir / link_name
-        if not script.exists():
-            warn(f"Script not found, skipping symlink: {script}")
-            continue
-        # Make script executable
-        current = script.stat().st_mode
-        script.chmod(current | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
-        # Ensure shebang
+
+def _pip_cmd():
+    if shutil.which("pip3"):
+        return ["pip3"]
+    if shutil.which("pip"):
+        return ["pip"]
+    return [sys.executable, "-m", "pip"]
+
+
+def _go_bin():
+    for candidate in ("/usr/local/go/bin/go", shutil.which("go") or ""):
+        if candidate and Path(candidate).exists():
+            return candidate
+    return "go"
+
+
+def _go_env():
+    gopath = Path.home() / "go"
+    go_bin_dir = str(Path("/usr/local/go/bin"))
+    return {
+        **os.environ,
+        "GOPATH": str(gopath),
+        "GOBIN":  "/usr/local/bin",
+        "PATH":   go_bin_dir + ":" + os.environ.get("PATH", ""),
+        "HOME":   str(Path.home()),
+    }
+
+
+def _brew_install(pkgs):
+    brew_path = shutil.which("brew")
+    if not brew_path:
+        warn("Homebrew not found; skipping brew installs.")
+        return
+    SUDO_USER = os.environ.get("SUDO_USER", "")
+    for pkg in pkgs:
+        if os.getuid() == 0:
+            if not SUDO_USER:
+                warn(f"Running as root with no SUDO_USER — cannot brew install {pkg}; skipping.")
+                continue
+            run(["sudo", "-u", SUDO_USER, brew_path, "install", pkg])
+        else:
+            run([brew_path, "install", pkg])
+
+
+def _clone_or_update(url, dest):
+    dest = Path(dest)
+    if dest.exists():
+        info(f"Updating {dest.name} …")
         try:
-            text = script.read_text(encoding="utf-8", errors="ignore")
-            if not text.startswith("#!"):
-                script.write_text("#!/usr/bin/env python3\n" + text, encoding="utf-8")
-        except Exception:
-            pass
-        # Create/replace symlink
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(script)
-        ok(f"Symlink installed: {link}  →  {script}")
+            run(["git", "-C", str(dest), "pull", "--ff-only"])
+        except RuntimeError:
+            warn(f"git pull failed for {dest.name}; continuing with existing checkout.")
+    else:
+        info(f"Cloning {url} → {dest} …")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", "--depth=1", url, str(dest)])
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="install.py",
-        description=f"OSift installer v{VERSION} — installs all dependencies and tools.",
-    )
-    parser.add_argument("--skip-go",     action="store_true", help="Skip Go/ProjectDiscovery tool install.")
-    parser.add_argument("--skip-github", action="store_true", help="Skip GitHub-cloned tool install.")
-    parser.add_argument("--pip-only",    action="store_true", help="Install Python packages only.")
-    args = parser.parse_args()
+# ─── phase 1: system packages ────────────────────────────────────────────────
 
-    print(_c("36", f"""
-╔══════════════════════════════════════════════════════╗
-║           OSift Installer  v{VERSION}                  ║
-║   OSINT & Reconnaissance Framework                  ║
-║   Platform: {SYSTEM:<43}║
-╚══════════════════════════════════════════════════════╝
-"""))
-
-    # Step 0: Symlinks — created first so they survive any later failure
-    _install_symlinks()
-
-    # Step 1: Python packages
-    install_python_packages()
-
-    if args.pip_only:
-        ok("--pip-only flag set. Skipping system/Go/GitHub tool installation.")
-        print(_c("32", "\n[DONE]  Python package installation complete.\n"))
+def install_system_packages(os_type, args):
+    step("Phase 1 — System Packages")
+    if args.skip_apt:
+        warn("--skip-system set; skipping.")
         return
 
-    # Step 2: System packages
-    if IS_LINUX:
-        install_system_linux()
-    elif IS_MACOS:
-        install_system_macos()
+    if os_type == "windows":
+        warn("Windows detected. Please install dependencies manually.")
+        return
+
+    if os_type == "macos":
+        _brew_install(BREW_PKGS)
+        return
+
+    if os_type == "apt":
+        info("Running apt update + apt upgrade …")
+        run(["apt-get", "update", "-y"])
+        run(["apt-get", "upgrade", "-y"])
+        info("Installing APT packages …")
+        run(["apt-get", "install", "-y"] + APT_PKGS)
+
+    elif os_type == "dnf":
+        info("Installing DNF packages …")
+        run(["dnf", "install", "-y"] + DNF_PKGS)
+
+    elif os_type == "zypper":
+        info("Installing zypper packages …")
+        run(["zypper", "install", "-y"] + ZYPPER_PKGS)
+
+
+# ─── phase 2: pip packages ───────────────────────────────────────────────────
+
+def install_pip_packages(args):
+    step("Phase 2 — Pip Packages")
+    if args.skip_pip:
+        warn("--skip-pip set; skipping.")
+        return
+    pip = _pip_cmd()
+    for pkg in PIP_PKGS:
+        info(f"pip install {pkg} …")
+        try:
+            run(pip + ["install", "--break-system-packages", pkg])
+        except RuntimeError as exc:
+            warn(f"pip install failed for {pkg}: {exc}")
+
+
+# ─── phase 3: go tools ───────────────────────────────────────────────────────
+
+def install_go_tools(args):
+    step("Phase 3 — Go Tools (go install)")
+    if args.skip_go:
+        warn("--skip-go set; skipping.")
+        return
+
+    gb = _go_bin()
+    if not shutil.which(gb) and not Path(gb).exists():
+        warn(f"go binary not found ({gb}); skipping Go tool installs.")
+        return
+
+    env = _go_env()
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+
+    for tool in GO_INSTALL_TOOLS:
+        name = tool.split("/")[-1].split("@")[0]
+        info(f"go install {name} …")
+        try:
+            run([gb, "install", tool], env=env)
+        except RuntimeError as exc:
+            warn(f"go install failed for {tool}: {exc}")
+
+
+# ─── phase 4: git tools ──────────────────────────────────────────────────────
+
+def install_git_tools(args):
+    step("Phase 4 — Git Tools")
+    if args.skip_git:
+        warn("--skip-git set; skipping.")
+        return
+
+    pip = _pip_cmd()
+    gb  = _go_bin()
+    env = _go_env()
+
+    for tool in GIT_TOOLS:
+        name   = tool["name"]
+        url    = tool["url"]
+        dest   = Path(tool["dest"])
+        action = tool.get("action")
+
+        info(f"[git] {name}")
+        try:
+            _clone_or_update(url, dest)
+        except RuntimeError as exc:
+            warn(f"Clone/update failed for {name}: {exc}; skipping.")
+            continue
+
+        if action is None:
+            continue
+
+        try:
+            if action == "pip_install_dot":
+                run(pip + ["install", "--break-system-packages", "."], cwd=dest)
+
+            elif action == "pip_install_requirements":
+                req = dest / "requirements.txt"
+                if req.exists():
+                    run(pip + ["install", "--break-system-packages", "-r", str(req)], cwd=dest)
+                else:
+                    warn(f"requirements.txt not found in {dest}")
+
+            elif action == "pip_install_requirements_base":
+                req = dest / "requirements" / "base.txt"
+                if req.exists():
+                    run(pip + ["install", "--break-system-packages", "-r", str(req)], cwd=dest)
+                else:
+                    warn(f"requirements/base.txt not found in {dest}")
+
+            elif action == "go_build":
+                run([gb, "build", "./..."], cwd=dest, env=env)
+
+            elif action == "go_build_output":
+                output  = tool.get("output", f"/usr/local/bin/{name.lower()}")
+                go_args = tool.get("go_args", ["./..."])
+                run([gb, "build", "-o", output] + go_args, cwd=dest, env=env)
+
+        except RuntimeError as exc:
+            warn(f"Post-clone action failed for {name}: {exc}")
+
+
+# ─── symlinks ────────────────────────────────────────────────────────────────
+
+def install_symlinks():
+    step("Creating Symlinks")
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    for link_name, target in SYMLINKS.items():
+        link_path = BIN_DIR / link_name
+        if not target.exists():
+            warn(f"Target {target} not found; skipping symlink {link_name}.")
+            continue
+        if link_path.is_symlink() or link_path.exists():
+            link_path.unlink()
+        # Ensure the target script is executable
+        target.chmod(target.stat().st_mode | 0o755)
+        link_path.symlink_to(target)
+        info(f"Symlink: {link_path} → {target}")
+
+
+# ─── check mode ──────────────────────────────────────────────────────────────
+
+def run_check():
+    step("Check Mode — Dependency Status")
+    all_ok = True
+
+    for tool in VERIFY_BINS:
+        path = shutil.which(tool)
+        if path:
+            info(f"{tool:22s} {G}OK{W}  ({path})")
+        else:
+            err(f"{tool:22s} {R}MISSING{W}")
+            all_ok = False
+
+    for mod in VERIFY_MODS:
+        ok = run_ok([sys.executable, "-c", f"import {mod}"])
+        status = f"{G}OK{W}" if ok else f"{R}MISSING{W}"
+        marker = f"python:{mod}"
+        if ok:
+            info(f"{marker:22s} {status}")
+        else:
+            err(f"{marker:22s} {status}")
+            all_ok = False
+
+    # Symlinks
+    for name, target in SYMLINKS.items():
+        link = BIN_DIR / name
+        ok = link.is_symlink()
+        status = f"{G}OK{W}" if ok else f"{Y}MISSING{W}"
+        print(f"  {'symlink:'+name:22s} {status}")
+
+    print()
+    if all_ok:
+        info(f"{G}All checks passed.{W}")
     else:
-        warn(f"Unsupported platform '{SYSTEM}' — skipping system package install.")
+        warn(f"{Y}Some checks failed.{W}")
+    return all_ok
 
-    # Step 3: Go tools
-    if not args.skip_go:
-        install_go_tools()
+
+# ─── post-install summary ────────────────────────────────────────────────────
+
+def post_install_summary():
+    step("Post-Install Verification Summary")
+    results = []
+
+    for tool in VERIFY_BINS:
+        path = shutil.which(tool)
+        results.append((tool, bool(path), path or "missing"))
+
+    for mod in VERIFY_MODS:
+        ok = run_ok([sys.executable, "-c", f"import {mod}"])
+        results.append((f"python:{mod}", ok, "installed" if ok else "missing"))
+
+    for name, target in SYMLINKS.items():
+        link = BIN_DIR / name
+        ok = link.is_symlink()
+        results.append((f"symlink:{name}", ok, str(link) if ok else "missing"))
+
+    pad = max(len(r[0]) for r in results) + 2
+    print()
+    for label, ok, detail in results:
+        status = f"{G}OK{W}" if ok else f"{R}FAIL{W}"
+        print(f"  {label:<{pad}} {status}  {detail}")
+
+    failed = [r for r in results if not r[1]]
+    print()
+    if not failed:
+        info(f"{G}OSift installation complete and verified.{W}")
+        info(f"Run with: {C}osift{W}  (or  python3 {APP_DIR}/osift.py)")
     else:
-        info("--skip-go set. Skipping ProjectDiscovery / Go tool installation.")
+        warn(f"{Y}{len(failed)} item(s) need attention (see above).{W}")
 
-    # Step 4: GitHub-cloned Python tools
-    if not args.skip_github:
-        install_github_tools()
-    else:
-        info("--skip-github set. Skipping GitHub tool cloning.")
 
-    # Step 5: Symlinks (already done in Step 0; repeated for idempotency)
-_install_symlinks()
+# ─── main ─────────────────────────────────────────────────────────────────────
 
-    print(_c("32", "\n[DONE]  OSift installation complete.\n"))
-    print("Next steps:")
-    print("  1. Copy osift_settings.json.example to osift_settings.json and populate API keys.")
-    print("  2. Ensure ~/go/bin (or $GOPATH/bin) is on your PATH for ProjectDiscovery tools.")
-    print("  3. Run:  sudo python3 osift.py -c 'Company' -d example.com")
+def parse_args():
+    p = argparse.ArgumentParser(
+        description=f"Installer for {APP_NAME}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--skip-apt",    "--skip-system", dest="skip_apt",
+                   action="store_true", help="Skip system package installation")
+    p.add_argument("--skip-pip",    action="store_true",
+                   help="Skip pip package installation")
+    p.add_argument("--skip-go",     action="store_true",
+                   help="Skip Go tools installation")
+    p.add_argument("--skip-git",    action="store_true",
+                   help="Skip git tool cloning and builds")
+    p.add_argument("--check",       action="store_true",
+                   help="Check dependencies without installing")
+    return p.parse_args()
+
+
+def main():
+    banner()
+    args = parse_args()
+    os_type = detect_os()
+    info(f"Detected OS type: {os_type}")
+
+    if args.check:
+        ok = run_check()
+        sys.exit(0 if ok else 1)
+
+    if os_type == "windows":
+        err("OSift is designed for Unix-like systems. Windows is not supported.")
+        sys.exit(1)
+
+    require_root()
+
+    # Phase 1 — system packages
+    install_system_packages(os_type, args)
+
+    # Phase 2 — pip packages
+    install_pip_packages(args)
+
+    # Phase 3 — Go tools
+    install_go_tools(args)
+
+    # Phase 4 — Git tools
+    install_git_tools(args)
+
+    # Symlinks
+    install_symlinks()
+
+    # Summary
+    post_install_summary()
 
 
 if __name__ == "__main__":

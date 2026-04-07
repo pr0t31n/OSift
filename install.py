@@ -351,7 +351,7 @@ def main() -> None:
 """))
 
     # Step 0: Symlinks — created first so they survive any later failure
-_install_symlinks()
+    _install_symlinks()
 
     # Step 1: Python packages
     install_python_packages()

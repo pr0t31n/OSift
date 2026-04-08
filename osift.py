@@ -72,6 +72,40 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
     except Exception:
         pass
 
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
 # ── Require elevated privileges ───────────────────────────────────────────────
 def _check_privileges() -> None:
     """
@@ -18836,6 +18870,10 @@ API key sources (all free tiers available):
     parser.add_argument("--no-gitdorker",         action="store_true", help="Skip Phase 13 GitDorker GitHub secret scanning")
     parser.add_argument("--github-token",         default="",     metavar="TOKEN", help="GitHub personal access token for GitDorker (Phase 13)")
     parser.add_argument("--wordlist",             default="",     help="Custom wordlist for DNS brute force")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
     parser.add_argument("--client-short",         default="",     metavar="SLUG",
                         help="Client short name / abbreviation for project directory naming")
     parser.add_argument("--year",                 default="",     metavar="YYYY",

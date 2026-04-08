@@ -26,6 +26,52 @@ IS_MACOS   = SYSTEM == "Darwin"
 IS_LINUX   = SYSTEM == "Linux"
 _VANTAGE_MANAGED = os.environ.get("VANTAGE_MANAGED", "") == "1"
 
+
+def _clients_base() -> Path:
+    """Return the OS-appropriate default parent directory for client project folders."""
+    if IS_WINDOWS:
+        base = Path("C:/clients")
+    elif IS_MACOS:
+        base = Path("/Users/Shared/clients")
+    else:
+        base = Path("/clients")
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
 # ── Require elevated privileges ───────────────────────────────────────────────
 def _check_privileges() -> None:
     """
@@ -383,7 +429,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.1.0"
+VERSION = "2.1.2"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5116,7 +5162,7 @@ def setup_directory_structure(company: str, domain: str, base_path: Optional[Pat
     """
     company_slug = _safe_filename(company.lower().replace(" ", "_"))
     parent_name  = f"{company_slug}_osift"
-    root         = (base_path or Path.cwd()) / parent_name
+    root         = (base_path or _clients_base()) / parent_name
 
     # ── Rotate existing parent directory ─────────────────────────────────────
     if root.exists():
@@ -18790,6 +18836,10 @@ API key sources (all free tiers available):
     parser.add_argument("--no-gitdorker",         action="store_true", help="Skip Phase 13 GitDorker GitHub secret scanning")
     parser.add_argument("--github-token",         default="",     metavar="TOKEN", help="GitHub personal access token for GitDorker (Phase 13)")
     parser.add_argument("--wordlist",             default="",     help="Custom wordlist for DNS brute force")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
     parser.add_argument("--output-base",          default="",     help="Override base output directory path")
     parser.add_argument("--project-dir",          default="",     help="Vantage project root; evidence paths stored relative to this directory")
     parser.add_argument(
@@ -18840,10 +18890,24 @@ API key sources (all free tiers available):
 
     # ── Setup directories ──────────────────────────────────────────────────
     global _project_dir
-    base_path    = Path(args.output_base) if args.output_base else None
     project_dir  = Path(args.project_dir).resolve() if args.project_dir else None
     _project_dir = project_dir  # expose for write_targets_snapshot()
-    output_dir   = setup_directory_structure(args.company, args.domains[0], base_path)
+
+    if args.output_base:
+        # Explicit base path overrides structured layout
+        base_path = Path(args.output_base)
+        output_dir = setup_directory_structure(args.company, args.domains[0], base_path)
+    else:
+        # Structured layout: clients_base/client_short/year/osift/client_short_datetime/
+        import re as _re, datetime as _dt
+        _cs = (getattr(args, "client_short", "") or "").strip()
+        if not _cs:
+            _cs = _re.sub(r'[^\w-]', '_', args.company.strip().lower()).strip('_') or 'client'
+        _yr = (getattr(args, "year", "") or "").strip()
+        if not _yr:
+            _yr = _dt.datetime.now().strftime("%Y")
+        output_dir = _build_project_dir(_cs, _yr, "osift")
+        _write_project_meta(output_dir, "osift", _cs, _yr, VERSION)
     log          = ReconLogger(output_dir)
 
     # ── Initialise checkpoint manager ──────────────────────────────────────

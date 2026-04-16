@@ -106,6 +106,278 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
     except Exception:
         pass
 
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
+    """
+    Build a structured project directory:
+      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
+    """
+    import re as _re, datetime as _dt
+    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
+    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
+            else _dt.datetime.now().strftime('%Y'))
+    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_project_meta(project_dir: Path, tool: str, client_short: str,
+                        year: str, version: str) -> None:
+    """Write project_meta.json so Flask apps can discover this project."""
+    import json as _json, datetime as _dt
+    try:
+        (project_dir / "project_meta.json").write_text(
+            _json.dumps({
+                "tool":         tool,
+                "client_short": client_short,
+                "year":         year,
+                "created_at":   _dt.datetime.now().isoformat(),
+                "version":      version,
+            }, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
 # ── Require elevated privileges ───────────────────────────────────────────────
 def _check_privileges() -> None:
     """
@@ -167,6 +439,99 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+# ── Adaptive concurrency ──────────────────────────────────────────────────────
+def _hw_detect():
+    """Return (logical_cpu_count, ram_gb) for the local machine."""
+    _cpu = os.cpu_count() or 2
+    try:
+        import psutil as _ps
+        _ram_gb = _ps.virtual_memory().total / (1024 ** 3)
+    except ImportError:
+        _ram_gb = 4.0
+    return _cpu, _ram_gb
+
+def _calc_initial_concurrency(cpu, ram_gb):
+    """
+    Derive a starting concurrency limit from hardware specs.
+    Uses 75% of logical CPUs, bounded by RAM (0.25 GB assumed per worker)
+    and clamped to [4, 64].
+    """
+    return min(max(4, int(cpu * 0.75)), max(4, int(ram_gb / 0.25)), 64)
+
+class _AdaptiveSemaphore:
+    """Counting semaphore whose limit can be raised or lowered at runtime."""
+    def __init__(self, initial):
+        self._limit = initial
+        self._count = 0
+        self._cond  = threading.Condition(threading.Lock())
+
+    def acquire(self, timeout=None):
+        with self._cond:
+            deadline = (time.monotonic() + timeout) if timeout else None
+            while self._count >= self._limit:
+                rem = (deadline - time.monotonic()) if deadline else None
+                if deadline and rem <= 0:
+                    return False
+                self._cond.wait(timeout=rem)
+            self._count += 1
+            return True
+
+    def release(self):
+        with self._cond:
+            if self._count > 0:
+                self._count -= 1
+            self._cond.notify_all()
+
+    def set_limit(self, new_limit):
+        with self._cond:
+            self._limit = max(2, new_limit)
+            self._cond.notify_all()
+
+    @property
+    def limit(self):
+        return self._limit
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *_):
+        self.release()
+
+def _start_concurrency_monitor(sem, interval=10):
+    """
+    Daemon thread: samples CPU/RAM every interval seconds and adjusts sem
+    to keep resource pressure below 80%. Requires psutil; no-ops if unavailable.
+    """
+    try:
+        import psutil as _psm
+    except ImportError:
+        return None
+    _base = sem.limit
+
+    def _loop():
+        while True:
+            try:
+                time.sleep(interval)
+                _cpu_pct = _psm.cpu_percent(interval=2)
+                _mem_pct = _psm.virtual_memory().percent
+                _cur     = sem.limit
+                if _cpu_pct > 80 or _mem_pct > 80:
+                    sem.set_limit(max(2, int(_cur * 0.75)))
+                elif _cpu_pct < 50 and _mem_pct < 60:
+                    sem.set_limit(min(_base, int(_cur * 1.25)))
+            except Exception:
+                pass
+
+    _t = threading.Thread(target=_loop, daemon=True, name="osift-concurrency-monitor")
+    _t.start()
+    return _t
+
+_hw_cpu, _hw_ram    = _hw_detect()
+_SCAN_CONCURRENCY   = _calc_initial_concurrency(_hw_cpu, _hw_ram)
+_SCAN_SEM           = _AdaptiveSemaphore(_SCAN_CONCURRENCY)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Windows-specific: enable ANSI colour codes in cmd/PowerShell ──────────────
 if IS_WINDOWS:
@@ -463,7 +828,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.1.2"
+VERSION = "2.3.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5183,6 +5548,14 @@ def _dir_creation_timestamp(path: Path) -> str:
         return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _domain_path(output_dir: Path, domain: str) -> Path:
+    """Return (creating if needed) the per-domain output dir: <output_dir>/domains/<safe_domain>/"""
+    safe = re.sub(r'[^a-zA-Z0-9.\-]', '_', domain).strip('_').lower()
+    d = output_dir / "domains" / safe
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def setup_directory_structure(company: str, domain: str, base_path: Optional[Path] = None) -> Path:
     """
     Build the output directory tree.
@@ -5216,24 +5589,10 @@ def setup_directory_structure(company: str, domain: str, base_path: Optional[Pat
 
     subdirs = [
         base_dir / "logs",
-        base_dir / "dns"          / "subdomains",
-        base_dir / "dns"          / "zone_transfers",
-        base_dir / "dns"          / "records",
-        base_dir / "dns"          / "dig",
-        base_dir / "dns"          / "dnsx_enrich",
+        base_dir / "domains",
+        base_dir / "company",
         base_dir / "ip_addresses",
-        base_dir / "certificates" / "raw",
-        base_dir / "certificates" / "parsed",
-        base_dir / "emails",
-        base_dir / "employees",
-        base_dir / "company_info" / "addresses",
-        base_dir / "company_info" / "associated",
-        base_dir / "web_crawl"    / "pages",
-        base_dir / "web_crawl"    / "screenshots",
-        base_dir / "sensitive_data",
-        base_dir / "breach_data",
-        base_dir / "whois",
-        base_dir / "amass",
+        base_dir / "api_intel",
         base_dir / "reports",
     ]
     for d in subdirs:
@@ -6170,7 +6529,7 @@ def check_binary_tools(log: "ReconLogger") -> dict:
 class DNSEnumerator:
     def __init__(self, domain: str, output_dir: Path, log: ReconLogger, data: ReconData):
         self.domain     = domain
-        self.output_dir = output_dir / "dns"
+        self.output_dir = _domain_path(output_dir, domain) / "dns"
         self.log        = log
         self.data       = data
         if DNS_AVAILABLE:
@@ -6766,10 +7125,11 @@ class DNSEnumerator:
                     out = Path(_zt_file)
                     out.parent.mkdir(parents=True, exist_ok=True)
                     add_finding(self.data, "OSift-DNS", "zone_transfer", CAT_DNS, "HIGH",
-                                f"DNS zone transfer succeeded: {len(entries)} DNS entries exposed. "
-                                f"Zone transfers should be restricted to authorised secondary nameservers only.",
+                                f"The DNS server responded to an unauthenticated AXFR zone transfer request, exposing {len(entries)} DNS entries including internal hostnames, IP addresses, and mail infrastructure.",
                                 host=ns, domain=self.domain, affected=ns,
-                                output_file=str(out))
+                                output_file=str(out),
+                                title="DNS Zone Transfer Permitted (AXFR)",
+                                remediation="Restrict zone transfer permissions to authorised secondary name server IP addresses using ACLs in the DNS server configuration.")
                     self.data.zone_transfers.append({"ns": ns, "entries": entries})
                     out.write_text(json.dumps(entries, indent=2), encoding="utf-8")
             except Exception as e:
@@ -6793,7 +7153,7 @@ class DNSEnumerator:
                 return None
             return fqdn, ips
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_SCAN_SEM.limit) as ex:
             futures = {ex.submit(check, w): w for w in DEFAULT_WORDLIST}
             for fut in concurrent.futures.as_completed(futures):
                 result = fut.result()
@@ -7250,7 +7610,7 @@ class AmassEnumerator:
     # amass — OWASP Amass by Jeff Foley @caffix (https://github.com/owasp-amass/amass)
     def __init__(self, domain: str, output_dir: Path, log: ReconLogger, data: ReconData):
         self.domain     = domain
-        self.output_dir = output_dir / "amass"
+        self.output_dir = _domain_path(output_dir, domain) / "tools" / "amass"
         self.log        = log
         self.data       = data
 
@@ -7344,7 +7704,7 @@ class CertificateCollector:
                 except Exception:
                     return h, ""
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=40) as rx:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_SCAN_SEM.limit) as rx:
                 for f in concurrent.futures.as_completed(
                         {rx.submit(_pre_resolve, h): h for h in hosts}):
                     h, ip = f.result()
@@ -7360,7 +7720,7 @@ class CertificateCollector:
         self.log.info(f"[CERT] Resolved {len(host_ips)}/{len(hosts)} hosts — fetching certs")
         phase_timeout = max(30, min(120, len(host_ips) * 2 + 15))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_SCAN_SEM.limit) as ex:
             futures = {ex.submit(self._get_cert, h, ip): h
                        for h, ip in host_ips.items()}
             done, not_done = concurrent.futures.wait(futures, timeout=phase_timeout)
@@ -7499,7 +7859,7 @@ class IPIntelligence:
             except Exception:
                 return fqdn, []
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_SCAN_SEM.limit) as ex:
             for fut in concurrent.futures.as_completed({ex.submit(resolve, f): f for f in self.data.subdomains}):
                 fqdn, ips = fut.result()
                 sub_rec = self.data.subdomains[fqdn]
@@ -7547,7 +7907,7 @@ class IPIntelligence:
         # ipinfo.io free tier: ~50k req/month, no strict per-second rate limit.
         # 10 workers with 5 s timeout each is fast without triggering throttling.
         phase_timeout = max(30, min(120, len(ips) * 6 + 10))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, _SCAN_SEM.limit)) as ex:
             futs = {ex.submit(_enrich_one, ip): ip for ip in ips}
             done, not_done = concurrent.futures.wait(futs, timeout=phase_timeout)
             for fut in done:
@@ -7567,8 +7927,8 @@ class IPIntelligence:
 # ─── Whois Collector ─────────────────────────────────────────────────────────
 
 class WhoisCollector:
-    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
-        self.output_dir = output_dir / "whois"
+    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData, domain: str = ""):
+        self.output_dir = _domain_path(output_dir, domain) / "whois" if domain else output_dir / "whois"
         self.log        = log
         self.data       = data
         self._lock      = threading.Lock()
@@ -7576,7 +7936,7 @@ class WhoisCollector:
     def run(self):
         self.log.set_tool_context("OSift-WHOIS")
         domains = list(set([self.data.domain] + list(self.data.associated_domains.keys())))
-        workers = min(len(domains), 10)
+        workers = min(len(domains), _SCAN_SEM.limit)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(self._whois, d): d for d in domains}
             for fut in concurrent.futures.as_completed(futs):
@@ -7793,12 +8153,12 @@ class EmailAndPeopleOSINT:
                             "tool":         "hibp",
                             "tool_version": TOOL_REGISTRY.get_version("hibp"),
                             "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
-                            "output_file":  str(self.output_dir / "breach_data" / "hibp_results.json"),
+                            "output_file":  str(self.output_dir / "company" / "breach_data" / "hibp_results.json"),
                         })
                 time.sleep(1.6)
             except Exception as e:
                 self.log.error(f"[HIBP] Per-email check error for {email}: {e}", exc=e)
-        out = self.output_dir / "breach_data" / "hibp_results.json"
+        out = self.output_dir / "company" / "breach_data" / "hibp_results.json"
         out.write_text(json.dumps(self.data.breach_data, indent=2), encoding="utf-8")
 
     def _check_dehashed(self):
@@ -7825,11 +8185,11 @@ class EmailAndPeopleOSINT:
                             "tool":         "dehashed",
                             "tool_version": TOOL_REGISTRY.get_version("dehashed"),
                             "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
-                            "output_file":  str(self.output_dir / "breach_data" / "dehashed_results.json"),
+                            "output_file":  str(self.output_dir / "company" / "breach_data" / "dehashed_results.json"),
                         })
             except Exception as e:
                 self.log.error(f"[DEHASHED] Query failed", exc=e)
-        out = self.output_dir / "breach_data" / "dehashed_results.json"
+        out = self.output_dir / "company" / "breach_data" / "dehashed_results.json"
         dh  = [b for b in self.data.breach_data if b.get("source") == "dehashed"]
         out.write_text(json.dumps(dh, indent=2), encoding="utf-8")
 
@@ -7853,10 +8213,10 @@ class EmailAndPeopleOSINT:
         self.data.employees.append(emp)
 
     def _save_emails(self):
-        emails_dir = self.output_dir / "emails"
+        emails_dir = self.output_dir / "company" / "emails"
         (emails_dir / "all_emails.json").write_text(json.dumps(self.data.email_addresses, indent=2), encoding="utf-8")
         (emails_dir / "all_emails.txt").write_text("\n".join(sorted(self.data.email_addresses.keys())), encoding="utf-8")
-        (self.output_dir / "employees" / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
+        (self.output_dir / "company" / "employees" / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
 
 
 # ─── Company Intelligence ─────────────────────────────────────────────────────
@@ -8036,7 +8396,7 @@ class EdgarIntelligence:
     ) -> None:
         self.company      = company
         self.domain       = domain
-        self.output_dir   = output_dir / "company_info" / "edgar"
+        self.output_dir   = output_dir / "company" / "info" / "edgar"
         self.log          = log
         self.data         = data
         self.edgar_email  = edgar_email or "osift-scanner@example.com"
@@ -8827,7 +9187,7 @@ class CompanyIntelligence:
                 timeout=10,
             )
             if resp.status_code == 200:
-                out = self.output_dir / "company_info" / "sec_edgar.json"
+                out = self.output_dir / "company" / "info" / "sec_edgar.json"
                 out.write_text(json.dumps(resp.json(), indent=2), encoding="utf-8")
         except Exception as e:
             self.log.debug(f"[COMPANY] SEC EDGAR: {e}")
@@ -8862,7 +9222,7 @@ class CompanyIntelligence:
                 except Exception:
                     pass
 
-        out = self.output_dir / "company_info" / "associated" / "domains.json"
+        out = self.output_dir / "company" / "info" / "associated" / "domains.json"
         out.write_text(json.dumps(self.data.associated_domains, indent=2), encoding="utf-8")
 
     def _search_subsidiaries(self):
@@ -8884,7 +9244,7 @@ class CompanyIntelligence:
                     })
         except Exception as e:
             self.log.debug(f"[COMPANY] Subsidiaries: {e}")
-        out = self.output_dir / "company_info" / "associated" / "companies.json"
+        out = self.output_dir / "company" / "info" / "associated" / "companies.json"
         out.write_text(json.dumps(self.data.associated_companies, indent=2), encoding="utf-8")
 
 
@@ -8892,8 +9252,8 @@ class CompanyIntelligence:
 
 class WebCrawler:
     def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData,
-                 max_pages: int = 200, max_depth: int = 3):
-        self.output_dir = output_dir / "web_crawl"
+                 max_pages: int = 200, max_depth: int = 3, domain: str = ""):
+        self.output_dir = _domain_path(output_dir, domain) / "web_crawl" if domain else output_dir / "web_crawl"
         self.log        = log
         self.data       = data
         self.max_pages  = max_pages
@@ -9462,7 +9822,7 @@ class TheHarvesterRunner:
     ):
         self.domain    = domain
         self.company   = company
-        self.out       = output_dir / "osint" / "theharvester"
+        self.out       = _domain_path(output_dir, domain) / "tools" / "theharvester"
         self.log       = log
         self.data      = data
         self.limit     = limit
@@ -9764,7 +10124,7 @@ class XurlFind3rRunner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "osint" / "xurlfind3r"
+        self.out     = _domain_path(output_dir, domain) / "tools" / "xurlfind3r"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -9952,7 +10312,7 @@ class EmailHarvesterRunner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "osint" / "emailharvester"
+        self.out     = _domain_path(output_dir, domain) / "tools" / "emailharvester"
         self.log     = log
         self.data    = data
         self.limit   = limit
@@ -10120,7 +10480,7 @@ class PureDNSRunner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "dns" / "puredns"
+        self.out     = _domain_path(output_dir, domain) / "dns" / "puredns"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -10259,7 +10619,7 @@ class WaybackURLsRunner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "osint" / "waybackurls"
+        self.out     = _domain_path(output_dir, domain) / "tools" / "waybackurls"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -10559,7 +10919,7 @@ class WappalyzerScanner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "web" / "wappalyzer"
+        self.out     = _domain_path(output_dir, domain) / "tools" / "wappalyzer"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -10736,7 +11096,7 @@ class MaigretRunner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "osint" / "maigret"
+        self.out     = output_dir / "company" / "tools" / "maigret"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -10965,7 +11325,7 @@ class TruffleHogRunner:
     ):
         self.domain     = domain
         self.company    = company
-        self.out        = output_dir / "osint" / "trufflehog"
+        self.out        = output_dir / "company" / "tools" / "trufflehog"
         self.log        = log
         self.data       = data
         self.github_org = github_org.strip()
@@ -11138,7 +11498,7 @@ class CloudEnumRunner:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "osint" / "cloud_enum"
+        self.out     = output_dir / "company" / "tools" / "cloud_enum"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -11319,7 +11679,7 @@ class MaltegoSeedExporter:
     ):
         self.domain  = domain
         self.company = company
-        self.out     = output_dir / "osint" / "maltego"
+        self.out     = output_dir / "company" / "tools" / "maltego"
         self.log     = log
         self.data    = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -11590,7 +11950,7 @@ class PassiveOSINTOrchestrator:
                 )
             )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 name = futures[fut]
@@ -11627,7 +11987,7 @@ class PassiveOSINTOrchestrator:
         self.log.info(
             f"[PassiveOSINT] Wave B — {', '.join(t.__class__.__name__ for t in tasks)} (concurrent)"
         )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 name = futures[fut]
@@ -11668,7 +12028,7 @@ class PassiveOSINTOrchestrator:
         self.log.info(
             f"[PassiveOSINT] Wave C — {', '.join(t.__class__.__name__ for t in tasks)} (concurrent)"
         )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 name = futures[fut]
@@ -11703,7 +12063,7 @@ class PassiveOSINTOrchestrator:
             ),
         ]
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 name = futures[fut]
@@ -12116,7 +12476,7 @@ class PDSubfinder:
 
     def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
         self.domain = domain
-        self.out    = output_dir / "dns" / "subdomains"
+        self.out    = _domain_path(output_dir, domain) / "dns" / "subdomains"
         self.log    = log
         self.data   = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -12165,7 +12525,7 @@ class PDChaos:
         chaos_key: str = "",
     ):
         self.domain    = domain
-        self.out       = output_dir / "dns" / "subdomains"
+        self.out       = _domain_path(output_dir, domain) / "dns" / "subdomains"
         self.log       = log
         self.data      = data
         self.chaos_key = chaos_key.strip() or os.environ.get("CHAOS_KEY", "").strip()
@@ -12223,7 +12583,7 @@ class PDShuffleDNS:
         wordlist: Optional[Path] = None,
     ):
         self.domain   = domain
-        self.out      = output_dir / "dns" / "subdomains"
+        self.out      = _domain_path(output_dir, domain) / "dns" / "subdomains"
         self.log      = log
         self.data     = data
         self.wordlist = wordlist
@@ -12287,7 +12647,7 @@ class PDDnsx:
 
     def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
         self.domain = domain
-        self.out    = output_dir / "dns" / "records"
+        self.out    = _domain_path(output_dir, domain) / "dns" / "records"
         self.log    = log
         self.data   = data
         self._res_file = _write_resolvers(output_dir)
@@ -12409,8 +12769,8 @@ class DNSEnrichmentRunner:
 
     def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
         self.domain    = domain
-        self.out_dig   = output_dir / "dns" / "dig"
-        self.out_dnsx  = output_dir / "dns" / "dnsx_enrich"
+        self.out_dig   = _domain_path(output_dir, domain) / "dns" / "dig"
+        self.out_dnsx  = _domain_path(output_dir, domain) / "dns" / "dnsx_enrich"
         self.log       = log
         self.data      = data
         self.out_dig.mkdir(parents=True, exist_ok=True)
@@ -12722,7 +13082,7 @@ class ShodanCLIRunner:
         data: "ReconData",
         shodan_key: str = "",
     ):
-        self.out        = output_dir / "osint" / "shodan_cli"
+        self.out        = output_dir / "company" / "tools" / "shodan_cli"
         self.log        = log
         self.data       = data
         self.shodan_key = shodan_key
@@ -12887,7 +13247,7 @@ class PDTlsx:
 
     def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
         self.domain = domain
-        self.out    = output_dir / "certificates" / "tlsx"
+        self.out    = _domain_path(output_dir, domain) / "certificates" / "tlsx"
         self.log    = log
         self.data   = data
         self.out.mkdir(parents=True, exist_ok=True)
@@ -12958,14 +13318,37 @@ class PDTlsx:
                 ("mismatched",  "hostname mismatch certificate"),
             ]:
                 if entry.get(flag):
-                    add_finding(
-                        self.data, "tlsx",
-                        f"tls_{flag}", CAT_TLS, "medium",
-                        f"tlsx: {label} detected",
-                        host=host, affected=host,
-                        tls_version=entry.get("tls_version"),
-                        cipher=entry.get("cipher"),
-                    )
+                    if flag == "expired":
+                        add_finding(
+                            self.data, "tlsx",
+                            f"tls_{flag}", CAT_TLS, "HIGH",
+                            "The server's TLS certificate has passed its expiry date, causing browser trust errors and indicating a breakdown in certificate lifecycle management.",
+                            host=host, affected=host,
+                            tls_version=entry.get("tls_version"),
+                            cipher=entry.get("cipher"),
+                            title="SSL/TLS Certificate: Expired",
+                            remediation="Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
+                        )
+                    elif flag == "self_signed":
+                        add_finding(
+                            self.data, "tlsx",
+                            f"tls_{flag}", CAT_TLS, "medium",
+                            "The server presented a self-signed TLS certificate that is not anchored to a publicly trusted CA, preventing clients from verifying the server's identity and enabling trivial MITM attacks.",
+                            host=host, affected=host,
+                            tls_version=entry.get("tls_version"),
+                            cipher=entry.get("cipher"),
+                            title="SSL/TLS Certificate: Self-Signed",
+                            remediation="Replace self-signed certificates with certificates issued by a trusted CA; use ACME/Let's Encrypt for cost-free automation.",
+                        )
+                    else:
+                        add_finding(
+                            self.data, "tlsx",
+                            f"tls_{flag}", CAT_TLS, "medium",
+                            f"tlsx: {label} detected",
+                            host=host, affected=host,
+                            tls_version=entry.get("tls_version"),
+                            cipher=entry.get("cipher"),
+                        )
                     flagged += 1
 
             # Harvest SANs for new subdomains
@@ -13112,7 +13495,7 @@ class PDKatana:
         max_depth: int = 3,
     ):
         self.domain    = domain
-        self.out       = output_dir / "web_crawl" / "katana"
+        self.out       = _domain_path(output_dir, domain) / "web_crawl" / "katana"
         self.log       = log
         self.data      = data
         self.max_depth = max_depth
@@ -13541,7 +13924,7 @@ class PDCloudlist:
         cloud_config: str = "",
     ):
         self.domain       = domain
-        self.out          = output_dir / "company_info" / "cloudlist"
+        self.out          = output_dir / "company" / "info" / "cloudlist"
         self.log          = log
         self.data         = data
         self.cloud_config = cloud_config.strip()
@@ -13696,7 +14079,7 @@ class ProjectDiscoveryOrchestrator:
 
         if not tasks:
             return
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 try:
@@ -13718,7 +14101,7 @@ class ProjectDiscoveryOrchestrator:
 
         if not tasks:
             return
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 try:
@@ -13750,7 +14133,7 @@ class ProjectDiscoveryOrchestrator:
 
         if not tasks:
             return
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}
             for fut in concurrent.futures.as_completed(futures):
                 try:
@@ -13834,7 +14217,7 @@ def aggregate_sensitive_data(output_dir: Path, log: ReconLogger, data: ReconData
         "by_category":    {cat: len(items) for cat, items in by_cat.items()},
         "findings":       dict(by_cat),
     }
-    out = output_dir / "sensitive_data" / "summary.json"
+    out = output_dir / "company" / "sensitive_data" / "summary.json"
     out.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     log.success(
         f"[SENSITIVE] {len(all_findings)} findings "
@@ -13900,7 +14283,7 @@ class SubdomainConfirmer:
     ERROR      Connection refused or other OS-level error
     """
 
-    MAX_WORKERS   = 30      # concurrent subdomain tasks
+    MAX_WORKERS   = _SCAN_CONCURRENCY  # concurrent subdomain tasks
     HTTP_TIMEOUT  = 8       # seconds per HTTP/HTTPS connection attempt
     MAX_REDIRECTS = 3       # maximum redirect hops to follow
     DNS_TIMEOUT   = 4       # seconds per DNS query
@@ -14500,7 +14883,9 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
             _detail    = (_f.get("detail") or "").strip()
             _ftype_raw = (_f.get("type") or "").strip()
             _category  = (_f.get("category") or "").strip()
-            if _detail:
+            if _f.get("title"):
+                _title = _f["title"]
+            elif _detail:
                 _title = _detail[:120]
             elif _ftype_raw:
                 _title = f"{_ftype_raw}: {_category}"
@@ -15189,7 +15574,9 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         _detail   = (_f.get("detail") or "").strip()
         _ftype_raw = (_f.get("type") or "").strip()
         _category = (_f.get("category") or "").strip()
-        if _detail:
+        if _f.get("title"):
+            _title = _f["title"]
+        elif _detail:
             _title = _detail[:120]
         elif _ftype_raw:
             _title = f"{_ftype_raw}: {_category}"
@@ -16534,7 +16921,7 @@ class IntelAggregator:
             "breach": self._gather_breaches,
         }
         _results: Dict[str, Any] = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_tasks)) as _pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(_tasks), _SCAN_SEM.limit)) as _pool:
             _fmap = {_pool.submit(fn): name for name, fn in _tasks.items()}
             for _fut in concurrent.futures.as_completed(_fmap):
                 _name = _fmap[_fut]
@@ -18383,7 +18770,7 @@ def run_trevorspray(domain: str, emails: list, output_dir: "Path", data: "ReconD
         log.info(f"[TREVORspray] No M365/Azure presence detected for {domain} — skipping")
         return
 
-    trev_dir = output_dir / "trevorspray"
+    trev_dir = output_dir / "company" / "tools" / "trevorspray"
     trev_dir.mkdir(parents=True, exist_ok=True)
     email_file = trev_dir / "emails.txt"
     email_file.write_text("\n".join(emails[:500]) + "\n", encoding="utf-8")
@@ -18438,6 +18825,8 @@ def run_trevorspray(domain: str, emails: list, output_dir: "Path", data: "ReconD
                 domain=domain,
                 output_file=str(results_file),
                 data=valid_creds,
+                title="Weak or Default Credentials Accepted",
+                remediation="Replace all default credentials with strong, unique secrets and enforce a password policy prior to any deployment.",
             )
         else:
             log.info("[TREVORspray] No valid credentials found")
@@ -18479,7 +18868,7 @@ def run_gitdorker(domain: str, company: str, output_dir: "Path", data: "ReconDat
         log.info("[GitDorker] No GitHub token — set GITHUB_TOKEN env var or use --github-token")
         return
 
-    gd_dir = output_dir / "gitdorker"
+    gd_dir = output_dir / "company" / "tools" / "gitdorker"
     gd_dir.mkdir(parents=True, exist_ok=True)
     out_file = gd_dir / f"gitdorker_{domain.replace('.', '_')}.txt"
 
@@ -18878,6 +19267,38 @@ API key sources (all free tiers available):
                         help="Client short name / abbreviation for project directory naming")
     parser.add_argument("--year",                 default="",     metavar="YYYY",
                         help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
+    parser.add_argument("--client-short",         default="",     metavar="SLUG",
+                        help="Client short name / abbreviation for project directory naming")
+    parser.add_argument("--year",                 default="",     metavar="YYYY",
+                        help="Engagement year for project directory naming (default: current year)")
     parser.add_argument("--output-base",          default="",     help="Override base output directory path")
     parser.add_argument("--project-dir",          default="",     help="Vantage project root; evidence paths stored relative to this directory")
     parser.add_argument(
@@ -18947,6 +19368,9 @@ API key sources (all free tiers available):
         output_dir = _build_project_dir(_cs, _yr, "osift")
         _write_project_meta(output_dir, "osift", _cs, _yr, VERSION)
     log          = ReconLogger(output_dir)
+
+    # Start adaptive concurrency monitor (adjusts _SCAN_SEM based on CPU/RAM)
+    _start_concurrency_monitor(_SCAN_SEM)
 
     # ── Initialise checkpoint manager ──────────────────────────────────────
     global _pm
@@ -19194,7 +19618,7 @@ API key sources (all free tiers available):
     else:
         _section(log, f"PHASE 1–2: Concurrent discovery — {len(_all_wave1)} domains, max 20 threads")
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(20, len(_all_wave1))
+            max_workers=min(_SCAN_SEM.limit, len(_all_wave1))
         ) as _w1_pool:
             _w1_futs = {
                 _w1_pool.submit(_run_domain_wave1, _dom, _prim): _dom
@@ -19291,7 +19715,7 @@ API key sources (all free tiers available):
         _vc.status("phase5_whois", label="Phase 5: WHOIS", status="running",
                    active_tool="whois")
         _section(log, "PHASE 5: WHOIS Collection")
-        WhoisCollector(output_dir, log, data).run()
+        WhoisCollector(output_dir, log, data, domain).run()
         _pm.set_phase_status("phase5_whois", "complete", label="Phase 5: WHOIS")
         _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
 
@@ -19354,7 +19778,7 @@ API key sources (all free tiers available):
         _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="running",
                    active_tool="web_crawl")
         _section(log, "PHASE 8: Web Crawling & Sensitive Data Discovery")
-        WebCrawler(output_dir, log, data, args.max_pages, args.max_depth).run()
+        WebCrawler(output_dir, log, data, args.max_pages, args.max_depth, domain).run()
         _pm.set_phase_status("phase8_crawl", "complete", label="Phase 8: Web Crawling")
         _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="complete")
 

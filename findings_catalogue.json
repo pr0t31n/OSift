@@ -9,7 +9,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["CM-8", "CA-7"]
+    "nist": [
+      "CM-8",
+      "CA-7"
+    ]
   },
   {
     "id": "OSIFT-002",
@@ -21,7 +24,11 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["CM-8", "CA-7", "RA-5"]
+    "nist": [
+      "CM-8",
+      "CA-7",
+      "RA-5"
+    ]
   },
   {
     "id": "OSIFT-003",
@@ -30,10 +37,16 @@
     "category": "Attack Surface",
     "description": "A non-standard or sensitive port (e.g., 8080, 8443, 9200, 27017, 3306) was found open on a subdomain via naabu port scanning or Shodan. Exposes additional attack surface.",
     "remediation": "Restrict open ports to those strictly required. Apply firewall rules to limit access to sensitive ports (databases, admin panels) by source IP.",
-    "references": ["CWE-200"],
+    "references": [
+      "CWE-200"
+    ],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["CM-7", "CM-8", "SC-7"]
+    "nist": [
+      "CM-7",
+      "CM-8",
+      "SC-7"
+    ]
   },
   {
     "id": "OSIFT-004",
@@ -45,7 +58,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["SC-17", "CM-8"]
+    "nist": [
+      "SC-17",
+      "CM-8"
+    ]
   },
   {
     "id": "OSIFT-005",
@@ -57,7 +73,11 @@
     "references": [],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
-    "nist": ["SC-17", "CM-8", "IA-3"]
+    "nist": [
+      "SC-17",
+      "CM-8",
+      "IA-3"
+    ]
   },
   {
     "id": "OSIFT-006",
@@ -66,10 +86,16 @@
     "category": "SSL/TLS",
     "description": "A certificate was found with a misconfiguration: hostname mismatch, self-signed cert on a public host, wildcard overuse, or weak signing algorithm (MD5/SHA-1).",
     "remediation": "Replace self-signed or mis-issued certificates with certificates from a trusted CA. Use SHA-256 or stronger signing algorithms.",
-    "references": ["CWE-295"],
+    "references": [
+      "CWE-295"
+    ],
     "cvss_score": 5.9,
     "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
-    "nist": ["SC-8", "SC-17", "IA-3"]
+    "nist": [
+      "SC-8",
+      "SC-17",
+      "IA-3"
+    ]
   },
   {
     "id": "OSIFT-007",
@@ -78,10 +104,16 @@
     "category": "DNS",
     "description": "A DNS record anomaly was detected: dangling CNAME, multiple conflicting A records, DNSSEC misconfiguration, or inconsistent NS delegation that could be exploited.",
     "remediation": "Audit DNS records for the affected domain. Remove stale or dangling records. Ensure DNSSEC is correctly signed and validated.",
-    "references": ["CWE-350"],
+    "references": [
+      "CWE-350"
+    ],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["SC-20", "SC-21", "CM-6"]
+    "nist": [
+      "SC-20",
+      "SC-21",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-008",
@@ -90,10 +122,17 @@
     "category": "Email Security",
     "description": "No SPF (Sender Policy Framework) TXT record was found for the target domain. Without SPF, attackers can spoof email from this domain and bypass basic spam filters.",
     "remediation": "Add an SPF TXT record to the domain's DNS: e.g., v=spf1 include:_spf.google.com ~all. Consult your mail provider's documentation.",
-    "references": ["CWE-346", "RFC 7208"],
+    "references": [
+      "CWE-346",
+      "RFC 7208"
+    ],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
-    "nist": ["SC-5", "SC-8", "SI-8"]
+    "nist": [
+      "SC-5",
+      "SC-8",
+      "SI-8"
+    ]
   },
   {
     "id": "OSIFT-009",
@@ -102,10 +141,17 @@
     "category": "Email Security",
     "description": "No DMARC (_dmarc.<domain> TXT) record was found. Without DMARC, there is no policy instructing receiving mail servers how to handle unauthenticated email from this domain.",
     "remediation": "Add a DMARC record starting with p=quarantine or p=reject. Example: v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com",
-    "references": ["CWE-346", "RFC 7489"],
+    "references": [
+      "CWE-346",
+      "RFC 7489"
+    ],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
-    "nist": ["SC-5", "SI-8", "CM-6"]
+    "nist": [
+      "SC-5",
+      "SI-8",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-010",
@@ -117,7 +163,11 @@
     "references": [],
     "cvss_score": 3.7,
     "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
-    "nist": ["SC-8", "SI-8", "CM-6"]
+    "nist": [
+      "SC-8",
+      "SI-8",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-011",
@@ -129,7 +179,11 @@
     "references": [],
     "cvss_score": 7.5,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
-    "nist": ["IA-5", "IA-2", "IR-4"]
+    "nist": [
+      "IA-5",
+      "IA-2",
+      "IR-4"
+    ]
   },
   {
     "id": "OSIFT-012",
@@ -138,10 +192,18 @@
     "category": "Breach Intelligence",
     "description": "A plaintext or reversibly hashed password was found in a breach database (Dehashed) for a target-domain email address. Direct account compromise may be possible.",
     "remediation": "Immediately force a password reset for the affected account. Check for reuse across other systems (VPN, cloud consoles, O365). Enable MFA on all accounts.",
-    "references": ["CWE-256", "CWE-521"],
+    "references": [
+      "CWE-256",
+      "CWE-521"
+    ],
     "cvss_score": 9.1,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
-    "nist": ["IA-5", "IA-5(1)", "IR-4", "SC-28"]
+    "nist": [
+      "IA-5",
+      "IA-5(1)",
+      "IR-4",
+      "SC-28"
+    ]
   },
   {
     "id": "OSIFT-013",
@@ -150,10 +212,18 @@
     "category": "Credential Exposure",
     "description": "GitDorker or TruffleHog identified a secret, API key, token, or private key in a public GitHub repository associated with the target organisation or its employees.",
     "remediation": "Revoke the exposed secret immediately. Rotate all affected credentials. Scrub the secret from git history (git filter-repo). Enable GitHub secret scanning alerts.",
-    "references": ["CWE-312", "CWE-798"],
+    "references": [
+      "CWE-312",
+      "CWE-798"
+    ],
     "cvss_score": 9.1,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
-    "nist": ["IA-5", "SC-28", "SA-12", "CM-7"]
+    "nist": [
+      "IA-5",
+      "SC-28",
+      "SA-12",
+      "CM-7"
+    ]
   },
   {
     "id": "OSIFT-014",
@@ -165,7 +235,11 @@
     "references": [],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["IA-2", "AC-7", "AU-2"]
+    "nist": [
+      "IA-2",
+      "AC-7",
+      "AU-2"
+    ]
   },
   {
     "id": "OSIFT-015",
@@ -174,10 +248,18 @@
     "category": "Cloud Identity",
     "description": "TREVORspray successfully authenticated to M365/Azure AD with a discovered credential. Full account access to Microsoft cloud services may be available to an attacker.",
     "remediation": "Immediately revoke the session, reset the password, and enable MFA for the compromised account. Investigate access logs for lateral movement. Review Conditional Access policies.",
-    "references": ["CWE-521", "CWE-307"],
+    "references": [
+      "CWE-521",
+      "CWE-307"
+    ],
     "cvss_score": 9.8,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-    "nist": ["IA-5", "AC-7", "IR-4", "IA-2"]
+    "nist": [
+      "IA-5",
+      "AC-7",
+      "IR-4",
+      "IA-2"
+    ]
   },
   {
     "id": "OSIFT-016",
@@ -186,10 +268,16 @@
     "category": "Subdomain Security",
     "description": "A subdomain has a CNAME pointing to an external service (e.g., GitHub Pages, S3, Heroku, Shopify) that is no longer claimed. An attacker could register the resource and serve malicious content under the organisation's subdomain.",
     "remediation": "Remove the dangling DNS record immediately. If the external service is still needed, reclaim the resource. Implement subdomain monitoring.",
-    "references": ["CWE-350"],
+    "references": [
+      "CWE-350"
+    ],
     "cvss_score": 7.5,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
-    "nist": ["SC-20", "CM-8", "CM-6"]
+    "nist": [
+      "SC-20",
+      "CM-8",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-017",
@@ -198,10 +286,18 @@
     "category": "DNS",
     "description": "The DNS server responds to unauthenticated AXFR zone transfer requests, exposing the complete DNS zone including internal hostnames, IP addresses, and mail infrastructure.",
     "remediation": "Restrict zone transfer permissions to authorised secondary name server IP addresses using ACLs in the DNS server configuration.",
-    "references": ["CWE-200", "CWE-284", "CVE-1999-0532"],
+    "references": [
+      "CWE-200",
+      "CWE-284",
+      "CVE-1999-0532"
+    ],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["SC-20", "AC-3", "CM-7"]
+    "nist": [
+      "SC-20",
+      "AC-3",
+      "CM-7"
+    ]
   },
   {
     "id": "OSIFT-018",
@@ -213,7 +309,11 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["AT-2", "SI-8", "CM-8"]
+    "nist": [
+      "AT-2",
+      "SI-8",
+      "CM-8"
+    ]
   },
   {
     "id": "OSIFT-019",
@@ -222,10 +322,15 @@
     "category": "Reconnaissance",
     "description": "The technology stack of a live host was identified (Wappalyzer, httpx, whatweb): CMS, web framework, server software, JavaScript libraries, CDN providers. Helps attackers target known vulnerabilities.",
     "remediation": "Remove version disclosure from HTTP headers (Server, X-Powered-By). Keep software up to date. Consider a WAF to obscure fingerprinting.",
-    "references": ["CWE-200"],
+    "references": [
+      "CWE-200"
+    ],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["CM-7", "SC-8"]
+    "nist": [
+      "CM-7",
+      "SC-8"
+    ]
   },
   {
     "id": "OSIFT-020",
@@ -234,14 +339,20 @@
     "category": "Web Exposure",
     "description": "waybackurls or xurlfind3r discovered a historical URL containing a sensitive path (e.g., /admin, /backup, /.env, /config, /api/v1/keys) that was once publicly accessible.",
     "remediation": "Verify whether the resource still exists. Remove sensitive files from public-facing web roots. Review server access logs for recent access to these paths.",
-    "references": ["CWE-538"],
+    "references": [
+      "CWE-538"
+    ],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["CM-7", "AC-3", "CM-8"]
+    "nist": [
+      "CM-7",
+      "AC-3",
+      "CM-8"
+    ]
   },
   {
     "id": "OSIFT-021",
-    "title": "Shodan Exposure — Open Service",
+    "title": "Shodan Exposure \u2014 Open Service",
     "severity": "MEDIUM",
     "category": "Attack Surface",
     "description": "Shodan reports an open service on a target IP that is visible to the public internet. Banner data, software version, and service type are indexed and searchable by anyone.",
@@ -249,19 +360,29 @@
     "references": [],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["CM-7", "SC-7", "RA-5"]
+    "nist": [
+      "CM-7",
+      "SC-7",
+      "RA-5"
+    ]
   },
   {
     "id": "OSIFT-022",
-    "title": "Shodan Exposure — Known CVE on Service",
+    "title": "Shodan Exposure \u2014 Known CVE on Service",
     "severity": "HIGH",
     "category": "Attack Surface",
     "description": "Shodan has associated one or more CVEs with a service running on a target IP based on the service banner and version string. A known public exploit may exist.",
     "remediation": "Patch or update the affected service immediately. If patching is not immediately possible, apply mitigating controls (WAF rule, network restriction).",
-    "references": ["CWE-1026"],
+    "references": [
+      "CWE-1026"
+    ],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["SI-2", "RA-5", "CM-6"]
+    "nist": [
+      "SI-2",
+      "RA-5",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-023",
@@ -270,10 +391,18 @@
     "category": "Cloud Exposure",
     "description": "cloud_enum or manual enumeration discovered a publicly accessible cloud storage bucket (AWS S3, Azure Blob, GCP Storage) associated with the target. It may contain sensitive files.",
     "remediation": "Immediately set the bucket to private unless public access is intentional. Audit bucket contents for sensitive data. Enable bucket access logging and alerts.",
-    "references": ["CWE-284", "CWE-200"],
+    "references": [
+      "CWE-284",
+      "CWE-200"
+    ],
     "cvss_score": 8.6,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N",
-    "nist": ["AC-3", "SC-28", "CM-6", "AU-2"]
+    "nist": [
+      "AC-3",
+      "SC-28",
+      "CM-6",
+      "AU-2"
+    ]
   },
   {
     "id": "OSIFT-024",
@@ -285,7 +414,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["CM-8", "SC-17"]
+    "nist": [
+      "CM-8",
+      "SC-17"
+    ]
   },
   {
     "id": "OSIFT-025",
@@ -297,7 +429,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["CM-8", "CA-7"]
+    "nist": [
+      "CM-8",
+      "CA-7"
+    ]
   },
   {
     "id": "OSIFT-026",
@@ -306,10 +441,15 @@
     "category": "Reconnaissance",
     "description": "WHOIS records for the target domain revealed registrant contact details, nameserver names, registrar information, and registration dates. This information aids in phishing and social engineering.",
     "remediation": "Enable WHOIS privacy protection through your registrar for domains where registrant PII should not be public.",
-    "references": ["CWE-200"],
+    "references": [
+      "CWE-200"
+    ],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["AT-2", "CM-8"]
+    "nist": [
+      "AT-2",
+      "CM-8"
+    ]
   },
   {
     "id": "OSIFT-027",
@@ -321,7 +461,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["AT-2", "AT-3"]
+    "nist": [
+      "AT-2",
+      "AT-3"
+    ]
   },
   {
     "id": "OSIFT-028",
@@ -333,7 +476,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["AT-2", "AT-3"]
+    "nist": [
+      "AT-2",
+      "AT-3"
+    ]
   },
   {
     "id": "OSIFT-029",
@@ -342,10 +488,17 @@
     "category": "Web Exposure",
     "description": "katana or xurlfind3r discovered a publicly accessible file containing potentially sensitive data: backup archives (.zip, .bak), configuration files (.env, .config), log files, or database dumps.",
     "remediation": "Remove the file from the web root immediately. Audit web server directory listings. Restrict access to backup and config files via .htaccess or server config.",
-    "references": ["CWE-538", "CWE-312"],
+    "references": [
+      "CWE-538",
+      "CWE-312"
+    ],
     "cvss_score": 7.5,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
-    "nist": ["CM-7", "AC-3", "SC-28"]
+    "nist": [
+      "CM-7",
+      "AC-3",
+      "SC-28"
+    ]
   },
   {
     "id": "OSIFT-030",
@@ -354,10 +507,17 @@
     "category": "Web Security",
     "description": "httpx detected missing security headers on a live host: Content-Security-Policy, X-Frame-Options, Strict-Transport-Security, X-Content-Type-Options, or Referrer-Policy.",
     "remediation": "Add security headers to web server or application configuration. Verify with securityheaders.com.",
-    "references": ["CWE-693", "OWASP A05:2021"],
+    "references": [
+      "CWE-693",
+      "OWASP A05:2021"
+    ],
     "cvss_score": 4.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N",
-    "nist": ["SC-8", "SI-10", "CM-6"]
+    "nist": [
+      "SC-8",
+      "SI-10",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-031",
@@ -366,10 +526,17 @@
     "category": "Authentication",
     "description": "The target accepted well-known default or factory-set credentials, granting unauthorised access.",
     "remediation": "Replace all default credentials with strong, unique secrets and enforce a password policy prior to any deployment.",
-    "references": ["CWE-1392", "OWASP A07:2021"],
+    "references": [
+      "CWE-1392",
+      "OWASP A07:2021"
+    ],
     "cvss_score": 9.8,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-    "nist": ["IA-5", "IA-5(1)", "AC-3"]
+    "nist": [
+      "IA-5",
+      "IA-5(1)",
+      "AC-3"
+    ]
   },
   {
     "id": "OSIFT-032",
@@ -381,7 +548,11 @@
     "references": [],
     "cvss_score": 5.3,
     "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-    "nist": ["CM-7", "RA-5", "CM-8"]
+    "nist": [
+      "CM-7",
+      "RA-5",
+      "CM-8"
+    ]
   },
   {
     "id": "OSIFT-033",
@@ -393,7 +564,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["SC-20", "CM-6"]
+    "nist": [
+      "SC-20",
+      "CM-6"
+    ]
   },
   {
     "id": "OSIFT-034",
@@ -405,7 +579,11 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["CM-8", "CA-7", "AC-3"]
+    "nist": [
+      "CM-8",
+      "CA-7",
+      "AC-3"
+    ]
   },
   {
     "id": "OSIFT-035",
@@ -417,7 +595,10 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["AT-2", "AT-3"]
+    "nist": [
+      "AT-2",
+      "AT-3"
+    ]
   },
   {
     "id": "OSIFT-036",
@@ -429,6 +610,112 @@
     "references": [],
     "cvss_score": 0.0,
     "cvss_vector": "N/A",
-    "nist": ["SA-12", "CM-8", "CA-7"]
+    "nist": [
+      "SA-12",
+      "CM-8",
+      "CA-7"
+    ]
+  },
+  {
+    "id": "OSIFT-037",
+    "title": "Email Address Identified",
+    "severity": "INFO",
+    "category": "Information Disclosure",
+    "description": "One or more email addresses associated with the target organisation or its employees were harvested during OSINT enumeration using tools such as theHarvester, Hunter.io, or Phonebook.cz. Exposed email addresses directly enable phishing campaigns, password spray attacks against cloud identity platforms (M365, Google Workspace), and account enumeration. Even a single valid address provides an attacker with a confirmed naming convention from which to infer additional accounts.",
+    "remediation": "Educate employees on minimising professional email exposure in public contexts. Implement robust email security controls including SPF, DKIM, and DMARC at p=reject. Enable anti-phishing and impersonation protection in the email gateway. Monitor for credential spray activity against cloud identity providers.",
+    "references": [
+      "CWE-200"
+    ],
+    "cvss_score": 0.0,
+    "cvss_vector": "N/A",
+    "nist": [
+      "RA-2",
+      "PM-5"
+    ]
+  },
+  {
+    "id": "OSIFT-038",
+    "title": "IP Address Identified",
+    "severity": "INFO",
+    "category": "Reconnaissance",
+    "description": "One or more IP addresses were mapped to the target organisation's assets through DNS resolution, certificate transparency log analysis, ASN enumeration, WHOIS records, or OSINT sources. Confirmed IP addresses expand the known attack surface beyond the primary domain, enabling direct host scanning, service fingerprinting, and identification of infrastructure not protected by a CDN or application-layer proxy.",
+    "remediation": "Reconcile all discovered IP addresses against the authorised asset inventory. Ensure cloud-hosted instances are protected by security groups or firewall rules limiting unnecessary public exposure. Review whether any discovered IPs host unintended or forgotten services.",
+    "references": [
+      "CWE-200"
+    ],
+    "cvss_score": 0.0,
+    "cvss_vector": "N/A",
+    "nist": [
+      "RA-2",
+      "CA-7"
+    ]
+  },
+  {
+    "id": "OSIFT-039",
+    "title": "Internal Server Directory Structure Revealed",
+    "severity": "MEDIUM",
+    "category": "Information Disclosure",
+    "description": "Internal filesystem path components were found exposed in publicly accessible sources, including HTTP response bodies, error messages, stack traces, application comments, or historical Wayback Machine snapshots. Exposed paths such as /var/www/app/releases/20231105/, C:\\inetpub\\wwwroot\\api\\, or /home/deploy/app/ reveal the server's operating system, directory layout, deployment tooling, and technology stack. This information assists attackers in crafting targeted local file inclusion, path traversal, or directory brute-force payloads.",
+    "remediation": "Configure the web application to display generic error pages rather than stack traces or exception details in production. Suppress server-side path information from HTTP response headers and application output. Review Wayback Machine archives for pages that previously revealed directory structure and ensure those resources are no longer publicly accessible.",
+    "references": [
+      "CWE-548",
+      "CWE-200"
+    ],
+    "cvss_score": 5.3,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+    "nist": [
+      "CM-7",
+      "SI-12"
+    ]
+  },
+  {
+    "id": "OSIFT-040",
+    "title": "Phone Number Pattern Spotted",
+    "severity": "INFO",
+    "category": "PII Exposure",
+    "description": "A pattern matching a telephone number (e.g., +1-555-867-5309, (800) 123-4567) was identified in publicly accessible web content associated with the target domain. Exposed phone numbers can be used to conduct vishing (voice phishing) attacks impersonating employees or IT support, to enumerate internal organisational structure, or to harvest contact information for social engineering campaigns targeting staff.",
+    "remediation": "Review whether the exposed telephone number serves a legitimate public-facing business purpose (e.g., a sales or support line). For internal or employee numbers, remove them from public web properties. Conduct security awareness training focused on social engineering and vishing recognition.",
+    "references": [
+      "CWE-200"
+    ],
+    "cvss_score": 0.0,
+    "cvss_vector": "N/A",
+    "nist": [
+      "PM-5"
+    ]
+  },
+  {
+    "id": "OSIFT-041",
+    "title": "Potential PII Pattern \u2014 Social Security Number Format Detected",
+    "severity": "HIGH",
+    "category": "PII Exposure",
+    "description": "Content matching the US Social Security Number format (XXX-XX-XXXX, nine digits with specific separators) was identified in publicly accessible content associated with the target domain or organisation. Exposure of SSN-format data in a publicly reachable location constitutes a potential data breach under US federal and state regulations (HIPAA, state breach notification laws, FTC Act). Even if the values are synthetic or test data, their public exposure indicates a failure in data classification and handling controls.",
+    "remediation": "Immediately investigate whether the detected values are real SSNs or test data. If real, initiate incident response per your breach notification obligations (HIPAA, state data breach laws). Remove the file or page containing the data from public access. Implement data loss prevention (DLP) scanning to detect SSN-format strings in web application output and source code repositories. Conduct a broader audit of publicly accessible content for additional PII exposure.",
+    "references": [
+      "CWE-359",
+      "CWE-200"
+    ],
+    "cvss_score": 7.5,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "nist": [
+      "SC-28",
+      "PL-4"
+    ]
+  },
+  {
+    "id": "OSIFT-042",
+    "title": "SSL/TLS Certificate: Self-Signed",
+    "severity": "MEDIUM",
+    "category": "Cryptography",
+    "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+    "remediation": "Replace the self-signed certificate with one issued by a publicly trusted CA. For internet-facing services, use Let's Encrypt via ACME automation (certbot, acme.sh, or Caddy) for zero-cost, automatically renewing certificates. For internal services, establish an internal CA with proper trust distribution rather than using ad-hoc self-signed certificates.",
+    "references": [
+      "CWE-295"
+    ],
+    "cvss_score": 5.3,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+    "nist": [
+      "SC-17"
+    ]
   }
 ]

@@ -57,7 +57,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -66,6 +66,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -91,7 +92,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -100,6 +101,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -125,7 +127,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -134,6 +136,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -159,7 +162,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -168,6 +171,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -193,7 +197,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -202,6 +206,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -227,7 +232,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -236,6 +241,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -261,7 +267,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -270,6 +276,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -295,7 +302,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -304,6 +311,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -329,7 +337,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -338,6 +346,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -363,7 +372,7 @@ def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Pa
 def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                         year: str, version: str) -> None:
     """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt
+    import json as _json, datetime as _dt, socket as _sock
     try:
         (project_dir / "project_meta.json").write_text(
             _json.dumps({
@@ -372,6 +381,7 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
                 "year":         year,
                 "created_at":   _dt.datetime.now().isoformat(),
                 "version":      version,
+                "hostname":     _sock.gethostname(),
             }, indent=2),
             encoding="utf-8",
         )
@@ -828,7 +838,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────

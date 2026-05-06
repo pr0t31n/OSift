@@ -838,7 +838,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5913,6 +5913,7 @@ _SOURCE_TO_TOOL: Dict[str, str] = {
     "format_guess":      "OSift-Email",
     "whois":             "OSift-DNS",
     "whois_raw":         "OSift-DNS",
+    "people_dorker":     "people_dorker",
     "certificate_san":   "OSift-DNS",
     # Subdomain discovery — DNS enumeration internal sources
     "MX record":         "OSift-DNS",
@@ -18935,6 +18936,664 @@ def run_gitdorker(domain: str, company: str, output_dir: "Path", data: "ReconDat
         log.warning(f"[GitDorker] Error: {exc}")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 14: People Dorking — Employee & Contact Intelligence
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PeopleDorker:
+    """
+    Phase 14: People & Employee Intelligence via Search Engine Dorking.
+
+    Constructs targeted dork queries against people-finder sites, professional
+    directories, press databases, and public records to enumerate employees,
+    contacts, and PII associated with a target company or domain.
+
+    Dork categories:
+      - People-finder sites  (familytreenow, whitepages, spokeo, truepeoplesearch,
+                              fastpeoplesearch, peoplefinders, radaris, intelius,
+                              beenverified, checkpeople, usa-people-search)
+      - Professional dirs    (ZoomInfo, RocketReach, Apollo.io, ContactOut,
+                              SignalHire, Lusha)
+      - Social/professional  (LinkedIn public profiles)
+      - Press databases      (BusinessWire, PRNewswire, GlobeNewswire)
+      - Public records       (OpenCorporates, SEC EDGAR)
+      - Paste/doc leaks      (Pastebin, Ghostbin, Scribd, SlideShare)
+      - Email enumeration    (filetype:pdf/xlsx @domain)
+
+    Always saves the full dork query list (dork_queries.txt) regardless of
+    whether live search queries succeed, so analysts can run them manually.
+
+    Optional: provide a SerpAPI key (--serpapi-key) to use Google instead of
+    DuckDuckGo.  Without a key, DuckDuckGo HTML is used (no account needed).
+    """
+
+    _USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
+    ]
+
+    def __init__(self, domain: str, company: str, domains: List[str],
+                 output_dir: Path, log: ReconLogger, data: ReconData,
+                 serpapi_key: str = ""):
+        self.domain      = domain
+        self.company     = company
+        self.domains     = domains or [domain]
+        self.output_dir  = output_dir
+        self.log         = log
+        self.data        = data
+        self.serpapi_key = serpapi_key
+        self._out_dir    = output_dir / "company" / "people_dorking"
+        self._out_dir.mkdir(parents=True, exist_ok=True)
+        self._found_names:  set = set()
+        self._found_phones: set = set()
+        self._results:     list = []
+
+    # ── Company name variant builder ───────────────────────────────────────────
+
+    def _name_variants(self) -> List[str]:
+        """
+        Return a deduplicated list of company name variants for dork queries.
+        Includes: full name, name without legal suffixes, acronym, domain basename.
+        """
+        variants: List[str] = []
+        name = self.company.strip()
+        if name:
+            variants.append(name)
+            stripped = re.sub(
+                r'\s*,?\s*(?:Inc\.?|LLC\.?|Ltd\.?|Corp\.?|Co\.?|L\.P\.?|PLC\.?|'
+                r'LLP\.?|PLLC\.?|S\.A\.?|N\.V\.?|GmbH|AG)\s*$',
+                '', name, flags=re.IGNORECASE,
+            ).strip()
+            if stripped and stripped.lower() != name.lower():
+                variants.append(stripped)
+            words = [w for w in re.split(r'\s+', stripped) if len(w) >= 2]
+            if len(words) >= 2:
+                acronym = "".join(w[0].upper() for w in words)
+                if len(acronym) >= 2:
+                    variants.append(acronym)
+
+        for d in self.domains:
+            base = d.split(".")[0]
+            if base and base.lower() not in {v.lower() for v in variants}:
+                variants.append(base)
+
+        seen: set = set()
+        out:  List[str] = []
+        for v in variants:
+            if v.lower() not in seen:
+                seen.add(v.lower())
+                out.append(v)
+        return out
+
+    # ── Dork query catalog ─────────────────────────────────────────────────────
+
+    def _build_dork_queries(self) -> List[Dict]:
+        """
+        Return list of dork query dicts: {query, site, category, description}.
+
+        People-finder sites are queried with every company name variant.
+        Domain-based dorks (paste leaks, email enumeration) are per-domain.
+        """
+        variants = self._name_variants()
+        queries:  List[Dict] = []
+
+        def _q(site: str, query: str, cat: str, desc: str) -> None:
+            queries.append({"query": query, "site": site,
+                            "category": cat, "description": desc})
+
+        for v in variants:
+            qv = f'"{v}"'
+
+            # ── People-finder sites ────────────────────────────────────────────
+            # familytreenow.com: Google results include name, DOB month/year,
+            # city/state, phone, relatives — high-value PII per result.
+            _q("familytreenow.com",
+               f'site:familytreenow.com {qv}',
+               "people_finder",
+               f"FamilyTreeNow — names, DOB month/year, addresses, phones, "
+               f"relatives for people associated with {v}")
+
+            _q("whitepages.com",
+               f'site:whitepages.com {qv}',
+               "people_finder",
+               f"Whitepages — names, addresses, phone numbers for {v}")
+
+            _q("spokeo.com",
+               f'site:spokeo.com {qv}',
+               "people_finder",
+               f"Spokeo — aggregated social and personal info for {v}")
+
+            _q("truepeoplesearch.com",
+               f'site:truepeoplesearch.com {qv}',
+               "people_finder",
+               f"TruePeopleSearch — names, addresses, phones for {v}")
+
+            _q("fastpeoplesearch.com",
+               f'site:fastpeoplesearch.com {qv}',
+               "people_finder",
+               f"FastPeopleSearch — names, addresses, phones for {v}")
+
+            _q("peoplefinders.com",
+               f'site:peoplefinders.com {qv}',
+               "people_finder",
+               f"PeopleFinders — names, addresses, background info for {v}")
+
+            _q("radaris.com",
+               f'site:radaris.com {qv}',
+               "people_finder",
+               f"Radaris — names, addresses, social profiles for {v}")
+
+            _q("intelius.com",
+               f'site:intelius.com {qv}',
+               "people_finder",
+               f"Intelius — names, background info for {v}")
+
+            _q("beenverified.com",
+               f'site:beenverified.com {qv}',
+               "people_finder",
+               f"BeenVerified — background check teasers for {v}")
+
+            _q("checkpeople.com",
+               f'site:checkpeople.com {qv}',
+               "people_finder",
+               f"CheckPeople — names, addresses for {v}")
+
+            _q("usa-people-search.com",
+               f'site:usa-people-search.com {qv}',
+               "people_finder",
+               f"USA People Search — names, addresses for {v}")
+
+            _q("411.com",
+               f'site:411.com {qv}',
+               "people_finder",
+               f"411.com — names, addresses, phones for {v}")
+
+            _q("anywho.com",
+               f'site:anywho.com {qv}',
+               "people_finder",
+               f"AnyWho — names, addresses, phones for {v}")
+
+            # ── Professional directories ───────────────────────────────────────
+            _q("zoominfo.com",
+               f'site:zoominfo.com/p {qv}',
+               "professional_directory",
+               f"ZoomInfo — employee names, titles, emails for {v}")
+
+            _q("rocketreach.co",
+               f'site:rocketreach.co {qv}',
+               "professional_directory",
+               f"RocketReach — employee contact info for {v}")
+
+            _q("apollo.io",
+               f'site:apollo.io {qv}',
+               "professional_directory",
+               f"Apollo.io — employee names and titles for {v}")
+
+            _q("contactout.com",
+               f'site:contactout.com {qv}',
+               "professional_directory",
+               f"ContactOut — employee emails and phones for {v}")
+
+            _q("signalhire.com",
+               f'site:signalhire.com {qv}',
+               "professional_directory",
+               f"SignalHire — employee contact info for {v}")
+
+            _q("lusha.com",
+               f'site:lusha.com {qv}',
+               "professional_directory",
+               f"Lusha — B2B contact info for {v}")
+
+            _q("clearbit.com",
+               f'site:clearbit.com {qv}',
+               "professional_directory",
+               f"Clearbit — company employee data for {v}")
+
+            # ── LinkedIn public dorks ──────────────────────────────────────────
+            _q("linkedin.com",
+               f'site:linkedin.com/in {qv}',
+               "social_professional",
+               f"LinkedIn — employee profile pages mentioning {v}")
+
+            _q("linkedin.com",
+               f'site:linkedin.com/pub {qv}',
+               "social_professional",
+               f"LinkedIn public profiles mentioning {v}")
+
+            # XING (European LinkedIn equivalent)
+            _q("xing.com",
+               f'site:xing.com {qv}',
+               "social_professional",
+               f"XING — European professional profiles for {v}")
+
+            # ── Press / PR databases (executive name discovery) ────────────────
+            _q("businesswire.com",
+               f'site:businesswire.com {qv} '
+               f'(CEO OR CFO OR CISO OR CTO OR COO OR "vice president" OR director)',
+               "press_executive",
+               f"BusinessWire — press releases with executive names for {v}")
+
+            _q("prnewswire.com",
+               f'site:prnewswire.com {qv} '
+               f'(CEO OR CFO OR CISO OR CTO OR COO OR "vice president" OR director)',
+               "press_executive",
+               f"PRNewswire — press releases with executive names for {v}")
+
+            _q("globenewswire.com",
+               f'site:globenewswire.com {qv}',
+               "press_executive",
+               f"GlobeNewswire — press releases mentioning {v}")
+
+            _q("accesswire.com",
+               f'site:accesswire.com {qv}',
+               "press_executive",
+               f"AccessWire — press releases mentioning {v}")
+
+            # ── Public records ─────────────────────────────────────────────────
+            _q("opencorporates.com",
+               f'site:opencorporates.com {qv}',
+               "public_records",
+               f"OpenCorporates — registered officers and directors for {v}")
+
+            _q("sec.gov",
+               f'site:sec.gov {qv} "principal executive officer"',
+               "public_records",
+               f"SEC EDGAR — named principal executives for {v}")
+
+            _q("sec.gov",
+               f'site:sec.gov {qv} filetype:htm',
+               "public_records",
+               f"SEC EDGAR HTM filings mentioning {v} (officers named in 10-K/proxy)")
+
+            # Conference speakers — real names + employer confirmed
+            _q("eventbrite.com",
+               f'site:eventbrite.com {qv}',
+               "conference_speaker",
+               f"Eventbrite — event speakers and attendees associated with {v}")
+
+            _q("papercall.io",
+               f'site:papercall.io {qv}',
+               "conference_speaker",
+               f"PaperCall — conference speaker profiles for {v}")
+
+        # ── Domain-based dorks ─────────────────────────────────────────────────
+        for d in self.domains:
+            _q("pastebin.com",
+               f'site:pastebin.com "@{d}"',
+               "paste_leak",
+               f"Pastebin — @{d} email addresses in public pastes")
+
+            _q("pastebin.com",
+               f'site:pastebin.com "{d}" password',
+               "paste_leak",
+               f"Pastebin — {d} credentials pasted publicly")
+
+            _q("ghostbin.co",
+               f'site:ghostbin.co "{d}"',
+               "paste_leak",
+               f"Ghostbin — {d} mentions in public pastes")
+
+            _q("scribd.com",
+               f'site:scribd.com "{d}"',
+               "document_leak",
+               f"Scribd — documents containing {d} (employee names in docs)")
+
+            _q("slideshare.net",
+               f'site:slideshare.net "{d}"',
+               "document_leak",
+               f"SlideShare — presentations containing {d}")
+
+            _q("any",
+               f'"@{d}" (CEO OR CFO OR CISO OR CTO OR director OR manager OR engineer)',
+               "email_discovery",
+               f"Exposed @{d} emails with job titles indexed anywhere")
+
+            _q("any",
+               f'filetype:pdf intext:"@{d}"',
+               "email_discovery",
+               f"PDF documents with @{d} email addresses")
+
+            _q("any",
+               f'filetype:xlsx intext:"@{d}"',
+               "email_discovery",
+               f"Excel files with @{d} email addresses (org charts, rosters)")
+
+            _q("any",
+               f'filetype:csv intext:"@{d}"',
+               "email_discovery",
+               f"CSV files with @{d} email addresses")
+
+        return queries
+
+    # ── Search execution ───────────────────────────────────────────────────────
+
+    def _ddg_search(self, query: str) -> List[Dict]:
+        """Query DuckDuckGo HTML endpoint. Returns [{title, url, snippet}]."""
+        if not REQUESTS_AVAILABLE:
+            return []
+        import random as _rnd2
+        session = make_session()
+        session.headers["User-Agent"] = _rnd2.choice(self._USER_AGENTS)
+        try:
+            resp = session.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query, "kl": "us-en"},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return []
+            results: List[Dict] = []
+            if BS4_AVAILABLE:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for r in soup.select(".result")[:10]:
+                    title_el = r.select_one(".result__title")
+                    url_el   = r.select_one(".result__url")
+                    snip_el  = r.select_one(".result__snippet")
+                    results.append({
+                        "title":   title_el.get_text(strip=True) if title_el else "",
+                        "url":     url_el.get_text(strip=True)   if url_el   else "",
+                        "snippet": snip_el.get_text(strip=True)  if snip_el  else "",
+                    })
+            else:
+                for m in re.finditer(
+                    r'class="result__snippet"[^>]*>(.*?)</[a-z]',
+                    resp.text, re.DOTALL | re.IGNORECASE,
+                ):
+                    snip = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                    if snip:
+                        results.append({"title": "", "url": "", "snippet": snip})
+                    if len(results) >= 10:
+                        break
+            return results
+        except Exception as exc:
+            self.log.debug(f"[DORK] DDG query failed: {exc}")
+            return []
+
+    def _serpapi_search(self, query: str) -> List[Dict]:
+        """Query SerpAPI (Google results) when a key is provided."""
+        if not (REQUESTS_AVAILABLE and self.serpapi_key):
+            return []
+        try:
+            resp = make_session().get(
+                "https://serpapi.com/search",
+                params={
+                    "engine":  "google",
+                    "q":       query,
+                    "num":     10,
+                    "api_key": self.serpapi_key,
+                    "gl":      "us",
+                    "hl":      "en",
+                },
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                return []
+            return [
+                {
+                    "title":   r.get("title", ""),
+                    "url":     r.get("link", ""),
+                    "snippet": r.get("snippet", ""),
+                }
+                for r in resp.json().get("organic_results", [])[:10]
+            ]
+        except Exception as exc:
+            self.log.debug(f"[DORK] SerpAPI query failed: {exc}")
+            return []
+
+    # ── PII extraction ─────────────────────────────────────────────────────────
+
+    def _extract_names(self, text: str) -> List[str]:
+        """
+        Extract probable personal names (Title Case 2-3 word patterns).
+        Filters common non-name title-case phrases.
+        """
+        _STOPWORDS = {
+            "United States", "New York", "Los Angeles", "San Francisco",
+            "North America", "South America", "United Kingdom", "View Profile",
+            "More Info", "View Details", "Learn More", "See More", "Read More",
+            "View More", "Find Out", "Sign Up", "Log In", "Contact Us",
+            "About Us", "Search Results", "Privacy Policy", "Terms Of",
+            "All Rights", "Cookie Policy",
+        }
+        pattern = r'\b([A-Z][a-z]{1,24})(?:\s+[A-Z][a-z]{1,24})?\s+([A-Z][a-z]{1,24})\b'
+        found: List[str] = []
+        for m in re.finditer(pattern, text):
+            name = m.group(0).strip()
+            if name not in _STOPWORDS and len(name) >= 5:
+                found.append(name)
+        return found
+
+    def _extract_phones(self, text: str) -> List[str]:
+        """Extract US phone numbers from text and normalise them."""
+        phones: List[str] = []
+        for m in re.finditer(
+            r'(?<!\d)(?:\+?1[-.\s]?)?\(?([2-9]\d{2})\)?[-.\s]([2-9]\d{2})[-.\s](\d{4})(?!\d)',
+            text,
+        ):
+            norm = f"({m.group(1)}) {m.group(2)}-{m.group(3)}"
+            if norm not in self._found_phones:
+                self._found_phones.add(norm)
+                phones.append(norm)
+        return phones
+
+    def _extract_birth_year(self, text: str) -> str:
+        """Extract a probable birth year (1920–2005) from snippet text."""
+        m = re.search(
+            r'\b(?:born|birth|dob|b\.|\bbirth\s+year\b)?\s*(?:circa\s*)?'
+            r'(19[2-9]\d|200[0-5])\b',
+            text, re.IGNORECASE,
+        )
+        return m.group(1) if m else ""
+
+    def _extract_emails(self, text: str) -> List[str]:
+        """Extract email addresses from snippet text."""
+        return re.findall(
+            r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
+            text,
+        )
+
+    # ── Main run ───────────────────────────────────────────────────────────────
+
+    def run(self) -> None:
+        self.log.set_tool_context("OSift-Dork")
+        import random as _rnd
+
+        queries = self._build_dork_queries()
+        self.log.info(
+            f"[DORK] Generated {len(queries)} dork queries across "
+            f"{len(set(q['category'] for q in queries))} categories"
+        )
+
+        # Always save the full query list first — useful even if live queries
+        # are blocked by search engine bot detection.
+        self._save_query_list(queries)
+
+        _people:        List[Dict] = []
+        _query_results: List[Dict] = []
+
+        for i, dq in enumerate(queries, 1):
+            query    = dq["query"]
+            site     = dq["site"]
+            category = dq["category"]
+
+            self.log.info(f"[DORK] [{i}/{len(queries)}] {category} — {site}")
+
+            results = (
+                self._serpapi_search(query)
+                if self.serpapi_key
+                else self._ddg_search(query)
+            )
+
+            if not results:
+                self.log.debug(f"[DORK] No results: {query}")
+                _query_results.append({
+                    "query": query, "site": site,
+                    "category": category, "hits": [],
+                })
+                time.sleep(_rnd.uniform(1.5, 3.0))
+                continue
+
+            hits: List[Dict] = []
+            for r in results:
+                combined   = f"{r.get('title', '')} {r.get('snippet', '')}"
+                names      = self._extract_names(combined)
+                phones     = self._extract_phones(combined)
+                birth_year = self._extract_birth_year(combined)
+                emails     = self._extract_emails(combined)
+
+                hits.append({
+                    "title":      r.get("title", ""),
+                    "url":        r.get("url", ""),
+                    "snippet":    r.get("snippet", ""),
+                    "names":      names,
+                    "phones":     phones,
+                    "birth_year": birth_year,
+                    "emails":     emails,
+                })
+
+                for name in names:
+                    if name not in self._found_names:
+                        self._found_names.add(name)
+                        parts = name.split()
+                        rec = {
+                            "first_name": parts[0],
+                            "last_name":  parts[-1],
+                            "full_name":  name,
+                            "birth_year": birth_year or "",
+                            "source":     f"people_dork:{site}",
+                            "dork_query": query,
+                            "url":        r.get("url", ""),
+                        }
+                        _people.append(rec)
+                        self._add_employee(rec)
+
+                for ph in phones:
+                    if ph not in self.data.phone_numbers:
+                        self.data.phone_numbers.append(ph)
+
+                for em in emails:
+                    em_lower = em.lower()
+                    if "@" in em_lower:
+                        rec2 = self.data.email_addresses.setdefault(
+                            em_lower, {"sources": [], "context": "", "breach": False}
+                        )
+                        src = f"people_dork:{site}"
+                        if src not in rec2["sources"]:
+                            rec2["sources"].append(src)
+
+            _query_results.append({
+                "query": query, "site": site,
+                "category": category, "hits": hits,
+            })
+
+            total_pii = sum(
+                len(h["names"]) + len(h["phones"]) + len(h["emails"])
+                for h in hits
+            )
+            if total_pii:
+                self.log.info(
+                    f"[DORK] {site}: {len(hits)} result(s), "
+                    f"{total_pii} PII item(s) extracted"
+                )
+
+            time.sleep(_rnd.uniform(2.0, 4.0))
+
+        self._save_results(_query_results, _people)
+
+        if _people:
+            sources_seen = sorted({p["source"].split(":")[1] for p in _people})
+            add_finding(
+                self.data,
+                tool     = "people_dorker",
+                type_    = "Employee PII Exposure",
+                category = CAT_SENSITIVE,
+                severity = "MEDIUM",
+                detail   = (
+                    f"Search-engine dorking discovered {len(_people)} potential employee "
+                    f"name(s) and/or personal information for '{self.company}' via "
+                    f"people-finder and professional directory sites. Sources: "
+                    + ", ".join(sources_seen)
+                    + ". Review people_dorking/discovered_people.json for full details."
+                ),
+                domain = self.domain,
+            )
+            self.log.success(
+                f"[DORK] Phase 14 complete: {len(_people)} people, "
+                f"{len(self._found_phones)} phone(s) discovered"
+            )
+        else:
+            self.log.info(
+                "[DORK] Phase 14 complete — no PII extracted from live results. "
+                "Use people_dorking/dork_queries.txt to run queries manually."
+            )
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _add_employee(self, rec: Dict) -> None:
+        for existing in self.data.employees:
+            if (existing.get("first_name", "").lower() == rec["first_name"].lower()
+                    and existing.get("last_name", "").lower() == rec["last_name"].lower()):
+                return
+        self.data.employees.append(rec)
+
+    def _save_query_list(self, queries: List[Dict]) -> None:
+        out   = self._out_dir / "dork_queries.txt"
+        lines = [
+            "# OSift Phase 14 — People Dorking Query Catalog",
+            f"# Generated : {datetime.datetime.now().isoformat(timespec='seconds')}",
+            f"# Company   : {self.company}",
+            f"# Domain(s) : {', '.join(self.domains)}",
+            "#",
+            "# Paste these queries directly into Google, Bing, or DuckDuckGo.",
+            "# SerpAPI key (--serpapi-key) enables automated Google execution.",
+            "",
+        ]
+        current_cat = ""
+        for dq in queries:
+            if dq["category"] != current_cat:
+                current_cat = dq["category"]
+                lines.append(f"\n# ── {current_cat.upper().replace('_', ' ')} ──")
+            lines.append(f"# {dq['description']}")
+            lines.append(dq["query"])
+            lines.append("")
+        out.write_text("\n".join(lines), encoding="utf-8")
+        self.log.info(f"[DORK] Dork query list saved: {out}")
+
+    def _save_results(self, query_results: List[Dict], people: List[Dict]) -> None:
+        (self._out_dir / "raw_results.json").write_text(
+            json.dumps(query_results, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (self._out_dir / "discovered_people.json").write_text(
+            json.dumps(people, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        lines = [
+            "OSift Phase 14 — People Dorking Summary",
+            "=" * 50,
+            f"Company   : {self.company}",
+            f"Domain(s) : {', '.join(self.domains)}",
+            f"Queries   : {len(query_results)}",
+            f"People    : {len(people)}",
+            f"Phones    : {len(self._found_phones)}",
+            "",
+        ]
+        if people:
+            lines.append("Discovered people (first 100):")
+            for p in people[:100]:
+                line = f"  {p['full_name']}"
+                if p.get("birth_year"):
+                    line += f"  (born ~{p['birth_year']})"
+                line += f"  [via {p['source']}]"
+                lines.append(line)
+        (self._out_dir / "findings_summary.txt").write_text(
+            "\n".join(lines), encoding="utf-8",
+        )
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -19268,6 +19927,8 @@ API key sources (all free tiers available):
     parser.add_argument("--no-spray",             action="store_true", help="Skip Phase 12 TREVORspray credential spraying")
     parser.add_argument("--no-gitdorker",         action="store_true", help="Skip Phase 13 GitDorker GitHub secret scanning")
     parser.add_argument("--github-token",         default="",     metavar="TOKEN", help="GitHub personal access token for GitDorker (Phase 13)")
+    parser.add_argument("--no-dork",              action="store_true", help="Skip Phase 14 People Dorking (search-engine dorks for employee PII)")
+    parser.add_argument("--serpapi-key",          default="",     metavar="KEY",   help="SerpAPI key for Google-backed dork execution in Phase 14 (optional; DuckDuckGo used if omitted)")
     parser.add_argument("--wordlist",             default="",     help="Custom wordlist for DNS brute force")
     parser.add_argument("--client-short",         default="",     metavar="SLUG",
                         help="Client short name / abbreviation for project directory naming")
@@ -19946,6 +20607,32 @@ API key sources (all free tiers available):
         )
         _pm.set_phase_status("phase13_gitdorker", "complete", label="Phase 13: GitDorker")
         _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
+        write_targets_snapshot(output_dir, data)
+
+    # ── Phase 14: People Dorking ───────────────────────────────────────────
+    if getattr(args, "no_dork", False):
+        log.info("[DORK] Phase 14 skipped (--no-dork)")
+        _pm.set_phase_status("phase14_dork", "skipped", label="Phase 14: People Dorking")
+        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="skipped")
+    elif _pm.is_phase_complete("phase14_dork"):
+        _vc.log("Phase 14 People Dorking already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="complete")
+    else:
+        _pm.set_phase_status("phase14_dork", "running", label="Phase 14: People Dorking")
+        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="running",
+                   active_tool="osint/people_dork")
+        _section(log, "PHASE 14: People Dorking — Employee & Contact Intelligence")
+        PeopleDorker(
+            domain      = args.domains[0],
+            company     = args.company,
+            domains     = list(args.domains),
+            output_dir  = output_dir,
+            log         = log,
+            data        = data,
+            serpapi_key = getattr(args, "serpapi_key", "") or "",
+        ).run()
+        _pm.set_phase_status("phase14_dork", "complete", label="Phase 14: People Dorking")
+        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="complete")
         write_targets_snapshot(output_dir, data)
 
     # ── Phase 4.5: Shodan CLI — per-IP open-port lookup ───────────────────

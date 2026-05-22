@@ -73,320 +73,31 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
     except Exception:
         pass
 
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
+def _u_dual_write_meta(project_dir, *, tool: str, version: str,
+                       client_short: str = "", client_name: str = "",
+                       engagement_name: str = "", target: str = "") -> bool:
+    """Dual-write universal meta.json (schema 1.0). Graceful no-op when
+    /opt/pr0t31n/shared/pr0t31n_schema.py is not installed."""
     try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
+        import sys as _s
+        if "/opt/pr0t31n/shared" not in _s.path:
+            _s.path.insert(0, "/opt/pr0t31n/shared")
+        import pr0t31n_schema as _us
+    except ImportError:
+        return False
     try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
+        meta = _us.make_meta(
+            tool=tool, version=version,
+            client_short=client_short or "unknown",
+            client_name=client_name or client_short or "unknown",
+            engagement_name=engagement_name or f"{tool} run",
+            target=target or "",
         )
+        _us.atomic_write_json(Path(project_dir) / "meta.json", meta)
+        return True
     except Exception:
-        pass
+        return False
 
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _build_project_dir(client_short: str, start_date: str, tool_name: str) -> Path:
-    """
-    Build a structured project directory:
-      <clients_base>/<client_short>/<year>/<tool_name>/<client_short>_<datetime>/
-    """
-    import re as _re, datetime as _dt
-    slug = _re.sub(r'[^\w-]', '_', (client_short or 'client').strip().lower()).strip('_') or 'client'
-    year = (start_date[:4] if start_date and len(start_date) >= 4 and start_date[:4].isdigit()
-            else _dt.datetime.now().strftime('%Y'))
-    dt_str = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = _clients_base() / slug / year / tool_name / f"{slug}_{dt_str}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _write_project_meta(project_dir: Path, tool: str, client_short: str,
-                        year: str, version: str) -> None:
-    """Write project_meta.json so Flask apps can discover this project."""
-    import json as _json, datetime as _dt, socket as _sock
-    try:
-        (project_dir / "project_meta.json").write_text(
-            _json.dumps({
-                "tool":         tool,
-                "client_short": client_short,
-                "year":         year,
-                "created_at":   _dt.datetime.now().isoformat(),
-                "version":      version,
-                "hostname":     _sock.gethostname(),
-            }, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
 
 # ── Require elevated privileges ───────────────────────────────────────────────
 def _check_privileges() -> None:
@@ -838,7 +549,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -20038,6 +19749,14 @@ API key sources (all free tiers available):
             _yr = _dt.datetime.now().strftime("%Y")
         output_dir = _build_project_dir(_cs, _yr, "osift")
         _write_project_meta(output_dir, "osift", _cs, _yr, VERSION)
+        # Dual-write universal meta.json (schema 1.0) for Prometheus UniversalParser.
+        _u_dual_write_meta(
+            output_dir, tool="osift", version=VERSION,
+            client_short=_cs,
+            client_name=getattr(args, "client_name", "") or args.company,
+            engagement_name=getattr(args, "engagement_name", "") or f"OSift on {args.company}",
+            target=args.company,
+        )
     log          = ReconLogger(output_dir)
 
     # Start adaptive concurrency monitor (adjusts _SCAN_SEM based on CPU/RAM)

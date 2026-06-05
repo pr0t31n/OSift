@@ -549,7 +549,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5454,11 +5454,20 @@ class ReconLogger:
         returncode: int = 0,
         tool: Optional[str] = None,
         version: Optional[str] = None,
+        *,
+        output_file: Optional["Path"] = None,
+        tool_path:   Optional[str] = None,
+        started:     Optional["datetime.datetime"] = None,
+        ended:       Optional["datetime.datetime"] = None,
     ):
         """
         Record a shell command with full provenance.
 
         *tool* and *version* default to the current context if not supplied.
+
+        When *output_file* is supplied (and stdout/stderr/started/ended are
+        available), also emit a sibling .log file via the shared pr0t31n_tool_
+        runner — a bash-prompted transcript per CLAUDE.md Section 15.
         """
         tool_name = tool or self._tool
         tool_ver  = version or (TOOL_REGISTRY.get_version(tool_name) if tool else self._version)
@@ -5491,6 +5500,28 @@ class ReconLogger:
 
         if len(self._command_entries) % 20 == 0:
             self.flush_all()
+
+        # ── Per-invocation .log (bash-prompted transcript) ─────────────────
+        # Emit when the caller provided an output_file — that's our signal
+        # that there's a primary artifact to pair the .log with.
+        if output_file is not None:
+            try:
+                import sys as _s
+                if "/opt/pr0t31n/shared" not in _s.path:
+                    _s.path.insert(0, "/opt/pr0t31n/shared")
+                import pr0t31n_tool_runner as _ur
+                _st = started or datetime.datetime.now().astimezone()
+                _ed = ended   or datetime.datetime.now().astimezone()
+                _ur.write_tool_log(
+                    cmd=cmd, started=_st, ended=_ed,
+                    exit_code=returncode,
+                    stdout=stdout or "", stderr=stderr or "",
+                    tool_name=tool_name, tool_path=tool_path or tool_name,
+                    tool_version=tool_ver,
+                    output_file=output_file,
+                )
+            except Exception:
+                pass
 
     def flush_all(self):
         with self._write_lock:
@@ -12707,8 +12738,14 @@ class DNSEnrichmentRunner:
             f"-t 100 -rl 300 -silent"
         )
         self.log.info(f"[dnsx-enrich] Bulk-resolving {len(fqdns)} FQDNs (post-discovery pass)")
+        _dnsx_started = datetime.datetime.now().astimezone()
         stdout, stderr, rc = _shell(cmd)
-        self.log.log_command(cmd, stdout, stderr, rc)
+        _dnsx_ended = datetime.datetime.now().astimezone()
+        self.log.log_command(
+            cmd, stdout, stderr, rc,
+            output_file=out_json, tool_path=binary,
+            started=_dnsx_started, ended=_dnsx_ended,
+        )
 
         records_parsed = _parse_jsonl(out_json)
         resolved_hosts: List[str] = []

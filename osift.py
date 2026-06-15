@@ -549,7 +549,7 @@ _project_dir: Optional[Path] = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.7.0"
+VERSION = "2.9.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5101,6 +5101,367 @@ class HIBPDomainAPI:
                                f"(HIBP domain breach search failed: {e})")
 
 
+# ─── crt.sh direct JSON query (2026-06-11 review) ─────────────────────────────
+# crt.sh is the canonical public source for Certificate Transparency log
+# search; using it directly is faster + more current than indirect
+# Netlas/Shodan-SSL paths and requires no API key. Returns the full set
+# of certificates that ever named the target domain (or any subdomain).
+# Source: https://crt.sh/?q=%25.acme.com&output=json
+
+class CrtShAPI:
+    """Certificate Transparency log search via crt.sh's JSON endpoint."""
+
+    def __init__(self, domain: str, out_dir: Path,
+                  data: "ReconData", log: VantageConsole):
+        self.domain = domain
+        self.out    = out_dir / "company" / "tools" / "crtsh"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.data   = data
+        self.log    = log
+
+    def search(self) -> int:
+        import requests as _rq
+        url = f"https://crt.sh/?q=%25.{self.domain}&output=json"
+        self.log.info(f"[crt.sh] Query: {url}")
+        try:
+            r = _rq.get(url, timeout=30,
+                         headers={"User-Agent": "OSift/CrtShAPI"})
+            if r.status_code != 200:
+                self.log.warn(f"[crt.sh] HTTP {r.status_code}")
+                return 0
+            try:
+                data = r.json()
+            except Exception:
+                # Sometimes crt.sh returns concatenated objects; wrap into a
+                # JSON array and retry.
+                txt = r.text.strip()
+                if txt.startswith("{"):
+                    txt = "[" + txt.replace("}\n{", "},\n{") + "]"
+                data = json.loads(txt) if txt else []
+        except Exception as exc:
+            self.log.error(f"[crt.sh] Request error: {exc}", exc=exc)
+            return 0
+
+        # De-dup subdomains across the cert set
+        seen: set = set()
+        for entry in data:
+            name_value = entry.get("name_value") or entry.get("common_name") or ""
+            for sub in name_value.replace("*.", "").split("\n"):
+                sub = sub.strip().lower()
+                if sub and "." in sub and sub.endswith(self.domain.lower()):
+                    seen.add(sub)
+        # Persist raw
+        out_json = self.out / "crtsh_results.json"
+        out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        out_subs = self.out / "subdomains.txt"
+        out_subs.write_text("\n".join(sorted(seen)), encoding="utf-8")
+        # Emit one finding per unique subdomain that we hadn't seen before
+        added = 0
+        for sub in sorted(seen):
+            if sub == self.domain or sub == f"www.{self.domain}":
+                continue   # not novel
+            self.data.subdomains[sub] = self.data.subdomains.get(sub, {})
+            self.data.subdomains[sub].setdefault("sources", []).append("crt.sh")
+            add_finding(
+                self.data,
+                tool="crt.sh",
+                type_="subdomain_via_ct",
+                category=CAT_DNS,
+                severity="info",
+                detail=f"crt.sh CT log entry names subdomain {sub}",
+                domain=self.domain,
+                hostname=sub,
+                affected=sub,
+            )
+            added += 1
+        self.log.success(f"[crt.sh] {len(seen)} unique subdomains "
+                          f"(emitted {added} novel findings)")
+        return added
+
+
+# ─── IntelX (intelx.io) leak DB (2026-06-11 review) ──────────────────────────
+# IntelX indexes pastes, breach dumps, leaks, and dark-web sources. Free tier
+# allows limited searches per month. Pulls accounts/PII referencing the
+# target domain.
+
+class IntelXAPI:
+    """intelx.io selector search via their public API."""
+
+    def __init__(self, domain: str, out_dir: Path,
+                  data: "ReconData", log: VantageConsole,
+                  api_key: str = ""):
+        self.domain = domain
+        self.out    = out_dir / "company" / "tools" / "intelx"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.data   = data
+        self.log    = log
+        self.api_key = api_key
+        self.base = "https://2.intelx.io"
+
+    def run(self) -> int:
+        if not self.api_key:
+            self.log.info("[intelx] No API key configured — skipping")
+            return 0
+        import requests as _rq
+        headers = {"x-key": self.api_key,
+                   "User-Agent": "OSift/IntelXAPI"}
+        body = {
+            "term":  self.domain,
+            "buckets": [],
+            "lookuplevel": 0, "maxresults": 100,
+            "timeout": 5, "datefrom": "", "dateto": "",
+            "sort": 4, "media": 0, "terminate": [],
+        }
+        try:
+            r = _rq.post(f"{self.base}/intelligent/search", json=body,
+                          headers=headers, timeout=30)
+            if r.status_code != 200:
+                self.log.warn(f"[intelx] HTTP {r.status_code}")
+                return 0
+            search_id = (r.json() or {}).get("id", "")
+            if not search_id: return 0
+            _rate_sleep(3)
+            r = _rq.get(f"{self.base}/intelligent/search/result?id={search_id}&"
+                         f"limit=200&statistics=0&previewlines=8",
+                         headers=headers, timeout=30)
+            data = r.json() if r.status_code == 200 else {}
+        except Exception as exc:
+            self.log.error(f"[intelx] Request error: {exc}", exc=exc)
+            return 0
+
+        out_json = self.out / "intelx_results.json"
+        out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        records = data.get("records") or []
+        if not records:
+            return 0
+        for rec in records[:50]:
+            bucket = rec.get("bucket", "")
+            name   = rec.get("name", "")
+            date   = rec.get("date", "")
+            preview = (rec.get("preview") or "")[:400]
+            add_finding(
+                self.data,
+                tool="intelx",
+                type_="leak_db_match",
+                category=CAT_BREACH,
+                severity="medium",
+                detail=(f"IntelX bucket '{bucket}' returned a hit for "
+                         f"{self.domain}. Source: {name} ({date}). "
+                         f"Preview: {preview[:200]}"),
+                domain=self.domain,
+                affected=name or self.domain,
+            )
+        self.log.success(f"[intelx] {len(records)} records returned, "
+                          f"{min(50, len(records))} findings emitted")
+        return len(records)
+
+
+# ─── FOFA search (2026-06-11 review) ─────────────────────────────────────────
+# FOFA (en.fofa.info) is a global internet asset search engine similar to
+# Shodan. Useful for discovering pre-prod and forgotten infra hosting the
+# target's domain certificates or branding.
+
+class FOFAAPI:
+    def __init__(self, domain: str, out_dir: Path,
+                  data: "ReconData", log: VantageConsole,
+                  email: str = "", api_key: str = ""):
+        self.domain = domain
+        self.out    = out_dir / "company" / "tools" / "fofa"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.data   = data
+        self.log    = log
+        self.email  = email
+        self.api_key = api_key
+
+    def run(self) -> int:
+        if not self.api_key or not self.email:
+            self.log.info("[fofa] No credentials configured — skipping")
+            return 0
+        import requests as _rq, base64 as _b64
+        query = f'domain="{self.domain}"'
+        qb64  = _b64.b64encode(query.encode()).decode()
+        url = (f"https://fofa.info/api/v1/search/all?"
+                f"email={self.email}&key={self.api_key}&qbase64={qb64}&size=100&"
+                f"fields=ip,port,protocol,domain,title,server")
+        try:
+            r = _rq.get(url, timeout=30,
+                         headers={"User-Agent": "OSift/FOFAAPI"})
+            if r.status_code != 200:
+                self.log.warn(f"[fofa] HTTP {r.status_code}")
+                return 0
+            data = r.json()
+        except Exception as exc:
+            self.log.error(f"[fofa] Request error: {exc}", exc=exc)
+            return 0
+        out_json = self.out / "fofa_results.json"
+        out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        results = data.get("results") or []
+        for row in results[:200]:
+            if not isinstance(row, list) or len(row) < 4: continue
+            ip, port, proto, sub_domain, title, server = (row + [""] * 6)[:6]
+            if not sub_domain: continue
+            self.data.subdomains[sub_domain] = self.data.subdomains.get(sub_domain, {})
+            self.data.subdomains[sub_domain].setdefault("sources", []).append("fofa")
+            add_finding(
+                self.data,
+                tool="fofa",
+                type_="asset_discovered",
+                category=CAT_INFRA,
+                severity="info",
+                detail=f"FOFA: {sub_domain} on {ip}:{port}/{proto} "
+                       f"(server={server}, title={title!r})",
+                hostname=sub_domain, ip=ip,
+                affected=sub_domain, domain=self.domain,
+            )
+        self.log.success(f"[fofa] {len(results)} assets returned")
+        return len(results)
+
+
+# ─── ZoomEye search (2026-06-11 review) ──────────────────────────────────────
+# ZoomEye (zoomeye.org) is another global internet asset search engine.
+# Free tier offers 5,000 results/month per account.
+
+class ZoomEyeAPI:
+    def __init__(self, domain: str, out_dir: Path,
+                  data: "ReconData", log: VantageConsole,
+                  api_key: str = ""):
+        self.domain = domain
+        self.out    = out_dir / "company" / "tools" / "zoomeye"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.data   = data
+        self.log    = log
+        self.api_key = api_key
+
+    def run(self) -> int:
+        if not self.api_key:
+            self.log.info("[zoomeye] No API key configured — skipping")
+            return 0
+        import requests as _rq
+        headers = {"API-KEY": self.api_key, "User-Agent": "OSift/ZoomEyeAPI"}
+        try:
+            r = _rq.get(f"https://api.zoomeye.org/host/search?"
+                         f"query=hostname:{self.domain}&page=1",
+                         headers=headers, timeout=30)
+            if r.status_code != 200:
+                self.log.warn(f"[zoomeye] HTTP {r.status_code}")
+                return 0
+            data = r.json()
+        except Exception as exc:
+            self.log.error(f"[zoomeye] Request error: {exc}", exc=exc)
+            return 0
+        out_json = self.out / "zoomeye_results.json"
+        out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        matches = data.get("matches") or []
+        for m in matches[:200]:
+            ip   = m.get("ip", "")
+            host = (m.get("rdns") or m.get("hostname") or "")
+            port = (m.get("portinfo") or {}).get("port", 0)
+            svc  = (m.get("portinfo") or {}).get("service", "")
+            if host:
+                self.data.subdomains[host] = self.data.subdomains.get(host, {})
+                self.data.subdomains[host].setdefault("sources", []).append("zoomeye")
+            add_finding(
+                self.data,
+                tool="zoomeye",
+                type_="asset_discovered",
+                category=CAT_INFRA,
+                severity="info",
+                detail=f"ZoomEye: {host or ip}:{port} ({svc})",
+                hostname=host, ip=ip, affected=host or ip, domain=self.domain,
+            )
+        self.log.success(f"[zoomeye] {len(matches)} matches returned")
+        return len(matches)
+
+
+# ─── GitHub leak detection via trufflehog + gitleaks (2026-06-11 review) ─────
+# Runs whichever of the two tools is installed against a list of git
+# clone URLs (typically obtained from the client's public GitHub org).
+
+class GitLeakScanner:
+    def __init__(self, domain: str, out_dir: Path,
+                  data: "ReconData", log: VantageConsole,
+                  repos: list[str] | None = None):
+        self.domain = domain
+        self.out    = out_dir / "company" / "tools" / "gitleaks"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.data   = data
+        self.log    = log
+        self.repos  = repos or []
+
+    def run(self) -> int:
+        import shutil as _shu, subprocess as _sp, tempfile as _tmp
+        if not self.repos:
+            self.log.info("[gitleaks] No repos supplied — skipping")
+            return 0
+        trufflehog = _shu.which("trufflehog")
+        gitleaks   = _shu.which("gitleaks")
+        if not trufflehog and not gitleaks:
+            self.log.info("[gitleaks] Neither trufflehog nor gitleaks installed — skipping")
+            add_finding(self.data, tool="gitleaks",
+                          type_="tool_not_installed", category=CAT_INFRA,
+                          severity="info",
+                          detail=("GitHub leak detection SKIPPED — neither trufflehog "
+                                  "nor gitleaks is installed. Install one to enable."),
+                          domain=self.domain)
+            return 0
+        total_findings = 0
+        for repo_url in self.repos[:20]:
+            self.log.info(f"[gitleaks] Scanning {repo_url}")
+            with _tmp.TemporaryDirectory(prefix="osift_gitleaks_") as tmpdir:
+                clone_cmd = ["git", "clone", "--depth", "50", repo_url, tmpdir]
+                try:
+                    _sp.run(clone_cmd, capture_output=True, text=True, timeout=300)
+                except Exception:
+                    continue
+                if trufflehog:
+                    out_path = self.out / f"trufflehog_{Path(repo_url).stem}.json"
+                    cmd = [trufflehog, "filesystem", tmpdir, "--json",
+                            "--no-update"]
+                    try:
+                        res = _sp.run(cmd, capture_output=True, text=True, timeout=1800)
+                        out_path.write_text(res.stdout, encoding="utf-8")
+                        for line in res.stdout.splitlines():
+                            try: hit = json.loads(line)
+                            except json.JSONDecodeError: continue
+                            if hit.get("Verified") or hit.get("ExtraData"):
+                                total_findings += 1
+                                add_finding(self.data,
+                                              tool="trufflehog",
+                                              type_="github_secret_leak",
+                                              category=CAT_BREACH,
+                                              severity="high" if hit.get("Verified") else "medium",
+                                              detail=(f"trufflehog flagged secret in {repo_url}: "
+                                                       f"{hit.get('DetectorName', '?')} "
+                                                       f"({'VERIFIED' if hit.get('Verified') else 'unverified'})"),
+                                              affected=repo_url, domain=self.domain)
+                    except Exception as exc:
+                        self.log.error(f"[trufflehog] {repo_url}: {exc}", exc=exc)
+                elif gitleaks:
+                    out_path = self.out / f"gitleaks_{Path(repo_url).stem}.json"
+                    cmd = [gitleaks, "detect", "--source", tmpdir,
+                            "--report-format", "json",
+                            "--report-path", str(out_path), "--no-banner"]
+                    try:
+                        _sp.run(cmd, capture_output=True, text=True, timeout=1800)
+                        if out_path.exists():
+                            findings = json.loads(out_path.read_text(encoding="utf-8") or "[]")
+                            for hit in findings:
+                                total_findings += 1
+                                add_finding(self.data,
+                                              tool="gitleaks",
+                                              type_="github_secret_leak",
+                                              category=CAT_BREACH,
+                                              severity="high",
+                                              detail=(f"gitleaks flagged secret in {repo_url}: "
+                                                       f"{hit.get('Description', '?')} "
+                                                       f"(rule: {hit.get('RuleID', '?')})"),
+                                              affected=repo_url, domain=self.domain)
+                    except Exception as exc:
+                        self.log.error(f"[gitleaks] {repo_url}: {exc}", exc=exc)
+        self.log.success(f"[gitleaks] {total_findings} leak findings across {len(self.repos[:20])} repos")
+        return total_findings
+
+
 # ─── OSINTAPIs orchestrator ───────────────────────────────────────────────────
 
 class OSINTAPIOrchestrator:
@@ -5142,6 +5503,12 @@ class OSINTAPIOrchestrator:
         otx_key:                str = "",
         hunter_key:             str = "",
         hibp_key:               str = "",
+        # 2026-06-11 review round 4 additions:
+        intelx_key:             str = "",
+        fofa_email:             str = "",
+        fofa_key:               str = "",
+        zoomeye_key:            str = "",
+        github_repos:           list | None = None,
     ):
         self.domain     = domain
         self.company    = company
@@ -5181,6 +5548,18 @@ class OSINTAPIOrchestrator:
         self.hibp_domain = HIBPDomainAPI(
             domain, output_dir, log, data, api_key=hibp_key
         )
+        # 2026-06-11 review: crt.sh CT-log search added as keyless
+        # tier-1 source. Runs before Shodan/Censys to seed subdomain
+        # discovery for downstream phases.
+        self.crtsh = CrtShAPI(domain, output_dir, data, log)
+        # 2026-06-11 review round 4: additional API clients. Each one is
+        # skipped gracefully when its key/email is not configured.
+        self.intelx  = IntelXAPI(domain, output_dir, data, log, api_key=intelx_key)
+        self.fofa    = FOFAAPI(domain, output_dir, data, log,
+                                email=fofa_email, api_key=fofa_key)
+        self.zoomeye = ZoomEyeAPI(domain, output_dir, data, log, api_key=zoomeye_key)
+        self.gitleaks = GitLeakScanner(domain, output_dir, data, log,
+                                          repos=github_repos or [])
 
     def run(self):
         """Run all enabled API integrations in sequence."""
@@ -5191,22 +5570,33 @@ class OSINTAPIOrchestrator:
         )
 
         # Tier-1: Attack Surface & Infrastructure
+        self.crtsh.search();        self.log.reset_tool_context(); _rate_sleep(2)
         self.fullhunt.run();        self.log.reset_tool_context(); _rate_sleep(3)
         self.securitytrails.run();  self.log.reset_tool_context(); _rate_sleep(3)
         self.netlas.run();          self.log.reset_tool_context(); _rate_sleep(3)
         self.shodan.run();          self.log.reset_tool_context(); _rate_sleep(3)
-        self.censys.run();          self.log.reset_tool_context()
+        self.censys.run();          self.log.reset_tool_context(); _rate_sleep(3)
+        # 2026-06-11 review round 4: additional asset-discovery sources.
+        self.fofa.run();            self.log.reset_tool_context(); _rate_sleep(3)
+        self.zoomeye.run();         self.log.reset_tool_context()
 
         # Tier-2: Threat Intelligence & Reputation
         _rate_sleep(3)
         self.virustotal.run();  self.log.reset_tool_context(); _rate_sleep(3)
         self.urlscan.run();     self.log.reset_tool_context(); _rate_sleep(3)
-        self.otx.run();         self.log.reset_tool_context()
+        self.otx.run();         self.log.reset_tool_context(); _rate_sleep(3)
+        # 2026-06-11 review round 4: IntelX paste/leak-DB search.
+        self.intelx.run();      self.log.reset_tool_context()
 
         # Tier-3: Email & People Intelligence
         _rate_sleep(3)
         self.hunter.run();      self.log.reset_tool_context(); _rate_sleep(2)
         self.hibp_domain.run(); self.log.reset_tool_context()
+
+        # 2026-06-11 review round 4: GitHub leak detection via gitleaks/trufflehog.
+        # Runs only when github_repos was provided at construction time.
+        _rate_sleep(2)
+        self.gitleaks.run();    self.log.reset_tool_context()
 
         # ── Post-API summary ───────────────────────────────────────────────────
         self.log.set_tool_context("OSift")
@@ -11374,14 +11764,66 @@ class CloudEnumRunner:
                     "GCS"   if "storage.googleapis" in bucket_url else
                     "Cloud"
                 )
-                findings.append({"url": bucket_url, "provider": provider, "status": status_tag})
+                # 2026-06-11 review re-verification: cloud_enum sometimes
+                # emits "found" tags on buckets that are actually 403/404.
+                # Confirm with a direct HTTP GET before emitting HIGH.
+                _verified = "unverified"
+                _verify_evidence = ""
+                try:
+                    import requests as _rq
+                    _r = _rq.get(bucket_url, timeout=8, allow_redirects=True,
+                                  verify=False)
+                    _verify_evidence = f"HTTP {_r.status_code}; {_r.text[:200]}"
+                    if _r.status_code == 200:
+                        # Body content must look like a directory listing OR
+                        # the expected XML form for S3/Azure/GCS to confirm.
+                        _body = _r.text.lower()
+                        if any(s in _body for s in (
+                                "<listbucketresult", "enumerationresults",
+                                "<items>", "<contents>", "blob name=\"",
+                                "<key>", "next-marker")):
+                            _verified = "open_with_listable_content"
+                        elif "access denied" in _body or "noSuchBucket" in _body.lower():
+                            _verified = "exists_not_listable"
+                        else:
+                            _verified = "open_200"
+                    elif _r.status_code == 403:
+                        _verified = "exists_but_403"
+                    elif _r.status_code in (404, 410):
+                        _verified = "does_not_exist"
+                    else:
+                        _verified = f"http_{_r.status_code}"
+                except Exception as _exc:
+                    _verified = f"verify_failed:{_exc}"
+                # Risk gating by verification outcome.
+                if _verified == "open_with_listable_content":
+                    _risk = "high"
+                    _detail = (f"cloud_enum: {provider} storage bucket is publicly "
+                                f"listable. Verified via direct HTTP GET.")
+                elif _verified == "open_200":
+                    _risk = "medium"
+                    _detail = (f"cloud_enum: {provider} bucket returned HTTP 200 but "
+                                f"listing content was not confirmed; manual review needed.")
+                elif _verified == "exists_but_403":
+                    _risk = "low"
+                    _detail = (f"cloud_enum: {provider} bucket exists but is access-"
+                                f"controlled (HTTP 403). Information disclosure only.")
+                elif _verified == "does_not_exist":
+                    continue   # Skip — false-positive from cloud_enum
+                else:
+                    _risk = "low"
+                    _detail = (f"cloud_enum: {provider} bucket — verification "
+                                f"inconclusive ({_verified}). Manual review recommended.")
+                findings.append({
+                    "url": bucket_url, "provider": provider, "status": status_tag,
+                    "verified": _verified, "verify_evidence": _verify_evidence[:300]})
                 add_finding(
                     self.data,
                     tool="cloud_enum",
                     type_="exposed_cloud_storage",
                     category=CAT_INFRA,
-                    severity="high",
-                    detail=f"cloud_enum: {provider} storage bucket is publicly accessible",
+                    severity=_risk,
+                    detail=_detail,
                     url=bucket_url, affected=bucket_url,
                     domain=self.domain,
                     provider=provider,

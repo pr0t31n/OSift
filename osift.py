@@ -401,6 +401,14 @@ class VantageConsole:
                tools: "dict | None" = None,
                active_tool: str = "",
                active_tools: "list | None" = None) -> None:
+        _OSIFT_PHASE[0] = phase   # §14h: current phase for per-request HTTP evidence
+        # §14j: persist the phase transition to the run-dir audit log with a
+        # timestamp, unconditionally (the status token below is ephemeral / live-UI).
+        if _RUNLOG is not None:
+            try:
+                _RUNLOG.event(f"phase {phase}: {status}" + (f" — {step}" if step else ""))
+            except Exception:
+                pass
         if not self._managed:
             return
         with self._lock:
@@ -546,10 +554,23 @@ _pm: "ProgressManager | None" = None
 # Optional Vantage project root; when set, evidence output_file paths are stored
 # relative to this directory instead of output_dir (so Vantage can serve them).
 _project_dir: Optional[Path] = None
+_OSIFT_PHASE = ["recon"]   # §14h: current phase label for per-request HTTP evidence
+
+# §14j: run-dir audit logger (scan.log + scan.log.json + errors.log), set in
+# main() once the run directory is known. Phase transitions persist here so the
+# audit trail survives without the live Vantage manager attached.
+try:
+    import sys as _s14j
+    if "/opt/pr0t31n/shared" not in _s14j.path:
+        _s14j.path.insert(0, "/opt/pr0t31n/shared")
+    import pr0t31n_event_log as _el
+except ImportError:
+    _el = None
+_RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.9.0"
+VERSION = "2.11.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -1896,6 +1917,10 @@ class FindingStore:
         ts      = timestamp or datetime.datetime.now(datetime.UTC).isoformat()
         version = TOOL_REGISTRY.get_version(tool)
         fp      = self._fingerprint(type, detail, cve, ip, host, url, email, domain, phone)
+
+        # §13c: store evidence paths relative to the run directory root.
+        if extra.get("output_file") and _project_dir is not None:
+            extra["output_file"] = _rel_output_file(str(extra["output_file"]), _project_dir)
 
         validation = {
             "tool":      tool,
@@ -5892,9 +5917,10 @@ class ReconLogger:
             self.flush_all()
 
         # ── Per-invocation .log (bash-prompted transcript) ─────────────────
-        # Emit when the caller provided an output_file — that's our signal
-        # that there's a primary artifact to pair the .log with.
-        if output_file is not None:
+        # §14: ALWAYS emit a .log sibling for every tool invocation. When the
+        # caller passed an output_file the .log sits next to it; otherwise it
+        # lands in the run directory root (log_dir fallback).
+        if True:
             try:
                 import sys as _s
                 if "/opt/pr0t31n/shared" not in _s.path:
@@ -5909,6 +5935,7 @@ class ReconLogger:
                     tool_name=tool_name, tool_path=tool_path or tool_name,
                     tool_version=tool_ver,
                     output_file=output_file,
+                    log_dir=(_project_dir if output_file is None else None),
                 )
             except Exception:
                 pass
@@ -5960,6 +5987,18 @@ def make_session() -> "requests.Session":
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
     })
+    # §14h: per-request evidence triplet (request/response/.log) for every
+    # in-process HTTP call through this session, once the run dir is known.
+    if _project_dir is not None:
+        try:
+            import sys as _sys
+            if "/opt/pr0t31n/shared" not in _sys.path:
+                _sys.path.insert(0, "/opt/pr0t31n/shared")
+            import pr0t31n_http_evidence as _he
+            _he.attach_http_evidence(session, _project_dir,
+                                     phase_getter=lambda: _OSIFT_PHASE[0])
+        except Exception:
+            pass
     return session
 
 
@@ -20237,6 +20276,16 @@ API key sources (all free tiers available):
             target=args.company,
         )
     log          = ReconLogger(output_dir)
+
+    # §14j: run-dir audit log (scan.log + scan.log.json + errors.log) at the run
+    # root so phase transitions are persisted with timestamps even standalone.
+    global _RUNLOG
+    if _el is not None:
+        try:
+            _RUNLOG = _el.EventLogger(output_dir / "scan.log",
+                                       errors_path=output_dir / "errors.log")
+        except Exception:
+            _RUNLOG = None
 
     # Start adaptive concurrency monitor (adjusts _SCAN_SEM based on CPU/RAM)
     _start_concurrency_monitor(_SCAN_SEM)

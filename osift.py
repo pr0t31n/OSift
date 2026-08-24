@@ -570,7 +570,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.11.0"
+VERSION = "2.11.1"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -9849,8 +9849,9 @@ class WebCrawler:
         _parsed   = urllib.parse.urlparse(url)
         _host     = (_parsed.hostname or self.data.domain).lower().rstrip(".")
         _ts       = datetime.datetime.now(datetime.UTC).isoformat()
+        _safe_url = re.sub(r'[^\w-]', '_', url)[:100]
         _ev_file  = content_file or str(
-            self.output_dir / "pages" / f"{re.sub(r'[^\w-]', '_', url)[:100]}.json"
+            self.output_dir / "pages" / f"{_safe_url}.json"
         )
 
         def _emit(software: str, version: str) -> None:

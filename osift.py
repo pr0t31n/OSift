@@ -20,6 +20,10 @@ import sys
 import platform
 from pathlib import Path
 
+# ── UTC compat shim (datetime.UTC requires Python 3.11+) ─────────────────────
+import datetime as _dt_mod
+_UTC = _dt_mod.timezone.utc
+
 # ── Detect OS ─────────────────────────────────────────────────────────────────
 SYSTEM = platform.system()          # 'Linux', 'Darwin', 'Windows'
 IS_WINDOWS = SYSTEM == "Windows"
@@ -571,7 +575,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.11.2"
+VERSION = "2.11.4"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -1713,7 +1717,7 @@ class ToolRegistry:
         """Manually register a tool name and its version string."""
         with self._lock:
             self._tools[tool] = version
-            self._query_ts[tool] = queried_at or datetime.datetime.now(datetime.UTC).isoformat()
+            self._query_ts[tool] = queried_at or datetime.datetime.now(_UTC).isoformat()
 
     def get_version(self, tool: str) -> str:
         """Return the cached version string, or 'unknown' if not registered."""
@@ -1733,7 +1737,7 @@ class ToolRegistry:
             return self._tools[name]
 
         version = self._detect_version(binary)
-        ts      = datetime.datetime.now(datetime.UTC).isoformat()
+        ts      = datetime.datetime.now(_UTC).isoformat()
         self.register(name, version, ts)
         return version
 
@@ -1775,7 +1779,7 @@ class ToolRegistry:
 TOOL_REGISTRY = ToolRegistry()
 
 # Pre-register OSift itself
-TOOL_REGISTRY.register("OSift", VERSION, datetime.datetime.now(datetime.UTC).isoformat())
+TOOL_REGISTRY.register("OSift", VERSION, datetime.datetime.now(_UTC).isoformat())
 
 # Pre-register known API services (no binary to query; versions are API versions)
 _API_TOOL_VERSIONS: Dict[str, str] = {
@@ -1915,7 +1919,7 @@ class FindingStore:
         *validation entry* is appended to the existing record rather
         than creating a duplicate.
         """
-        ts      = timestamp or datetime.datetime.now(datetime.UTC).isoformat()
+        ts      = timestamp or datetime.datetime.now(_UTC).isoformat()
         version = TOOL_REGISTRY.get_version(tool)
         fp      = self._fingerprint(type, detail, cve, ip, host, url, email, domain, phone)
 
@@ -2095,7 +2099,7 @@ class ReconData:
     company: str
     domain: str
     domains: List[str] = field(default_factory=list)
-    start_time: str = field(default_factory=lambda: datetime.datetime.now(datetime.UTC).isoformat())
+    start_time: str = field(default_factory=lambda: datetime.datetime.now(_UTC).isoformat())
     end_time: str = ""
 
     subdomains: Dict[str, Dict] = field(default_factory=dict)
@@ -5099,7 +5103,7 @@ class HIBPDomainAPI:
                         "source":       "hibp",
                         "tool":         "hibp",
                         "tool_version": TOOL_REGISTRY.get_version("hibp"),
-                        "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+                        "timestamp":    datetime.datetime.now(_UTC).isoformat(),
                         "output_file":  str(self.out / "domain_breaches.json"),
                     })
                     breach_count += 1
@@ -5406,7 +5410,7 @@ class ZoomEyeAPI:
 class GitLeakScanner:
     def __init__(self, domain: str, out_dir: Path,
                   data: "ReconData", log: VantageConsole,
-                  repos: list[str] | None = None):
+                  repos: "list[str] | None" = None):
         self.domain = domain
         self.out    = out_dir / "company" / "tools" / "gitleaks"
         self.out.mkdir(parents=True, exist_ok=True)
@@ -5534,7 +5538,7 @@ class OSINTAPIOrchestrator:
         fofa_email:             str = "",
         fofa_key:               str = "",
         zoomeye_key:            str = "",
-        github_repos:           list | None = None,
+        github_repos:           "list | None" = None,
     ):
         self.domain     = domain
         self.company    = company
@@ -5640,7 +5644,7 @@ class OSINTAPIOrchestrator:
 
         # Write consolidated summary
         summary = {
-            "timestamp":        datetime.datetime.now(datetime.UTC).isoformat(),
+            "timestamp":        datetime.datetime.now(_UTC).isoformat(),
             "domain":           self.domain,
             "company":          self.company,
             "subdomains_total": total_subs,
@@ -5887,7 +5891,7 @@ class ReconLogger:
         """
         tool_name = tool or self._tool
         tool_ver  = version or (TOOL_REGISTRY.get_version(tool_name) if tool else self._version)
-        ts        = datetime.datetime.now(datetime.UTC).isoformat()
+        ts        = datetime.datetime.now(_UTC).isoformat()
 
         entry = {
             "timestamp":    ts,
@@ -5952,7 +5956,7 @@ class ReconLogger:
 
     def _log_json(self, level: str, msg: str, extra: dict):
         entry = {
-            "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+            "timestamp":    datetime.datetime.now(_UTC).isoformat(),
             "level":        level,
             "tool":         self._tool,
             "tool_version": self._version,
@@ -5966,7 +5970,7 @@ class ReconLogger:
     def _write_error(self, msg: str, exc: Optional[Exception]):
         with self._write_lock:
             with open(self.error_log_path, "a", encoding="utf-8") as f:
-                ts = datetime.datetime.now(datetime.UTC).isoformat()
+                ts = datetime.datetime.now(_UTC).isoformat()
                 f.write(f"[{ts}] [{self._tool}/{self._version}] {msg}\n")
                 if exc:
                     f.write(traceback.format_exc())
@@ -7874,7 +7878,7 @@ class CertificateCollector:
         # socket.getaddrinfo() internally with NO timeout — on slow or dead DNS
         # each call can block for 30-60 s, exhausting all worker threads and
         # stalling the entire phase.  Connecting by IP + SNI avoids that.
-        host_ips: dict[str, str] = {}
+        host_ips: "dict[str, str]" = {}
         if DNS_AVAILABLE:
             _res = dns.resolver.Resolver()
             _res.timeout     = 2
@@ -8335,7 +8339,7 @@ class EmailAndPeopleOSINT:
                             "source":       "hibp",
                             "tool":         "hibp",
                             "tool_version": TOOL_REGISTRY.get_version("hibp"),
-                            "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+                            "timestamp":    datetime.datetime.now(_UTC).isoformat(),
                             "output_file":  str(self.output_dir / "company" / "breach_data" / "hibp_results.json"),
                         })
                 time.sleep(1.6)
@@ -8367,7 +8371,7 @@ class EmailAndPeopleOSINT:
                             "source":       "dehashed",
                             "tool":         "dehashed",
                             "tool_version": TOOL_REGISTRY.get_version("dehashed"),
-                            "timestamp":    datetime.datetime.now(datetime.UTC).isoformat(),
+                            "timestamp":    datetime.datetime.now(_UTC).isoformat(),
                             "output_file":  str(self.output_dir / "company" / "breach_data" / "dehashed_results.json"),
                         })
             except Exception as e:
@@ -9063,7 +9067,7 @@ class EdgarIntelligence:
                 f"SEC 8-K M&A: {name} ({rel})",
                 domain=target["domains"][0] if target["domains"] else "",
                 affected=domain_list,
-                timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+                timestamp=datetime.datetime.now(_UTC).isoformat(),
                 filing_date=target.get("filing_date", ""),
                 accession_no=target.get("accession_no", ""),
                 acquired_company=name,
@@ -9242,7 +9246,7 @@ class EdgarIntelligence:
         ma_targets: List[Dict[str, Any]],
     ) -> None:
         """Write JSON artefact files under the edgar output directory."""
-        ts = datetime.datetime.now(datetime.UTC).isoformat()
+        ts = datetime.datetime.now(_UTC).isoformat()
 
         # Company profile — includes website if available
         profile = {
@@ -9745,7 +9749,7 @@ class WebCrawler:
                         _host_arg = ""
                         _source   = "OSift-Crawl"
 
-                    ts       = datetime.datetime.now(datetime.UTC).isoformat()
+                    ts       = datetime.datetime.now(_UTC).isoformat()
                     safe_cat = re.sub(r'[^\w]', '_', category).lower()
                     cat_file = self.output_dir.parent / "sensitive_data" / f"{safe_cat}.jsonl"
 
@@ -9849,7 +9853,7 @@ class WebCrawler:
         """
         _parsed   = urllib.parse.urlparse(url)
         _host     = (_parsed.hostname or self.data.domain).lower().rstrip(".")
-        _ts       = datetime.datetime.now(datetime.UTC).isoformat()
+        _ts       = datetime.datetime.now(_UTC).isoformat()
         _safe_url = re.sub(r'[^\w-]', '_', url)[:100]
         _ev_file  = content_file or str(
             self.output_dir / "pages" / f"{_safe_url}.json"
@@ -14399,7 +14403,7 @@ class ProjectDiscoveryOrchestrator:
     # ── Summary ───────────────────────────────────────────────────────────────
     def _write_summary(self):
         summary = {
-            "timestamp":       datetime.datetime.now(datetime.UTC).isoformat(),
+            "timestamp":       datetime.datetime.now(_UTC).isoformat(),
             "domain":          self.domain,
             "tools_enabled":   [t for t, ok in self.avail.items() if ok],
             "tools_disabled":  [t for t, ok in self.avail.items() if not ok],
@@ -14451,7 +14455,7 @@ def aggregate_sensitive_data(output_dir: Path, log: ReconLogger, data: ReconData
         by_cat[f.get("category", "Uncategorized")].append(f)
 
     summary = {
-        "generated_at":   datetime.datetime.now(datetime.UTC).isoformat(),
+        "generated_at":   datetime.datetime.now(_UTC).isoformat(),
         "tool":           "OSift",
         "tool_version":   VERSION,
         "total_findings": len(all_findings),
@@ -15098,7 +15102,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
             json.dumps({
                 "domain":     data.domain,
                 "company":    data.company,
-                "generated":  datetime.datetime.now(datetime.UTC).isoformat(),
+                "generated":  datetime.datetime.now(_UTC).isoformat(),
                 "subdomains": sorted(_subs_map.values(), key=lambda x: x["host"]),
                 "emails":     sorted(_emails_map.values(), key=lambda x: x["email"]),
                 "ips":        sorted(_ips_map.values(), key=lambda x: x["ip"]),
@@ -15175,7 +15179,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     """
     log.set_tool_context("OSift")
     log.info("[REPORT] Generating final correlated report")
-    data.end_time = datetime.datetime.now(datetime.UTC).isoformat()
+    data.end_time = datetime.datetime.now(_UTC).isoformat()
 
     # ── Email Address findings ─────────────────────────────────────────────────
     # Split emails into in-scope (email @domain matches any target domain or
@@ -15766,7 +15770,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         or r.get("http_status",  "") not in _NO_RESP_SET
         or r.get("https_status", "") not in _NO_RESP_SET
     }
-    _sub_ts = datetime.datetime.now(datetime.UTC).isoformat()
+    _sub_ts = datetime.datetime.now(_UTC).isoformat()
     for fqdn, meta in sorted(data.subdomains.items()):
         if fqdn not in _confirmed_fqdns:
             continue
@@ -17208,12 +17212,12 @@ class IntelAggregator:
         return {
             "meta": {
                 "osift_version":          VERSION,
-                "generated_at":           datetime.datetime.now(datetime.UTC).isoformat(),
+                "generated_at":           datetime.datetime.now(_UTC).isoformat(),
                 "target_domain":          d.domain,
                 "target_company":         d.company,
                 "primary_domains_in_scope": sorted(self.classifier.primary_domains),
                 "scan_started":           d.start_time,
-                "scan_ended":             d.end_time or datetime.datetime.now(datetime.UTC).isoformat(),
+                "scan_ended":             d.end_time or datetime.datetime.now(_UTC).isoformat(),
                 "tools_run":              TOOL_REGISTRY.all_tools(),
             },
             "stats": {
@@ -17762,7 +17766,7 @@ class IntelAggregator:
         Push classification-derived facts into the FindingStore so they are
         included in findings_report.json and the executive summary.
         """
-        ts = datetime.datetime.now(datetime.UTC).isoformat()
+        ts = datetime.datetime.now(_UTC).isoformat()
         data = self.data
 
         # Primary subdomain findings are deferred to generate_final_report where
@@ -18237,7 +18241,7 @@ class IntelAggregator:
         Vantage schema per item:
           title, datetime, ip, port, hostname, risk, command, description, output
         """
-        ts   = intel["meta"].get("generated_at", datetime.datetime.now(datetime.UTC).isoformat())
+        ts   = intel["meta"].get("generated_at", datetime.datetime.now(_UTC).isoformat())
         rows: List[Dict] = []
 
         def _row(title: str, description: str, *,
@@ -20908,7 +20912,7 @@ API key sources (all free tiers available):
     _pm.set_phase_status("phase9_report", "running", label="Phase 9: Aggregation & Report")
     _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="running")
     _section(log, "PHASE 9: Aggregation & Final Report")
-    data.end_time = datetime.datetime.now(datetime.UTC).isoformat()
+    data.end_time = datetime.datetime.now(_UTC).isoformat()
 
     # Step 9a: Raw output parsing — walk every file produced by every tool,
     #          extract emails/phones/subdomains/IPs/URLs, merge into ReconData.

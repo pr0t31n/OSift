@@ -18,6 +18,7 @@ Usage:
 import os
 import sys
 import platform
+from pathlib import Path
 
 # ── Detect OS ─────────────────────────────────────────────────────────────────
 SYSTEM = platform.system()          # 'Linux', 'Darwin', 'Windows'
@@ -570,7 +571,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.11.1"
+VERSION = "2.11.2"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────

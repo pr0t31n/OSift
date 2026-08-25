@@ -584,7 +584,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.11.8"
+VERSION = "2.12.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -9907,9 +9907,21 @@ class WebCrawler:
                     safe_cat = re.sub(r'[^\w]', '_', category).lower()
                     cat_file = self.output_dir.parent / "sensitive_data" / f"{safe_cat}.jsonl"
 
-                    # Context-aware risk: downgrade when finding sits on a
-                    # known default page (the info on the page is public knowledge).
-                    _risk = "high"
+                    # Per-category risk levels.  Only secrets / credentials
+                    # warrant HIGH; recon intel (emails, phones, IPs, comments)
+                    # is informational.
+                    _CATEGORY_RISK = {
+                        "Email Addresses": "info",
+                        "Phone Numbers":   "info",
+                        "IP Addresses":    "info",
+                        "Comments":        "info",
+                        "Credit Cards":    "critical",
+                        "Social Security": "high",
+                    }
+                    _risk = _CATEGORY_RISK.get(category, "high")
+
+                    # Context-aware downgrade: findings on a known default page
+                    # are public knowledge, not real disclosure.
                     if _default_page_label:
                         if category == "Internal Paths":
                             _risk = "low"
@@ -9936,7 +9948,7 @@ class WebCrawler:
                     if _confirmed_source:
                         add_finding(
                             self.data, _confirmed_source,
-                            _confirmed_type, category, "high",
+                            _confirmed_type, category, "info",
                             "Phone Number Pattern Spotted - Confirmed",
                             url="", affected=_affected,
                             host=_host_arg,
@@ -18036,9 +18048,8 @@ class IntelAggregator:
 
         Severity mapping
         ----------------
-        high    — directly exploitable absence (no SPF, no DMARC, no CAA)
-        medium  — weak policy that meaningfully reduces protection
-                  (SPF +all, DMARC p=none, CAA present but no issuewild)
+        medium  — missing security control (no SPF, no DMARC, no CAA);
+                  also weak policy (SPF +all, DMARC p=none, CAA no issuewild)
         low     — hardening recommendation (no DNSSEC, no MTA-STS, no TLS-RPT,
                   no BIMI, missing DKIM selectors)
         info    — positive confirmation of a control being correctly configured
@@ -18059,7 +18070,7 @@ class IntelAggregator:
         # ── SPF ───────────────────────────────────────────────────────────────
         if not ss.get("spf_present"):
             add_finding(
-                data, "OSift-DNS", "dns_no_spf", self.CAT_DNS, "high",
+                data, "OSift-DNS", "dns_no_spf", self.CAT_DNS, "medium",
                 "No SPF record found. Without SPF, any host can send email "
                 "claiming to be from this domain, enabling phishing and spoofing attacks.",
                 domain=domain, affected=domain, timestamp=ts,
@@ -18108,7 +18119,7 @@ class IntelAggregator:
         # ── DMARC ─────────────────────────────────────────────────────────────
         if not ss.get("dmarc_present"):
             add_finding(
-                data, "OSift-DNS", "dns_no_dmarc", self.CAT_DNS, "high",
+                data, "OSift-DNS", "dns_no_dmarc", self.CAT_DNS, "medium",
                 "No DMARC record found. Without DMARC, receiving servers have no policy for "
                 "handling SPF/DKIM failures, leaving the domain open to spoofing.",
                 domain=domain, affected=domain, timestamp=ts,
@@ -18150,7 +18161,7 @@ class IntelAggregator:
         # ── CAA ───────────────────────────────────────────────────────────────
         if not ss.get("caa_present"):
             add_finding(
-                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "high",
+                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "medium",
                 "No CAA record found. Without CAA, any public Certificate Authority can issue "
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,

@@ -159,6 +159,15 @@ import time
 import traceback
 import urllib.parse
 import warnings
+# Suppress urllib3 NotOpenSSLWarning (LibreSSL on macOS).  Must use Warning (not
+# UserWarning) because NotOpenSSLWarning → SecurityWarning → HTTPWarning → Warning.
+# Must be set BEFORE any urllib3 import because the warning fires at import time.
+warnings.filterwarnings("ignore", message=".*OpenSSL.*", category=Warning)
+try:
+    from urllib3.exceptions import NotOpenSSLWarning
+    warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
+except ImportError:
+    pass
 import uuid as _uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -575,7 +584,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.11.4"
+VERSION = "2.11.8"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -1108,69 +1117,74 @@ def load_settings(settings_path: Union[str, Path]) -> Dict[str, Any]:
     warnings: List[str]      = []
     env_keys: List[str]      = []
 
-    for section_name, section_val in doc.items():
-        if not isinstance(section_val, dict):
-            warnings.append(f"Section '{section_name}' is not a dict — skipped")
-            continue
+    def _process_key(key, value, section_label):
+        """Validate, coerce, and store a single settings key."""
+        if key == "_comment":
+            return
 
-        for key, value in section_val.items():
-            if key == "_comment":
-                continue
+        schema = _FLAT_SCHEMA.get(key)
 
-            schema = _FLAT_SCHEMA.get(key)
+        if schema is None:
+            # Silently ignore Vantage-only metadata keys (consultant, etc.)
+            return
 
-            if schema is None:
-                warnings.append(f"  [{section_name}] Unknown key '{key}' — ignored")
-                continue
+        # Skip empty / placeholder values
+        if value in ("", None, [], "YOUR_KEY_HERE", "YOUR_API_ID_HERE",
+                     "YOUR_API_SECRET_HERE", "YOUR_EMAIL_HERE",
+                     "/path/to/cloudlist.yaml", False):
+            return
 
-            # Skip empty / placeholder values
-            if value in ("", None, [], "YOUR_KEY_HERE", "YOUR_API_ID_HERE",
-                         "YOUR_API_SECRET_HERE", "YOUR_EMAIL_HERE",
-                         "/path/to/cloudlist.yaml", False):
-                continue
+        # ── Environment-variable settings ──────────────────────────────
+        if schema.get("env"):
+            if isinstance(value, str) and value.strip():
+                os.environ[key] = value.strip()
+                env_keys.append(key)
+            return
 
-            # ── Environment-variable settings ──────────────────────────────
-            if schema.get("env"):
-                if isinstance(value, str) and value.strip():
-                    os.environ[key] = value.strip()
-                    env_keys.append(key)
-                continue
+        dest = schema.get("dest")
+        if dest is None:
+            return
 
-            dest = schema.get("dest")
-            if dest is None:
-                continue
-
-            # ── Type coercion with friendly errors ─────────────────────────
-            expected_type = schema.get("type", str)
-            try:
-                if expected_type is bool:
-                    if isinstance(value, bool):
-                        coerced = value
-                    elif isinstance(value, str):
-                        coerced = value.lower() in ("true", "1", "yes", "on")
-                    else:
-                        coerced = bool(value)
-                elif expected_type is int:
-                    coerced = int(value)
-                elif expected_type is list:
-                    if isinstance(value, list):
-                        coerced = [str(v).strip() for v in value if str(v).strip()]
-                    else:
-                        coerced = [str(value).strip()] if str(value).strip() else []
+        # ── Type coercion with friendly errors ─────────────────────────
+        expected_type = schema.get("type", str)
+        try:
+            if expected_type is bool:
+                if isinstance(value, bool):
+                    coerced = value
+                elif isinstance(value, str):
+                    coerced = value.lower() in ("true", "1", "yes", "on")
                 else:
-                    coerced = str(value).strip()
-            except (ValueError, TypeError) as exc:
-                warnings.append(
-                    f"  [{section_name}] '{key}': expected {expected_type.__name__}, "
-                    f"got {type(value).__name__!r} ({value!r}) — skipped ({exc})"
-                )
-                continue
+                    coerced = bool(value)
+            elif expected_type is int:
+                coerced = int(value)
+            elif expected_type is list:
+                if isinstance(value, list):
+                    coerced = [str(v).strip() for v in value if str(v).strip()]
+                else:
+                    coerced = [str(value).strip()] if str(value).strip() else []
+            else:
+                coerced = str(value).strip()
+        except (ValueError, TypeError) as exc:
+            warnings.append(
+                f"  [{section_label}] '{key}': expected {expected_type.__name__}, "
+                f"got {type(value).__name__!r} ({value!r}) — skipped ({exc})"
+            )
+            return
 
-            # Skip strings that are only whitespace after stripping
-            if expected_type is str and not coerced:
-                continue
+        # Skip strings that are only whitespace after stripping
+        if expected_type is str and not coerced:
+            return
 
-            result[dest] = coerced
+        result[dest] = coerced
+
+    for section_name, section_val in doc.items():
+        if isinstance(section_val, dict):
+            # Nested format: {"api_keys": {"shodan_key": "..."}}
+            for key, value in section_val.items():
+                _process_key(key, value, section_name)
+        else:
+            # Flat format (Vantage): {"shodan_key": "...", "company": "..."}
+            _process_key(section_name, section_val, "flat")
 
     if warnings:
         print("[SETTINGS] Warnings while loading settings file:")
@@ -1652,6 +1666,98 @@ def _validate_ssn(val: str) -> Tuple[bool, str]:
         return False, "012-34-5678 is a sequential example, not a real SSN"
 
     return True, ""
+
+
+# ─── Default webpage detection ───────────────────────────────────────────────
+
+# Signatures: (compiled_regex, label).  Matched against the full response body.
+_DEFAULT_PAGE_SIGNATURES = [
+    (re.compile(r'<title>\s*Apache2\s+(?:Ubuntu|Debian)\s+Default\s+Page', re.IGNORECASE),
+     "Apache2 Default Page"),
+    (re.compile(r'<title>\s*Apache\s+HTTP\s+[Ss]erver\s+Test\s+Page', re.IGNORECASE),
+     "Apache HTTP Server Test Page"),
+    (re.compile(r'<title>\s*(?:IIS|Internet Information Services)\s', re.IGNORECASE),
+     "Microsoft IIS Default Page"),
+    (re.compile(r'<title>\s*IIS\s+Windows\s+Server\s*</title>', re.IGNORECASE),
+     "Microsoft IIS Default Page"),
+    (re.compile(r'<title>\s*Welcome\s+to\s+nginx', re.IGNORECASE),
+     "nginx Default Page"),
+    (re.compile(r'<title>\s*Test\s+Page\s+for\s+(?:the\s+)?(?:Apache|Nginx)\s', re.IGNORECASE),
+     "Default Web Server Test Page"),
+    (re.compile(r'<title>\s*(?:Welcome\s+to\s+)?(?:CentOS|Red\s*Hat|Fedora|Rocky|AlmaLinux)\b', re.IGNORECASE),
+     "Linux Distribution Default Page"),
+    (re.compile(r'It works!\s*</h1>.*apache', re.IGNORECASE | re.DOTALL),
+     "Apache Default Page"),
+    (re.compile(r'<title>\s*Congratulations.*XAMPP', re.IGNORECASE),
+     "XAMPP Default Page"),
+    (re.compile(r'<title>\s*Welcome\s+to\s+XAMPP', re.IGNORECASE),
+     "XAMPP Default Page"),
+]
+
+
+def _detect_default_page(body: str) -> Optional[str]:
+    """Return the default-page label if the body matches a known default page, else None."""
+    for pat, label in _DEFAULT_PAGE_SIGNATURES:
+        if pat.search(body):
+            return label
+    return None
+
+
+# ─── Content-context false-positive filters ──────────────────────────────────
+
+def _is_base64_context(text: str, match_start: int, window: int = 120) -> bool:
+    """Check if a match sits inside a base64-encoded blob (font data, images, etc.)."""
+    left  = max(0, match_start - window)
+    ctx   = text[left:match_start + window]
+    # Base64 data URIs in CSS/HTML
+    if re.search(r'(?:data:|base64[,;]|url\(data:)', ctx, re.IGNORECASE):
+        return True
+    # Long runs of base64 chars (60+ contiguous) surrounding the match
+    if re.search(r'[A-Za-z0-9+/=]{60,}', ctx):
+        return True
+    return False
+
+
+def _is_minified_js(text: str, match_start: int, window: int = 200) -> bool:
+    """Check if a match sits inside minified/bundled JavaScript."""
+    left  = max(0, match_start - window)
+    right = min(len(text), match_start + window)
+    ctx   = text[left:right]
+    # Minified JS has very few newlines and lots of punctuation per character.
+    # If the 400-char window around the match has < 3 newlines and high symbol
+    # density, it's almost certainly minified JS / webpack / bundled code.
+    newlines = ctx.count('\n')
+    if newlines > 4:
+        return False
+    # JS property-access patterns: foo.password, base.password, etc.
+    js_signals = (
+        re.search(r'[a-z]\.[a-z]+\s*=\s*[a-z]+\.[a-z]', ctx)            # a.x=b.y
+        or re.search(r'(?:function|var|let|const|return|this)\b', ctx)     # JS keywords
+        or re.search(r'=>\s*{|}\s*\)\s*;', ctx)                           # arrow fns / closures
+        or re.search(r'\.exports\s*=|module\.exports|require\(', ctx)     # CJS modules
+        or re.search(r'__webpack_|__NEXT_|webpackJsonp', ctx)             # webpack bundles
+        or re.search(r'\bVue\b|\bReact\b|\bAngular\b', ctx)              # framework refs
+    )
+    if js_signals:
+        return True
+    # High punctuation density = minified code
+    punct = sum(1 for c in ctx if c in '(){};,=!&|?:[]')
+    if len(ctx) > 50 and punct / len(ctx) > 0.12:
+        return True
+    return False
+
+
+def _is_css_hiding_comment(val: str) -> bool:
+    """Detect XHTML CSS-hiding comments: <!-- body { color:... --> wrapping <style>."""
+    inner = re.sub(r'^<!--\s*|\s*-->$', '', val).strip()
+    # Contains CSS rule syntax: selector { property: value }
+    if re.search(r'[a-z\-]+\s*\{[^}]*[a-z\-]+\s*:', inner, re.IGNORECASE):
+        return True
+    # Starts with a CSS property declaration (lowercase-hyphenated: value)
+    # Must look like actual CSS (color:, font-size:, margin:), not TODO:/FIXME:/NOTE:
+    if re.match(r'[a-z]+(?:-[a-z]+)*\s*:\s*[#\w]', inner) and not re.match(r'[A-Z]', inner):
+        return True
+    return False
 
 
 # ─── Phone finding helper ─────────────────────────────────────────────────────
@@ -5157,7 +5263,7 @@ class CrtShAPI:
             r = _rq.get(url, timeout=30,
                          headers={"User-Agent": "OSift/CrtShAPI"})
             if r.status_code != 200:
-                self.log.warn(f"[crt.sh] HTTP {r.status_code}")
+                self.log.warning(f"[crt.sh] HTTP {r.status_code}")
                 return 0
             try:
                 data = r.json()
@@ -5246,7 +5352,7 @@ class IntelXAPI:
             r = _rq.post(f"{self.base}/intelligent/search", json=body,
                           headers=headers, timeout=30)
             if r.status_code != 200:
-                self.log.warn(f"[intelx] HTTP {r.status_code}")
+                self.log.warning(f"[intelx] HTTP {r.status_code}")
                 return 0
             search_id = (r.json() or {}).get("id", "")
             if not search_id: return 0
@@ -5317,7 +5423,7 @@ class FOFAAPI:
             r = _rq.get(url, timeout=30,
                          headers={"User-Agent": "OSift/FOFAAPI"})
             if r.status_code != 200:
-                self.log.warn(f"[fofa] HTTP {r.status_code}")
+                self.log.warning(f"[fofa] HTTP {r.status_code}")
                 return 0
             data = r.json()
         except Exception as exc:
@@ -5373,7 +5479,7 @@ class ZoomEyeAPI:
                          f"query=hostname:{self.domain}&page=1",
                          headers=headers, timeout=30)
             if r.status_code != 200:
-                self.log.warn(f"[zoomeye] HTTP {r.status_code}")
+                self.log.warning(f"[zoomeye] HTTP {r.status_code}")
                 return 0
             data = r.json()
         except Exception as exc:
@@ -6424,8 +6530,9 @@ def check_amass(log: ReconLogger) -> bool:
             gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
             gobin  = os.path.join(gopath, "bin")
             env    = os.environ.copy()
-            env["GOPATH"] = gopath
-            env["PATH"]   = gobin + os.pathsep + env.get("PATH", "")
+            env["GOPATH"]  = gopath
+            env["GOCACHE"] = env.get("GOCACHE", os.path.join(os.environ.get("HOME", "/var/root"), ".cache", "go-build"))
+            env["PATH"]    = gobin + os.pathsep + env.get("PATH", "")
             try:
                 r = subprocess.run(
                     [go, "install", "github.com/owasp-amass/amass/v4/...@master"],
@@ -6632,8 +6739,9 @@ def _try_install_binary(name: str, apt_pkg: Optional[str], pip_pkg: Optional[str
             gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
             gobin  = os.path.join(gopath, "bin")
             env    = os.environ.copy()
-            env["GOPATH"] = gopath
-            env["PATH"]   = gobin + os.pathsep + env.get("PATH", "")
+            env["GOPATH"]  = gopath
+            env["GOCACHE"] = env.get("GOCACHE", os.path.join(os.environ.get("HOME", "/var/root"), ".cache", "go-build"))
+            env["PATH"]    = gobin + os.pathsep + env.get("PATH", "")
             try:
                 r = subprocess.run([go, "install", go_pkg],
                                    capture_output=True, text=True,
@@ -7862,6 +7970,7 @@ class AmassEnumerator:
 class CertificateCollector:
     def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
         self.output_dir = output_dir / "certificates"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log        = log
         self.data       = data
 
@@ -8021,6 +8130,7 @@ class CertificateCollector:
 class IPIntelligence:
     def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
         self.output_dir = output_dir / "ip_addresses"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log        = log
         self.data       = data
 
@@ -8116,6 +8226,7 @@ class IPIntelligence:
 class WhoisCollector:
     def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData, domain: str = ""):
         self.output_dir = _domain_path(output_dir, domain) / "whois" if domain else output_dir / "whois"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log        = log
         self.data       = data
         self._lock      = threading.Lock()
@@ -8401,9 +8512,12 @@ class EmailAndPeopleOSINT:
 
     def _save_emails(self):
         emails_dir = self.output_dir / "company" / "emails"
+        emails_dir.mkdir(parents=True, exist_ok=True)
         (emails_dir / "all_emails.json").write_text(json.dumps(self.data.email_addresses, indent=2), encoding="utf-8")
         (emails_dir / "all_emails.txt").write_text("\n".join(sorted(self.data.email_addresses.keys())), encoding="utf-8")
-        (self.output_dir / "company" / "employees" / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
+        emp_dir = self.output_dir / "company" / "employees"
+        emp_dir.mkdir(parents=True, exist_ok=True)
+        (emp_dir / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
 
 
 # ─── Company Intelligence ─────────────────────────────────────────────────────
@@ -9375,6 +9489,7 @@ class CompanyIntelligence:
             )
             if resp.status_code == 200:
                 out = self.output_dir / "company" / "info" / "sec_edgar.json"
+                out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(json.dumps(resp.json(), indent=2), encoding="utf-8")
         except Exception as e:
             self.log.debug(f"[COMPANY] SEC EDGAR: {e}")
@@ -9410,6 +9525,7 @@ class CompanyIntelligence:
                     pass
 
         out = self.output_dir / "company" / "info" / "associated" / "domains.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(self.data.associated_domains, indent=2), encoding="utf-8")
 
     def _search_subsidiaries(self):
@@ -9432,6 +9548,7 @@ class CompanyIntelligence:
         except Exception as e:
             self.log.debug(f"[COMPANY] Subsidiaries: {e}")
         out = self.output_dir / "company" / "info" / "associated" / "companies.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(self.data.associated_companies, indent=2), encoding="utf-8")
 
 
@@ -9592,10 +9709,25 @@ class WebCrawler:
         _safe_fn  = re.sub(r'[^\w\-]', '_', url)[:100]
         page_file = self.output_dir / "pages" / f"{_safe_fn}.json"
 
+        # ── Default webpage detection ─────────────────────────────────────
+        _default_page_label = _detect_default_page(text)
+        if _default_page_label:
+            _dp_ts = datetime.datetime.now(_UTC).isoformat()
+            add_finding(
+                self.data, "OSift-Crawl",
+                "default_page", CAT_WEB, "info",
+                "Default Webpage Detected",
+                url=url, affected=f"{_default_page_label} — {url}",
+                host=_url_host,
+                timestamp=_dp_ts,
+                output_file=content_file or str(page_file),
+            )
+
         for category, patterns in SENSITIVE_PATTERNS.items():
             for pattern in patterns:
-                for match in re.findall(pattern, text, re.IGNORECASE | re.DOTALL):
-                    val = match if isinstance(match, str) else str(match)
+                for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
+                    val = match.group() if isinstance(match.group(), str) else str(match.group())
+                    _match_start = match.start()
 
                     # Per-category validation and field assignment.
                     # _confirmed_source: if not None, a second "Confirmed" finding is
@@ -9608,6 +9740,21 @@ class WebCrawler:
                     _gen_sw_affected: str = ""
                     _gen_sw_name:     str = ""
                     _gen_sw_ver:      str = ""
+
+                    # ── AWS Keys — skip base64-encoded content (fonts, images)
+                    if category == "AWS Keys":
+                        if _is_base64_context(text, _match_start):
+                            continue
+
+                    # ── Passwords / API Keys — skip minified JS property access
+                    if category in ("Passwords", "API Keys"):
+                        if _is_minified_js(text, _match_start):
+                            continue
+
+                    # ── Social Security — skip minified JS bundles
+                    if category == "Social Security":
+                        if _is_minified_js(text, _match_start):
+                            continue
 
                     # ── IP Addresses ──────────────────────────────────────────
                     if category == "IP Addresses":
@@ -9684,6 +9831,9 @@ class WebCrawler:
                         _url_arg  = url
                         _host_arg = _domain   # originating domain, not crawled hostname
                         _source   = "OSift-Crawl"
+                        # Downgrade risk when found on a known default page
+                        if _default_page_label:
+                            _affected = f"{url} - {val} (on {_default_page_label})"
 
                     # ── HTML/JS Comments ─────────────────────────────────────
                     elif category == "Comments":
@@ -9692,6 +9842,10 @@ class WebCrawler:
                         # These are purely structural markers with no intel value.
                         _inner = re.sub(r'^<!--\s*|\s*-->$', '', val).strip()
                         if re.fullmatch(r'[\w\s/.\-]+', _inner) and len(_inner) <= 40:
+                            continue
+                        # Skip XHTML CSS-hiding comments: <!-- body { color:#000 -->
+                        # Standard XHTML practice for wrapping <style> content; not a disclosure.
+                        if _is_css_hiding_comment(val):
                             continue
                         _title    = f"{category} pattern detected: {val[:80]}"
                         _affected = url
@@ -9753,9 +9907,18 @@ class WebCrawler:
                     safe_cat = re.sub(r'[^\w]', '_', category).lower()
                     cat_file = self.output_dir.parent / "sensitive_data" / f"{safe_cat}.jsonl"
 
+                    # Context-aware risk: downgrade when finding sits on a
+                    # known default page (the info on the page is public knowledge).
+                    _risk = "high"
+                    if _default_page_label:
+                        if category == "Internal Paths":
+                            _risk = "low"
+                        elif category == "Comments":
+                            _risk = "info"
+
                     fid = add_finding(
                         self.data, _source,
-                        "sensitive_data", category, "high",
+                        "sensitive_data", category, _risk,
                         _title,
                         url=_url_arg, affected=_affected,
                         host=_host_arg,
@@ -12471,8 +12634,9 @@ def _go_install(tool: str, go_path: str, log: "ReconLogger") -> bool:
     gopath = os.environ.get("GOPATH", os.path.expanduser("~/go"))
     gobin  = os.path.join(gopath, "bin")
     env    = os.environ.copy()
-    env["GOPATH"] = gopath
-    env["PATH"]   = gobin + os.pathsep + env.get("PATH", "")
+    env["GOPATH"]  = gopath
+    env["GOCACHE"] = env.get("GOCACHE", os.path.join(os.environ.get("HOME", "/var/root"), ".cache", "go-build"))
+    env["PATH"]    = gobin + os.pathsep + env.get("PATH", "")
 
     try:
         result = subprocess.run(
@@ -12615,6 +12779,7 @@ def _write_resolvers(output_dir: Path) -> Path:
 def _write_hosts_file(hosts: List[str], output_dir: Path, name: str = "hosts.txt") -> Path:
     """Write a list of hostnames/IPs to a file for piping into PD tools."""
     path = output_dir / "logs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(hosts), encoding="utf-8")
     return path
 
@@ -13759,6 +13924,7 @@ class PDKatana:
             seeds.append(f"https://{host}")
             seeds.append(f"http://{host}")
         path = self.out.parent.parent / "logs" / "katana_seeds.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(seeds), encoding="utf-8")
         return path
 
@@ -13835,14 +14001,30 @@ class PDKatana:
 
             # Scan response body for sensitive patterns
             body = (entry.get("response", {}).get("body") or "")[:8000]
+            _kt_default_label = _detect_default_page(body)
             for category, patterns in SENSITIVE_PATTERNS.items():
                 for pattern in patterns:
-                    matches = re.findall(pattern, body)
-                    for m in matches[:5]:
-                        val = m if isinstance(m, str) else str(m)
+                    for _kt_m in re.finditer(pattern, body, re.IGNORECASE | re.DOTALL):
+                        val = _kt_m.group() if isinstance(_kt_m.group(), str) else str(_kt_m.group())
+                        _kt_pos = _kt_m.start()
+                        # Context-aware false-positive filters (same as WebCrawler)
+                        if category == "AWS Keys" and _is_base64_context(body, _kt_pos):
+                            continue
+                        if category in ("Passwords", "API Keys") and _is_minified_js(body, _kt_pos):
+                            continue
+                        if category == "Social Security" and _is_minified_js(body, _kt_pos):
+                            continue
+                        if category == "Comments" and _is_css_hiding_comment(val):
+                            continue
+                        _kt_risk = "high"
+                        if _kt_default_label:
+                            if category == "Internal Paths":
+                                _kt_risk = "low"
+                            elif category == "Comments":
+                                _kt_risk = "info"
                         add_finding(
                             self.data, "katana",
-                            "sensitive_data", category, "high",
+                            "sensitive_data", category, _kt_risk,
                             f"{category} pattern detected: {val[:80]}",
                             url=url, affected=url,
                             matched_value=val[:80],
@@ -14464,6 +14646,7 @@ def aggregate_sensitive_data(output_dir: Path, log: ReconLogger, data: ReconData
         "findings":       dict(by_cat),
     }
     out = output_dir / "company" / "sensitive_data" / "summary.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     log.success(
         f"[SENSITIVE] {len(all_findings)} findings "
@@ -15340,6 +15523,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     }
 
     report_path = output_dir / "reports" / "final_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(full_report, indent=2, default=str), encoding="utf-8")
 
     # ── Plain-text executive summary ───────────────────────────────────────────
@@ -19832,6 +20016,18 @@ class PeopleDorker:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    # When running under sudo/launchd, HOME may be unset — fall back so that
+    # os.path.expanduser("~") works and Go tools can locate their cache.
+    if not os.environ.get("HOME"):
+        _home = os.path.expanduser("~")
+        if _home == "~":
+            import pwd
+            try:
+                _home = pwd.getpwuid(os.getuid()).pw_dir
+            except KeyError:
+                _home = "/var/root" if os.getuid() == 0 else "/tmp"
+        os.environ["HOME"] = _home
+
     # Install the persistent sticky banner. This must happen before any other
     # output so the scroll region is configured correctly from the start.
     BANNER_MGR.install()
@@ -20169,42 +20365,6 @@ API key sources (all free tiers available):
                         help="Client short name / abbreviation for project directory naming")
     parser.add_argument("--year",                 default="",     metavar="YYYY",
                         help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
-    parser.add_argument("--client-short",         default="",     metavar="SLUG",
-                        help="Client short name / abbreviation for project directory naming")
-    parser.add_argument("--year",                 default="",     metavar="YYYY",
-                        help="Engagement year for project directory naming (default: current year)")
     parser.add_argument("--output-base",          default="",     help="Override base output directory path")
     parser.add_argument("--project-dir",          default="",     help="Vantage project root; evidence paths stored relative to this directory")
     parser.add_argument(
@@ -20259,9 +20419,10 @@ API key sources (all free tiers available):
     _project_dir = project_dir  # expose for write_targets_snapshot()
 
     if args.output_base:
-        # Explicit base path overrides structured layout
-        base_path = Path(args.output_base)
-        output_dir = setup_directory_structure(args.company, args.domains[0], base_path)
+        # Explicit base path (from Vantage) — use as-is, just ensure subdirs exist
+        output_dir = Path(args.output_base)
+        for _sd in ("logs", "domains", "company", "ip_addresses", "api_intel", "reports"):
+            (output_dir / _sd).mkdir(parents=True, exist_ok=True)
     else:
         # Structured layout: clients_base/client_short/year/osift/client_short_datetime/
         import re as _re, datetime as _dt
@@ -20639,7 +20800,7 @@ API key sources (all free tiers available):
         _vc.status("phase5_whois", label="Phase 5: WHOIS", status="running",
                    active_tool="whois")
         _section(log, "PHASE 5: WHOIS Collection")
-        WhoisCollector(output_dir, log, data, domain).run()
+        WhoisCollector(output_dir, log, data, args.domains[0]).run()
         _pm.set_phase_status("phase5_whois", "complete", label="Phase 5: WHOIS")
         _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
 
@@ -20702,7 +20863,7 @@ API key sources (all free tiers available):
         _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="running",
                    active_tool="web_crawl")
         _section(log, "PHASE 8: Web Crawling & Sensitive Data Discovery")
-        WebCrawler(output_dir, log, data, args.max_pages, args.max_depth, domain).run()
+        WebCrawler(output_dir, log, data, args.max_pages, args.max_depth, args.domains[0]).run()
         _pm.set_phase_status("phase8_crawl", "complete", label="Phase 8: Web Crawling")
         _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="complete")
 

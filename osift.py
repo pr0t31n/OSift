@@ -584,7 +584,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.12.0"
+VERSION = "2.12.1"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -13364,6 +13364,7 @@ class DNSEnrichmentRunner:
                         domain=self.domain,
                         affected=fqdn,
                         output_file=_a_out,
+                        title="DNS Records Resolved",
                     )
                 # Write per-FQDN file for evidence linking
                 _fqdn_file = self.out_dig / f"{_safe_filename(fqdn)}.json"
@@ -13454,6 +13455,7 @@ class DNSEnrichmentRunner:
                     detail=f"TXT records resolved: {'; '.join(txt_records[:5])}",
                     host=host, domain=self.domain, affected=host,
                     output_file=str(_host_file),
+                    title="DNS TXT Record Resolved",
                 )
 
             sub_entry = self.data.subdomains.setdefault(
@@ -18075,6 +18077,7 @@ class IntelAggregator:
                 "claiming to be from this domain, enabling phishing and spoofing attacks.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing SPF Record",
             )
         else:
             policy = ss.get("spf_policy", "")
@@ -18085,6 +18088,7 @@ class IntelAggregator:
                     "This completely negates SPF protection and enables trivial spoofing.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="Permissive SPF Record (+all)",
                 )
             elif "softfail" in policy:
                 add_finding(
@@ -18093,6 +18097,7 @@ class IntelAggregator:
                     "flagged but not rejected. Consider upgrading to '-all' (hardfail).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="SPF Softfail Policy (~all)",
                 )
             elif "neutral" in policy:
                 add_finding(
@@ -18100,6 +18105,7 @@ class IntelAggregator:
                     "SPF record uses '?all' (neutral), providing no meaningful protection against spoofing.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="SPF Neutral Policy (?all)",
                 )
             elif "no_all_mechanism" in policy:
                 add_finding(
@@ -18107,6 +18113,7 @@ class IntelAggregator:
                     "SPF record has no 'all' mechanism. Receiving servers may treat unlisted senders inconsistently.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="Missing SPF All Mechanism",
                 )
             else:
                 add_finding(
@@ -18114,6 +18121,7 @@ class IntelAggregator:
                     f"SPF record present with strict policy ({policy}).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="SPF Record Present",
                 )
 
         # ── DMARC ─────────────────────────────────────────────────────────────
@@ -18124,6 +18132,7 @@ class IntelAggregator:
                 "handling SPF/DKIM failures, leaving the domain open to spoofing.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing DMARC Record",
             )
         else:
             dmarc_policy = ss.get("dmarc_policy", "")
@@ -18135,6 +18144,7 @@ class IntelAggregator:
                     "legitimate senders are covered.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="DMARC Policy: Monitor Only",
                 )
             elif dmarc_policy == "quarantine":
                 add_finding(
@@ -18142,6 +18152,7 @@ class IntelAggregator:
                     "DMARC policy is 'p=quarantine'. Consider upgrading to 'p=reject' for maximum spoofing protection.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="DMARC Policy: Quarantine",
                 )
             elif dmarc_policy == "reject":
                 add_finding(
@@ -18149,6 +18160,7 @@ class IntelAggregator:
                     "DMARC policy is 'p=reject' — optimal configuration. Spoofed messages are rejected outright.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="DMARC Policy: Reject",
                 )
             else:
                 add_finding(
@@ -18156,6 +18168,7 @@ class IntelAggregator:
                     f"DMARC record present (policy: {dmarc_policy or 'unrecognised'}).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="DMARC Record Present",
                 )
 
         # ── CAA ───────────────────────────────────────────────────────────────
@@ -18166,6 +18179,7 @@ class IntelAggregator:
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing CAA Record",
             )
         else:
             issuers    = ss.get("caa_issuers", [])
@@ -18182,6 +18196,7 @@ class IntelAggregator:
                     f"but has no 'issuewild' tag. Wildcard certificates may still be issued by any CA.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="Missing CAA Issuewild",
                 )
             else:
                 add_finding(
@@ -18189,6 +18204,7 @@ class IntelAggregator:
                     f"CAA record restricts issuance to: {', '.join(issuers)} (wildcard: {', '.join(wild_issuers)}).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="CAA Record Present",
                 )
 
         # ── DNSSEC ────────────────────────────────────────────────────────────
@@ -18200,6 +18216,7 @@ class IntelAggregator:
                 "(cache poisoning / MITM). Enable DNSSEC at your registrar to protect against this.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing DNSSEC",
             )
         else:
             has_key = dnssec.get("dnskey_present")
@@ -18209,6 +18226,7 @@ class IntelAggregator:
                 f"DNSSEC is enabled (DNSKEY: {'yes' if has_key else 'no'}, DS: {'yes' if has_ds else 'no'}).",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="DNSSEC Enabled",
             )
 
         # ── DKIM ─────────────────────────────────────────────────────────────
@@ -18221,6 +18239,7 @@ class IntelAggregator:
                 "this domain cannot be cryptographically authenticated by receivers.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing DKIM Record",
             )
         else:
             # Check for revoked keys (empty p= tag)
@@ -18237,12 +18256,14 @@ class IntelAggregator:
                     f"depend on the revoked selector.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
+                    title="DKIM Revoked Key",
                 )
             add_finding(
                 data, "OSift-DNS", "dns_dkim_ok", self.CAT_DNS, "info",
                 f"DKIM public key(s) found on selector(s): {', '.join(dkim_selectors)}.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="DKIM Record Present",
             )
 
         # ── MTA-STS ───────────────────────────────────────────────────────────
@@ -18253,6 +18274,7 @@ class IntelAggregator:
                 "preventing downgrade attacks on inbound mail.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing MTA-STS Policy",
             )
         else:
             add_finding(
@@ -18260,6 +18282,7 @@ class IntelAggregator:
                 "MTA-STS policy record present.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="MTA-STS Policy Present",
             )
 
         # ── TLS-RPT ───────────────────────────────────────────────────────────
@@ -18270,6 +18293,7 @@ class IntelAggregator:
                 "STARTTLS failures to a nominated address, enabling visibility into mail delivery issues.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="Missing TLS-RPT Record",
             )
         else:
             add_finding(
@@ -18277,6 +18301,7 @@ class IntelAggregator:
                 "TLS-RPT reporting record present.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="TLS-RPT Record Present",
             )
 
         # ── BIMI ─────────────────────────────────────────────────────────────
@@ -18291,6 +18316,7 @@ class IntelAggregator:
                 "BIMI record found" + (f" — logo: {logo}" if logo else "") + ".",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
+                title="BIMI Record Present",
             )
 
     # ─── File writer ──────────────────────────────────────────────────────────

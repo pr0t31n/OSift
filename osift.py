@@ -584,7 +584,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.12.1"
+VERSION = "2.12.2"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -1625,6 +1625,8 @@ def _validate_ssn(val: str) -> Tuple[bool, str]:
       • Serial (NNNN): never 0000
       • Known advertised/test SSNs (078-05-1120, 219-09-9999, 123-45-6789)
       • All-same digit / perfectly sequential digits
+      • Ascending/descending runs
+      • Repeated area-group or group-serial pairs
 
     References:
       SSA POMS RM 00201.010 — SSN Structure
@@ -1665,7 +1667,35 @@ def _validate_ssn(val: str) -> Tuple[bool, str]:
     if digits == "012345678":
         return False, "012-34-5678 is a sequential example, not a real SSN"
 
+    # ── Ascending / descending run ───────────────────────────────────────────
+    _asc  = all(int(digits[i+1]) - int(digits[i]) == 1  for i in range(8))
+    _desc = all(int(digits[i]) - int(digits[i+1]) == 1  for i in range(8))
+    if _asc or _desc:
+        return False, "monotonic ascending/descending sequence — synthetic"
+
+    # ── Repeated sub-patterns (e.g. 123121234) ──────────────────────────────
+    if digits[:3] == digits[3:6] or digits[3:5] == digits[5:7]:
+        return False, "repeated digit group — likely synthetic"
+
+    # ── Bare 9-digit number (no separators) — extremely noisy ────────────────
+    # A raw run of 9 digits with no dashes/spaces is far more likely to be a
+    # phone fragment, account number, or CSS/JS value than an SSN.
+    if re.fullmatch(r'\d{9}', val):
+        return False, "bare 9-digit run without separators — too noisy for SSN"
+
     return True, ""
+
+
+def _ssn_has_context(text: str, pos: int) -> bool:
+    """Return True if SSN-related keywords appear near position *pos*."""
+    _SSN_KEYWORDS = re.compile(
+        r'(?:social\s*security|SSN|tax\s*(?:id|identification)|TIN|ITIN|'
+        r'taxpayer|W[\s-]?2|W[\s-]?9|1099|SSA|POMS)',
+        re.IGNORECASE,
+    )
+    window_start = max(0, pos - 300)
+    window_end   = min(len(text), pos + 300)
+    return bool(_SSN_KEYWORDS.search(text[window_start:window_end]))
 
 
 # ─── Default webpage detection ───────────────────────────────────────────────
@@ -7334,33 +7364,33 @@ class DNSEnumerator:
 
         if not ss["spf_present"]:
             add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "MEDIUM",
-                        "Missing SPF Record",
+                        "DNS: Missing SPF Record",
                         domain=self.domain, affected=self.domain,
                         description="No SPF record found. Without SPF, attackers can spoof email from this domain.",
                         output_file=_rec_file)
         elif ss.get("spf_policy", "").lower() == "+all":
             add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "HIGH",
-                        "Permissive SPF Record (+all)",
+                        "DNS: Permissive SPF Record (+all)",
                         domain=self.domain, affected=self.domain,
                         description="SPF record uses '+all', which permits any host to send mail on behalf of this domain.",
                         output_file=_rec_file)
 
         if not ss["dmarc_present"]:
             add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "MEDIUM",
-                        "Missing DMARC Record",
+                        "DNS: Missing DMARC Record",
                         domain=self.domain, affected=self.domain,
                         description="No DMARC record found. Without DMARC, spoofed emails are not rejected or quarantined.",
                         output_file=_rec_file)
         elif ss.get("dmarc_policy", "").lower() == "none":
             add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "LOW",
-                        "DMARC Policy: Monitor Only",
+                        "DNS: DMARC Policy: Monitor Only",
                         domain=self.domain, affected=self.domain,
                         description="DMARC policy is 'p=none' (monitor only). Spoofed emails are reported but not blocked.",
                         output_file=_rec_file)
 
         if not ss["caa_present"]:
             add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "INFO",
-                        "Missing CAA Record",
+                        "DNS: Missing CAA Record",
                         domain=self.domain, affected=self.domain,
                         description="No CAA record found. Any CA can issue TLS certificates for this domain.",
                         output_file=_rec_file)
@@ -7916,19 +7946,57 @@ class AmassEnumerator:
         self.log.set_tool_context("amass")
 
         out_file  = self.output_dir / f"{_safe_filename(self.domain)}_amass.txt"
-        json_file = self.output_dir / f"{_safe_filename(self.domain)}_amass.json"
 
-        # Quote paths for Windows compatibility
-        if IS_WINDOWS:
-            cmd = f'amass enum -passive -d {self.domain} -o "{out_file}" -json "{json_file}" -timeout 10'
+        # Detect amass version — v4 changed CLI flags (dropped -json, -timeout)
+        _amass_ver = TOOL_REGISTRY.query_and_register("amass")
+        _v4 = False
+        if _amass_ver and _amass_ver != "unknown":
+            try:
+                _major = int(re.match(r"v?(\d+)", _amass_ver).group(1))
+                _v4 = _major >= 4
+            except Exception:
+                pass
+        # If version detection failed, probe for v4 by running 'amass enum -h'
+        # and checking if '-passive' appears (v3) vs absent (v4)
+        if _amass_ver == "unknown":
+            _probe_out, _probe_err, _ = _shell("amass enum -h", timeout=10)
+            _probe_text = _probe_out + _probe_err
+            # v4 dropped -passive as a direct flag
+            if "-passive" not in _probe_text.lower():
+                _v4 = True
+
+        if _v4:
+            # Amass v4: -json removed, -passive may not be a flag.
+            # Use 'amass enum -d <domain> -o <file> -passive' (some v4 builds)
+            # or fall back to just '-d <domain> -o <file>' if that fails.
+            if IS_WINDOWS:
+                cmd = f'amass enum -passive -d {self.domain} -o "{out_file}"'
+            else:
+                cmd = f"amass enum -passive -d {self.domain} -o '{out_file}'"
         else:
-            cmd = f"amass enum -passive -d {self.domain} -o '{out_file}' -json '{json_file}' -timeout 10"
+            # Amass v3 syntax (drop -json — output was never consumed)
+            if IS_WINDOWS:
+                cmd = f'amass enum -passive -d {self.domain} -o "{out_file}" -timeout 10'
+            else:
+                cmd = f"amass enum -passive -d {self.domain} -o '{out_file}' -timeout 10"
 
-        self.log.info(f"[Amass] Running: {cmd}")
+        self.log.info(f"[Amass] Running ({('v4' if _v4 else 'v3')} mode): {cmd}")
         stdout, stderr, rc = _shell(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         has_output = out_file.exists() and out_file.stat().st_size > 0
+
+        # If amass exited 1 with no output, retry without -passive (v4 builds
+        # that dropped the flag entirely).
+        if rc != 0 and not has_output and "-passive" in cmd:
+            self.log.warning("[Amass] Retrying without -passive (v4 CLI change)")
+            if IS_WINDOWS:
+                cmd2 = f'amass enum -d {self.domain} -o "{out_file}"'
+            else:
+                cmd2 = f"amass enum -d {self.domain} -o '{out_file}'"
+            stdout, stderr, rc = _shell(cmd2)
+            self.log.log_command(cmd2, stdout, stderr, rc)
+            has_output = out_file.exists() and out_file.stat().st_size > 0
 
         if rc != 0:
             if has_output:
@@ -7938,8 +8006,6 @@ class AmassEnumerator:
             else:
                 self.log.error(f"[Amass] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
                 _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.txt",
-                                   cmd, f"(Amass exited with code {rc})")
-                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.json",
                                    cmd, f"(Amass exited with code {rc})")
 
         if has_output:
@@ -7961,8 +8027,6 @@ class AmassEnumerator:
             if rc == 0:
                 _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.txt",
                                    cmd, "(Amass produced no subdomain output)")
-                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.json",
-                                   cmd, "(Amass produced no JSON output)")
 
 
 # ─── Certificate Collector ────────────────────────────────────────────────────
@@ -9817,6 +9881,19 @@ class WebCrawler:
                     elif category == "Social Security":
                         _ssn_valid, _ssn_reason = _validate_ssn(val)
                         if not _ssn_valid:
+                            continue
+                        # Extended digit boundary: reject if adjacent to more
+                        # digits (match is part of a larger number — phone,
+                        # account, credit card fragment, etc.)
+                        _ms = _match_start
+                        _me = match.end()
+                        if _ms > 0 and text[_ms - 1].isdigit():
+                            continue
+                        if _me < len(text) and text[_me].isdigit():
+                            continue
+                        # Require SSN-related keywords within ±300 chars;
+                        # without context the pattern is almost always noise.
+                        if not _ssn_has_context(text, _ms):
                             continue
                         _title    = "Social Security pattern detected:"
                         _affected = val
@@ -13015,6 +13092,7 @@ class PDShuffleDNS:
             if label:
                 words.add(label)
         wl_path = self.out.parent.parent / "logs" / "shuffledns_wordlist.txt"
+        wl_path.parent.mkdir(parents=True, exist_ok=True)
         wl_path.write_text("\n".join(sorted(words)), encoding="utf-8")
         return wl_path
 
@@ -13364,7 +13442,7 @@ class DNSEnrichmentRunner:
                         domain=self.domain,
                         affected=fqdn,
                         output_file=_a_out,
-                        title="DNS Records Resolved",
+                        title="DNS: DNS Records Resolved",
                     )
                 # Write per-FQDN file for evidence linking
                 _fqdn_file = self.out_dig / f"{_safe_filename(fqdn)}.json"
@@ -13455,7 +13533,7 @@ class DNSEnrichmentRunner:
                     detail=f"TXT records resolved: {'; '.join(txt_records[:5])}",
                     host=host, domain=self.domain, affected=host,
                     output_file=str(_host_file),
-                    title="DNS TXT Record Resolved",
+                    title="DNS: DNS Records Resolved",
                 )
 
             sub_entry = self.data.subdomains.setdefault(
@@ -14026,8 +14104,19 @@ class PDKatana:
                             continue
                         if category in ("Passwords", "API Keys") and _is_minified_js(body, _kt_pos):
                             continue
-                        if category == "Social Security" and _is_minified_js(body, _kt_pos):
-                            continue
+                        if category == "Social Security":
+                            if _is_minified_js(body, _kt_pos):
+                                continue
+                            _ssn_ok, _ = _validate_ssn(val)
+                            if not _ssn_ok:
+                                continue
+                            if _kt_pos > 0 and body[_kt_pos - 1].isdigit():
+                                continue
+                            _kt_end = _kt_m.end()
+                            if _kt_end < len(body) and body[_kt_end].isdigit():
+                                continue
+                            if not _ssn_has_context(body, _kt_pos):
+                                continue
                         if category == "Comments" and _is_css_hiding_comment(val):
                             continue
                         _kt_risk = "high"
@@ -18066,7 +18155,7 @@ class IntelAggregator:
 
         data = self.data
         _dns_rec_file = str(
-            self.output_dir / "dns" / "records" / f"{_safe_filename(domain)}_records.json"
+            _domain_path(self.output_dir, domain) / "dns" / "records" / f"{_safe_filename(domain)}_records.json"
         )
 
         # ── SPF ───────────────────────────────────────────────────────────────
@@ -18077,7 +18166,7 @@ class IntelAggregator:
                 "claiming to be from this domain, enabling phishing and spoofing attacks.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing SPF Record",
+                title="DNS: Missing SPF Record",
             )
         else:
             policy = ss.get("spf_policy", "")
@@ -18088,7 +18177,7 @@ class IntelAggregator:
                     "This completely negates SPF protection and enables trivial spoofing.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="Permissive SPF Record (+all)",
+                    title="DNS: Permissive SPF Record (+all)",
                 )
             elif "softfail" in policy:
                 add_finding(
@@ -18097,7 +18186,7 @@ class IntelAggregator:
                     "flagged but not rejected. Consider upgrading to '-all' (hardfail).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="SPF Softfail Policy (~all)",
+                    title="DNS: SPF Softfail Policy (~all)",
                 )
             elif "neutral" in policy:
                 add_finding(
@@ -18105,7 +18194,7 @@ class IntelAggregator:
                     "SPF record uses '?all' (neutral), providing no meaningful protection against spoofing.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="SPF Neutral Policy (?all)",
+                    title="DNS: SPF Neutral Policy (?all)",
                 )
             elif "no_all_mechanism" in policy:
                 add_finding(
@@ -18113,7 +18202,7 @@ class IntelAggregator:
                     "SPF record has no 'all' mechanism. Receiving servers may treat unlisted senders inconsistently.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="Missing SPF All Mechanism",
+                    title="DNS: Missing SPF All Mechanism",
                 )
             else:
                 add_finding(
@@ -18121,7 +18210,7 @@ class IntelAggregator:
                     f"SPF record present with strict policy ({policy}).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="SPF Record Present",
+                    title="DNS: SPF Record Present",
                 )
 
         # ── DMARC ─────────────────────────────────────────────────────────────
@@ -18132,7 +18221,7 @@ class IntelAggregator:
                 "handling SPF/DKIM failures, leaving the domain open to spoofing.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing DMARC Record",
+                title="DNS: Missing DMARC Record",
             )
         else:
             dmarc_policy = ss.get("dmarc_policy", "")
@@ -18144,7 +18233,7 @@ class IntelAggregator:
                     "legitimate senders are covered.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="DMARC Policy: Monitor Only",
+                    title="DNS: DMARC Policy: Monitor Only",
                 )
             elif dmarc_policy == "quarantine":
                 add_finding(
@@ -18152,7 +18241,7 @@ class IntelAggregator:
                     "DMARC policy is 'p=quarantine'. Consider upgrading to 'p=reject' for maximum spoofing protection.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="DMARC Policy: Quarantine",
+                    title="DNS: DMARC Policy: Quarantine",
                 )
             elif dmarc_policy == "reject":
                 add_finding(
@@ -18160,7 +18249,7 @@ class IntelAggregator:
                     "DMARC policy is 'p=reject' — optimal configuration. Spoofed messages are rejected outright.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="DMARC Policy: Reject",
+                    title="DNS: DMARC Policy: Reject",
                 )
             else:
                 add_finding(
@@ -18168,7 +18257,7 @@ class IntelAggregator:
                     f"DMARC record present (policy: {dmarc_policy or 'unrecognised'}).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="DMARC Record Present",
+                    title="DNS: DMARC Record Present",
                 )
 
         # ── CAA ───────────────────────────────────────────────────────────────
@@ -18179,7 +18268,7 @@ class IntelAggregator:
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing CAA Record",
+                title="DNS: Missing CAA Record",
             )
         else:
             issuers    = ss.get("caa_issuers", [])
@@ -18196,7 +18285,7 @@ class IntelAggregator:
                     f"but has no 'issuewild' tag. Wildcard certificates may still be issued by any CA.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="Missing CAA Issuewild",
+                    title="DNS: Missing CAA Issuewild",
                 )
             else:
                 add_finding(
@@ -18204,7 +18293,7 @@ class IntelAggregator:
                     f"CAA record restricts issuance to: {', '.join(issuers)} (wildcard: {', '.join(wild_issuers)}).",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="CAA Record Present",
+                    title="DNS: CAA Record Present",
                 )
 
         # ── DNSSEC ────────────────────────────────────────────────────────────
@@ -18216,7 +18305,7 @@ class IntelAggregator:
                 "(cache poisoning / MITM). Enable DNSSEC at your registrar to protect against this.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing DNSSEC",
+                title="DNS: Missing DNSSEC",
             )
         else:
             has_key = dnssec.get("dnskey_present")
@@ -18226,7 +18315,7 @@ class IntelAggregator:
                 f"DNSSEC is enabled (DNSKEY: {'yes' if has_key else 'no'}, DS: {'yes' if has_ds else 'no'}).",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="DNSSEC Enabled",
+                title="DNS: DNSSEC Enabled",
             )
 
         # ── DKIM ─────────────────────────────────────────────────────────────
@@ -18239,7 +18328,7 @@ class IntelAggregator:
                 "this domain cannot be cryptographically authenticated by receivers.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing DKIM Record",
+                title="DNS: Missing DKIM Record",
             )
         else:
             # Check for revoked keys (empty p= tag)
@@ -18256,14 +18345,14 @@ class IntelAggregator:
                     f"depend on the revoked selector.",
                     domain=domain, affected=domain, timestamp=ts,
                     output_file=_dns_rec_file,
-                    title="DKIM Revoked Key",
+                    title="DNS: DKIM Revoked Key",
                 )
             add_finding(
                 data, "OSift-DNS", "dns_dkim_ok", self.CAT_DNS, "info",
                 f"DKIM public key(s) found on selector(s): {', '.join(dkim_selectors)}.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="DKIM Record Present",
+                title="DNS: DKIM Record Present",
             )
 
         # ── MTA-STS ───────────────────────────────────────────────────────────
@@ -18274,7 +18363,7 @@ class IntelAggregator:
                 "preventing downgrade attacks on inbound mail.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing MTA-STS Policy",
+                title="DNS: Missing MTA-STS Policy",
             )
         else:
             add_finding(
@@ -18282,7 +18371,7 @@ class IntelAggregator:
                 "MTA-STS policy record present.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="MTA-STS Policy Present",
+                title="DNS: MTA-STS Policy Present",
             )
 
         # ── TLS-RPT ───────────────────────────────────────────────────────────
@@ -18293,7 +18382,7 @@ class IntelAggregator:
                 "STARTTLS failures to a nominated address, enabling visibility into mail delivery issues.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="Missing TLS-RPT Record",
+                title="DNS: Missing TLS-RPT Record",
             )
         else:
             add_finding(
@@ -18301,7 +18390,7 @@ class IntelAggregator:
                 "TLS-RPT reporting record present.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="TLS-RPT Record Present",
+                title="DNS: TLS-RPT Record Present",
             )
 
         # ── BIMI ─────────────────────────────────────────────────────────────
@@ -18316,7 +18405,7 @@ class IntelAggregator:
                 "BIMI record found" + (f" — logo: {logo}" if logo else "") + ".",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="BIMI Record Present",
+                title="DNS: BIMI Record Present",
             )
 
     # ─── File writer ──────────────────────────────────────────────────────────

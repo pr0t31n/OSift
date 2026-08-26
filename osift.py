@@ -584,7 +584,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.12.2"
+VERSION = "2.12.4"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -7261,11 +7261,7 @@ class DNSEnumerator:
         if dmarc_recs:
             records["DMARC"] = dmarc_recs
             self.log.info(f"[DNS] DMARC record found for {self.domain}")
-            _dm_policy = dmarc_recs[0].get("dmarc_policy", "")
-            _dm_detail = (
-                f"DMARC record found: p={_dm_policy}" if _dm_policy
-                else "DMARC record found"
-            )
+            _dm_detail = "DNS: DMARC record found"
             _dm_raw = dmarc_recs[0].get("dmarc_raw", "")
             add_finding(
                 self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
@@ -7389,7 +7385,7 @@ class DNSEnumerator:
                         output_file=_rec_file)
 
         if not ss["caa_present"]:
-            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "INFO",
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "LOW",
                         "DNS: Missing CAA Record",
                         domain=self.domain, affected=self.domain,
                         description="No CAA record found. Any CA can issue TLS certificates for this domain.",
@@ -9805,9 +9801,14 @@ class WebCrawler:
                     _gen_sw_name:     str = ""
                     _gen_sw_ver:      str = ""
 
-                    # ── AWS Keys — skip base64-encoded content (fonts, images)
-                    if category == "AWS Keys":
+                    # ── AWS Keys / Google API — skip base64-encoded content (fonts, images)
+                    if category in ("AWS Keys", "Google API"):
                         if _is_base64_context(text, _match_start):
+                            continue
+
+                    # ── Google API — enforce case-sensitive prefix AIza
+                    if category == "Google API":
+                        if not val.startswith("AIza"):
                             continue
 
                     # ── Passwords / API Keys — skip minified JS property access
@@ -13777,7 +13778,7 @@ class PDTlsx:
             f"-san -cn -tv -cipher "
             f"-expired -self-signed -mismatched "
             f'-json -o "{out_json}" '
-            f"-t 100 -timeout 5 -silent"
+            f"-c 100 -timeout 5 -silent"
         )
         self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")
         stdout, stderr, rc = _shell(cmd)
@@ -14037,7 +14038,7 @@ class PDKatana:
             f"-d {self.max_depth} "
             f"-ef {excludes} "
             f"-ct 30 -c 10 -rl 50 "
-            f'-json -o "{out_json}" -silent'
+            f'-jsonl -o "{out_json}" -silent'
         )
         self.log.info(f"[katana] Crawling {sum(1 for _ in seed_file.open())} seed URLs (depth={self.max_depth})")
         stdout, stderr, rc = _shell(cmd)
@@ -14100,7 +14101,9 @@ class PDKatana:
                         val = _kt_m.group() if isinstance(_kt_m.group(), str) else str(_kt_m.group())
                         _kt_pos = _kt_m.start()
                         # Context-aware false-positive filters (same as WebCrawler)
-                        if category == "AWS Keys" and _is_base64_context(body, _kt_pos):
+                        if category in ("AWS Keys", "Google API") and _is_base64_context(body, _kt_pos):
+                            continue
+                        if category == "Google API" and not val.startswith("AIza"):
                             continue
                         if category in ("Passwords", "API Keys") and _is_minified_js(body, _kt_pos):
                             continue
@@ -18263,7 +18266,7 @@ class IntelAggregator:
         # ── CAA ───────────────────────────────────────────────────────────────
         if not ss.get("caa_present"):
             add_finding(
-                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "medium",
+                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "LOW",
                 "No CAA record found. Without CAA, any public Certificate Authority can issue "
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,

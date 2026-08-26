@@ -73,6 +73,9 @@ PIP_PKGS = [
     "edgartools>=2.0.0",
     "selenium>=4.15.0",
     "webdriver-manager>=4.0.0",
+    "maigret",
+    "EmailHarvester",
+    "playwright",
 ]
 
 # Go tools (go install) -------------------------------------------------------
@@ -92,6 +95,7 @@ GO_INSTALL_TOOLS = [
     "github.com/projectdiscovery/chaos-client/cmd/chaos@latest",
     "github.com/tomnomnom/waybackurls@latest",
     "github.com/ffuf/ffuf/v2@latest",
+    "github.com/trufflesecurity/trufflehog/v3@latest",
 ]
 
 # Git tools -------------------------------------------------------------------
@@ -145,10 +149,16 @@ GIT_TOOLS = [
         "action": None,
     },
     {
+        "name":   "EmailHarvester",
+        "url":    "https://github.com/maldevel/EmailHarvester",
+        "dest":   OPT_DIR / "EmailHarvester",
+        "action": "chmod_executable",
+    },
+    {
         "name":   "maigret",
         "url":    "https://github.com/soxoj/maigret",
         "dest":   OPT_DIR / "maigret",
-        "action": "pip_install_dot",
+        "action": None,  # CLI installed via pip (PIP_PKGS); clone kept for reference
     },
     {
         "name":   "trufflehog",
@@ -170,12 +180,18 @@ GIT_TOOLS = [
 VERIFY_BINS = [
     "amass", "nmap", "subfinder", "httpx", "dnsx",
     "nuclei", "naabu", "waybackurls", "ffuf",
+    "maigret", "trufflehog",
 ]
 VERIFY_MODS = [
     "requests", "dns", "whois", "bs4",
     "colorama", "tqdm", "paramiko",
     "openpyxl", "pandas", "jinja2", "selenium",
 ]
+
+# File-path tools that aren't on PATH but need to exist
+VERIFY_FILES = {
+    "EmailHarvester": "/opt/EmailHarvester/EmailHarvester.py",
+}
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -349,6 +365,22 @@ def install_pip_packages(args):
         except RuntimeError as exc:
             warn(f"pip install failed for {pkg}: {exc}")
 
+    # Playwright browser binaries (required by maigret and other tools)
+    pw = shutil.which("playwright")
+    if pw:
+        info("Installing Playwright browser binaries …")
+        try:
+            run([pw, "install", "chromium"])
+        except RuntimeError as exc:
+            warn(f"Playwright browser install failed: {exc}")
+    else:
+        # Try via python module
+        info("Installing Playwright browser binaries (via module) …")
+        try:
+            run([sys.executable, "-m", "playwright", "install", "chromium"])
+        except RuntimeError as exc:
+            warn(f"Playwright browser install failed: {exc}")
+
 
 # ─── phase 3: go tools ───────────────────────────────────────────────────────
 
@@ -421,6 +453,12 @@ def install_git_tools(args):
                 else:
                     warn(f"requirements/base.txt not found in {dest}")
 
+            elif action == "chmod_executable":
+                # Make all .py files in dest executable
+                for py in dest.glob("*.py"):
+                    py.chmod(py.stat().st_mode | 0o755)
+                    info(f"  chmod +x {py}")
+
             elif action == "go_build":
                 run([gb, "build", "./..."], cwd=dest, env=env)
 
@@ -475,6 +513,15 @@ def run_check():
             err(f"{marker:22s} {status}")
             all_ok = False
 
+    # File-path tools
+    for name, fpath in VERIFY_FILES.items():
+        ok = os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+        if ok:
+            info(f"{name:22s} {G}OK{W}  ({fpath})")
+        else:
+            err(f"{name:22s} {R}MISSING{W}  ({fpath})")
+            all_ok = False
+
     # Symlinks
     for name, target in SYMLINKS.items():
         link = BIN_DIR / name
@@ -503,6 +550,10 @@ def post_install_summary():
     for mod in VERIFY_MODS:
         ok = run_ok([sys.executable, "-c", f"import {mod}"])
         results.append((f"python:{mod}", ok, "installed" if ok else "missing"))
+
+    for name, fpath in VERIFY_FILES.items():
+        ok = os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+        results.append((f"file:{name}", ok, fpath if ok else "missing"))
 
     for name, target in SYMLINKS.items():
         link = BIN_DIR / name

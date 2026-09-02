@@ -400,6 +400,9 @@ def install_go_tools(args):
 
     for tool in GO_INSTALL_TOOLS:
         name = tool.split("/")[-1].split("@")[0]
+        if shutil.which(name):
+            info(f"{name} already installed — skipping")
+            continue
         info(f"go install {name} …")
         try:
             run([gb, "install", tool], env=env)

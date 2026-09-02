@@ -584,7 +584,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.12.4"
+VERSION = "2.12.5"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -18887,6 +18887,20 @@ class RawOutputParser:
         "reports",     # our own output — would create a feedback loop
     })
 
+    # Individual files to skip — configuration / metadata that should never
+    # be mined for intelligence (consultant emails, internal paths, etc.)
+    _SKIP_FILES = frozenset({
+        "os_settings.json",
+        "ss_settings.json",
+        "tr_settings.json",
+        "fr_settings.json",
+        "si_settings.json",
+        "vantage_meta.json",
+        "meta.json",
+        "checkpoint.json",
+        "config.json",
+    })
+
     # ── Known-bad / noise FQDNs ──────────────────────────────────────────────
     _NOISE_DOMAINS = frozenset({
         "example.com", "example.org", "example.net",
@@ -18942,6 +18956,8 @@ class RawOutputParser:
                 and not d.startswith(".")
             ]
             for fname in files:
+                if fname in self._SKIP_FILES:
+                    continue
                 path = root_path / fname
                 if path.suffix.lower() in self._BINARY_EXTS:
                     continue

@@ -514,6 +514,7 @@ class ProgressManager:
                 data.setdefault("started", datetime.datetime.now().isoformat())
                 data.setdefault("completed_phases", [])
                 data.setdefault("phase_status", {})
+                data.setdefault("runtime_state", {})
                 return data
             except Exception:
                 pass
@@ -522,6 +523,7 @@ class ProgressManager:
             "started":          datetime.datetime.now().isoformat(),
             "completed_phases": [],
             "phase_status":     {},
+            "runtime_state":    {},
         }
 
     def _save(self) -> None:
@@ -561,6 +563,40 @@ class ProgressManager:
         with self._lock:
             return dict(self._state)
 
+    def save_runtime_state(self, state: dict) -> None:
+        """Persist runtime accumulators so a resume can restore full scan state."""
+        with self._lock:
+            self._state["runtime_state"] = state
+            self._state["runtime_state"]["_saved_at"] = datetime.datetime.now().isoformat()
+            self._save()
+
+    def load_runtime_state(self) -> dict:
+        with self._lock:
+            return dict(self._state.get("runtime_state", {}))
+
+    def get_interrupted_phases(self) -> list:
+        """Return phases that were 'running' when the scan was interrupted."""
+        with self._lock:
+            ps = self._state.get("phase_status", {})
+            return [k for k, v in ps.items() if v.get("status") == "running"]
+
+    def prepare_resume(self) -> list:
+        """Transition running→pending; remove from completed_phases. Returns affected phase keys."""
+        with self._lock:
+            interrupted = []
+            ps = self._state.get("phase_status", {})
+            cp = self._state.get("completed_phases", [])
+            for k, v in ps.items():
+                if v.get("status") == "running":
+                    v["status"] = "pending"
+                    v["detail"] = "Interrupted — will re-run on resume"
+                    v["updated_at"] = datetime.datetime.now().isoformat()
+                    interrupted.append(k)
+                    if k in cp:
+                        cp.remove(k)
+            self._save()
+            return interrupted
+
 
 # Module-level singleton console; ProgressManager is created in main()
 _vc: VantageConsole = VantageConsole()
@@ -584,7 +620,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.12.6"
+VERSION = "2.13.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────

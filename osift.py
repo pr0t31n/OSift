@@ -363,6 +363,7 @@ _VP_LOG    = "__VANTAGE_LOG__:"
 _VP_ERR    = "__VANTAGE_ERR__:"
 _VP_PROMPT = "__VANTAGE_PROMPT__:"
 _VP_STATUS = "__VANTAGE_STATUS__:"
+_VP_ACTION = "__VANTAGE_ACTION_ITEM__:"
 
 
 class VantageConsole:
@@ -445,6 +446,15 @@ class VantageConsole:
             elif active_tool:
                 entry["active_tool"] = active_tool
             sys.stdout.write(_VP_STATUS + json.dumps(entry) + "\n")
+            sys.stdout.flush()
+
+    def action_item(self, entry: dict) -> None:
+        """Emit a live action-item event so Vantage can update the
+        Action Items tab in real time (no-op outside Vantage)."""
+        if not self._managed:
+            return
+        with self._lock:
+            sys.stdout.write(_VP_ACTION + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def prompt(self, question: str, prompt_type: str = "text",
@@ -620,7 +630,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -15492,6 +15502,138 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
         pass  # non-critical
 
 
+def _generate_action_items(output_dir: Path, data: ReconData) -> int:
+    """Generate action_items.json from OSINT discoveries.
+
+    Three categories:
+    - Resolved IPs → Scattershot3 network scan targets
+    - Live web properties (subdomains with http_status) → Fracture web-app test targets
+    - API indicators in crawled URLs → Siphon API test targets
+
+    Returns number of action items written.
+    """
+    _API_INDICATORS = {"swagger", "openapi", "graphql", "api-docs", "redoc",
+                       "/api/", "/v1/", "/v2/", "/v3/", "/rest/", "/graphql"}
+    items: list = []
+    seen: set = set()  # (recommended_tool, target, title) dedup
+
+    def _add(item_type, tool, target, ip, port, hostname, title, desc,
+             priority="MEDIUM", metadata=None):
+        key = (tool.lower(), target.lower(), title.strip().lower())
+        if key in seen:
+            return
+        seen.add(key)
+        entry = {
+            "id":               str(_uuid.uuid4()),
+            "type":             item_type,
+            "recommended_tool": tool,
+            "target":           target,
+            "ip":               ip,
+            "port":             int(port) if port else 0,
+            "hostname":         hostname or "",
+            "title":            title,
+            "description":      desc,
+            "source_finding":   "",
+            "priority":         priority,
+            "scope":            "osint",
+            "status":           "pending",
+            "datetime":         datetime.datetime.now(_UTC).isoformat(),
+            "metadata":         metadata or {},
+        }
+        items.append(entry)
+        _vc.action_item(entry)
+
+    # ── Resolved IPs → Scattershot3 ───────────────────────────────────────
+    for ip_addr, ip_meta in data.ip_addresses.items():
+        if not ip_addr or ip_addr.startswith("127.") or ip_addr == "0.0.0.0":
+            continue
+        fqdns = ip_meta.get("fqdns") or []
+        hostname = fqdns[0] if fqdns else ""
+        ports = sorted(set(data.open_ports.get(ip_addr, [])))
+        desc = f"IP {ip_addr} discovered via OSINT"
+        if hostname:
+            desc += f" (associated with {hostname})"
+        if ports:
+            desc += f" — known open ports: {', '.join(str(p) for p in ports[:10])}"
+        _add("network_scan", "Scattershot3", ip_addr, ip_addr, 0,
+             hostname,
+             f"Network scan recommended: {ip_addr}",
+             desc + ". Full port scan and service enumeration recommended.",
+             priority="MEDIUM",
+             metadata={"fqdns": fqdns[:20], "known_ports": ports[:50]})
+
+    # ── Live web properties → Fracture ────────────────────────────────────
+    for sub, meta in data.subdomains.items():
+        http_status = meta.get("http_status")
+        if not http_status:
+            continue
+        ips = list(meta.get("ips") or [])
+        ip = ips[0] if ips else ""
+        ports = sorted(set(meta.get("ports") or []))
+        web_port = 443 if 443 in ports else (80 if 80 in ports else (ports[0] if ports else 443))
+        scheme = "https" if web_port == 443 else "http"
+        target_url = f"{scheme}://{sub}"
+        if web_port not in (80, 443):
+            target_url += f":{web_port}"
+        _add("web_app", "Fracture", target_url, ip, web_port, sub,
+             f"Web application testing: {sub}",
+             f"Live web property detected at {sub} (HTTP {http_status}). "
+             f"Web application security testing recommended.",
+             priority="HIGH",
+             metadata={"http_status": http_status,
+                        "all_ips": ips[:10],
+                        "all_ports": ports[:20]})
+
+    # ── API indicators in crawled URLs → Siphon ───────────────────────────
+    _api_hosts_seen: set = set()
+    for url, url_meta in data.crawled_urls.items():
+        url_lower = url.lower()
+        if not any(ind in url_lower for ind in _API_INDICATORS):
+            continue
+        try:
+            from urllib.parse import urlparse as _urlparse
+            parsed = _urlparse(url)
+            host = parsed.hostname or ""
+        except Exception:
+            host = ""
+        if not host or host in _api_hosts_seen:
+            continue
+        _api_hosts_seen.add(host)
+        sub_rec = data.subdomains.get(host, {})
+        ips = list(sub_rec.get("ips") or [])
+        ip = ips[0] if ips else ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        target_url = f"{parsed.scheme}://{host}" if parsed.scheme else f"https://{host}"
+        if port not in (80, 443):
+            target_url += f":{port}"
+        _add("api", "Siphon", target_url, ip, port, host,
+             f"API testing: {host}",
+             f"API indicator detected at {url}. "
+             f"API security testing recommended.",
+             priority="HIGH",
+             metadata={"indicator_url": url})
+
+    # ── Write action_items.json ───────────────────────────────────────────
+    ai_path = output_dir / "action_items.json"
+    try:
+        tmp = ai_path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(items, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(ai_path)
+    except Exception:
+        try:
+            ai_path.write_text(
+                json.dumps(items, indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    return len(items)
+
+
 def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
                           project_dir: Optional[Path] = None) -> Path:
     """
@@ -21285,6 +21427,12 @@ API key sources (all free tiers available):
                status="running", step="Generating final report")
     report_path = generate_final_report(output_dir, log, data, project_dir=project_dir)
 
+    # Step 9e: Action items — cross-tool recommendations for Vantage
+    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+               status="running", step="Generating action items")
+    _ai_count = _generate_action_items(output_dir, data)
+    _vc.log(f"Generated {_ai_count} action items for cross-tool follow-up")
+
     _pm.set_phase_status("phase9_report", "complete", label="Phase 9: Aggregation & Report")
     _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="complete")
 
@@ -21317,6 +21465,8 @@ API key sources (all free tiers available):
     print(f"  Technologies      : {len(data.technologies):>6}")
     print(f"  Security findings : {len(all_f):>6}  ({data.findings.validated_count()} multi-tool validated)")
     print(f"  Breach records    : {len(data.breach_data):>6}")
+    if _ai_count:
+        print(f"  Action items      : {_ai_count:>6}")
     print(f"{sep}")
 
 

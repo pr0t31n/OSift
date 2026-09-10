@@ -630,7 +630,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.0"
+VERSION = "2.14.2"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -1909,13 +1909,15 @@ class ToolRegistry:
         """Return when the version was queried."""
         return self._query_ts.get(tool, "")
 
-    def query_and_register(self, binary: str, tool_name: Optional[str] = None) -> str:
+    def query_and_register(self, binary: str, tool_name: Optional[str] = None,
+                           force: bool = False) -> str:
         """
         Auto-detect the version of *binary* and cache it.
         Returns the version string (may be 'unknown').
+        Pass force=True to re-detect even if already cached (e.g. after install).
         """
         name = tool_name or os.path.basename(binary).replace(".exe", "")
-        if name in self._tools:
+        if name in self._tools and not force:
             return self._tools[name]
 
         version = self._detect_version(binary)
@@ -5970,9 +5972,11 @@ class ReconLogger:
         self._command_entries: List[Dict] = []
         self._write_lock = threading.Lock()
 
-        # Current tool context (updated via set_tool_context)
-        self._tool:    str = "OSift"
-        self._version: str = VERSION
+        # Current tool context (updated via set_tool_context).
+        # Uses threading.local() so concurrent runners don't clobber each other.
+        self._tool_local = threading.local()
+        self._tool_local.tool = "OSift"
+        self._tool_local.version = VERSION
 
         self.logger = logging.getLogger("osift")
         self.logger.setLevel(logging.DEBUG)
@@ -6010,20 +6014,23 @@ class ReconLogger:
         """
         Set the active tool context for subsequent log / command entries.
         If *version* is None the ToolRegistry is queried automatically.
+        Thread-safe: each thread carries its own tool context.
         """
-        self._tool    = tool
-        self._version = version or TOOL_REGISTRY.get_version(tool)
+        self._tool_local.tool    = tool
+        self._tool_local.version = version or TOOL_REGISTRY.get_version(tool)
 
     def reset_tool_context(self) -> None:
         """Reset to the OSift framework context."""
-        self._tool    = "OSift"
-        self._version = VERSION
+        self._tool_local.tool    = "OSift"
+        self._tool_local.version = VERSION
 
     # ── Logging helpers ───────────────────────────────────────────────────────
 
     def _tag(self) -> str:
         """Return '[ToolName/version]' prefix for text log lines."""
-        return f"[{self._tool}/{self._version}]"
+        tool = getattr(self._tool_local, "tool", "OSift")
+        ver  = getattr(self._tool_local, "version", VERSION)
+        return f"[{tool}/{ver}]"
 
     def info(self, msg: str, **kw):
         self.logger.info(f"{self._tag()} {msg}")
@@ -6046,7 +6053,7 @@ class ReconLogger:
         self._log_json("ERROR", full, kw)
         self._write_error(full, exc)
         if _VANTAGE_MANAGED:
-            _vc.error(full, source=self._tool)
+            _vc.error(full, source=getattr(self._tool_local, "tool", "OSift"))
 
     def log_command(
         self,
@@ -6140,8 +6147,8 @@ class ReconLogger:
         entry = {
             "timestamp":    datetime.datetime.now(_UTC).isoformat(),
             "level":        level,
-            "tool":         self._tool,
-            "tool_version": self._version,
+            "tool":         getattr(self._tool_local, "tool", "OSift"),
+            "tool_version": getattr(self._tool_local, "version", VERSION),
             "message":      msg,
             **extra,
         }
@@ -6150,10 +6157,12 @@ class ReconLogger:
             self.flush_all()
 
     def _write_error(self, msg: str, exc: Optional[Exception]):
+        _t = getattr(self._tool_local, "tool", "OSift")
+        _v = getattr(self._tool_local, "version", VERSION)
         with self._write_lock:
             with open(self.error_log_path, "a", encoding="utf-8") as f:
                 ts = datetime.datetime.now(_UTC).isoformat()
-                f.write(f"[{ts}] [{self._tool}/{self._version}] {msg}\n")
+                f.write(f"[{ts}] [{_t}/{_v}] {msg}\n")
                 if exc:
                     f.write(traceback.format_exc())
                     f.write("\n")
@@ -6348,13 +6357,16 @@ def _osift_apt_install(pkg: str) -> tuple:
         return False, str(exc)
 
 
-def _osift_pip_install(pkg: str) -> tuple:
-    """pip install --break-system-packages <pkg>. Returns (success, error_text)."""
+def _osift_pip_install(pkg) -> tuple:
+    """pip install --break-system-packages <pkg>. Returns (success, error_text).
+    pkg may be a string ('requests') or a list (['-r', '/path/to/requirements.txt']).
+    """
     try:
         pip_exe = "python3" if IS_MACOS else sys.executable
+        pkg_args = pkg if isinstance(pkg, list) else [pkg]
         r = subprocess.run(
             [pip_exe, "-m", "pip", "install",
-             "--quiet", "--break-system-packages", pkg],
+             "--quiet", "--break-system-packages"] + pkg_args,
             capture_output=True, text=True, timeout=180,
         )
         return r.returncode == 0, (r.stderr or r.stdout).strip()
@@ -6624,7 +6636,7 @@ def check_amass(log: ReconLogger) -> bool:
                 pass
 
     if installed:
-        ver = TOOL_REGISTRY.query_and_register("amass")
+        ver = TOOL_REGISTRY.query_and_register("amass", force=True)
         _tool_log(log, f"[tools] amass ready (version: {ver})", "SUCCESS")
         return True
 
@@ -6650,7 +6662,10 @@ def check_amass(log: ReconLogger) -> bool:
         ans = input("Skip Amass and continue? [y/N]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         ans = "y"
-    return ans == "y"
+    if ans != "y":
+        print("[tools] Cannot proceed — install Amass manually and re-run.")
+        sys.exit(1)
+    return False  # amass not available; user chose to skip
 
 
 def check_tool(tool: str) -> bool:
@@ -6783,7 +6798,7 @@ def _try_install_binary(name: str, apt_pkg: Optional[str], pip_pkg: Optional[str
             for req_file in ("requirements/base.txt", "requirements.txt"):
                 req_path = install_dir / req_file
                 if req_path.exists():
-                    _osift_pip_install(f"-r {req_path}")
+                    _osift_pip_install(["-r", str(req_path)])
                     break
 
             # Symlink the entry-point script to a bin directory on PATH
@@ -11013,6 +11028,9 @@ class PureDNSRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "puredns")
         self.log.set_tool_context("puredns")
+        _vc.status("tool_puredns",
+                   label="puredns (brute-force + wildcard filter)",
+                   status="running", active_tool="dns/puredns")
 
         resolvers_file = self._write_resolvers()
         total = 0
@@ -11070,6 +11088,9 @@ class PureDNSRunner:
                 domain=self.domain, affected=self.domain,
             )
         self.log.success(f"[puredns] Complete — {total} new subdomains discovered")
+        _vc.status("tool_puredns",
+                   label="puredns (brute-force + wildcard filter)",
+                   status="complete", active_tool="dns/puredns")
         return total
 
 
@@ -11133,6 +11154,9 @@ class WaybackURLsRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "waybackurls")
         self.log.set_tool_context("waybackurls")
+        _vc.status("tool_waybackurls",
+                   label="waybackurls (Wayback Machine CDX mining)",
+                   status="running", active_tool="osint/waybackurls")
 
         _safe_dom  = _safe_filename(self.domain)
         out_file   = self.out / f"wayback_urls_{_safe_dom}.txt"
@@ -11176,6 +11200,9 @@ class WaybackURLsRunner:
             )
 
         self.log.success(f"[waybackurls] Complete — {count} new historical URLs ingested")
+        _vc.status("tool_waybackurls",
+                   label="waybackurls (Wayback Machine CDX mining)",
+                   status="complete", active_tool="osint/waybackurls")
         return count
 
     # ── Compiled patterns for URL analysis ───────────────────────────────────

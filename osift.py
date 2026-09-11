@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.12"
+VERSION = "2.14.13"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -14001,13 +14001,13 @@ class PDTlsx:
         cmd_san = (
             f'"{binary}" -l "{input_file}" '
             f"-san -cn "
-            f"-expired -self-signed -mismatched "
             f'-json -o "{out_san}" '
             f"-c 100 -timeout 5 -silent"
         )
         cmd_tls = (
             f'"{binary}" -l "{input_file}" '
             f"-tv -cipher "
+            f"-expired -self-signed -mismatched "
             f'-json -o "{out_tls}" '
             f"-c 100 -timeout 5 -silent"
         )

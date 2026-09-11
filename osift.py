@@ -630,7 +630,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.3"
+VERSION = "2.14.4"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6578,11 +6578,45 @@ def _importable(module: str) -> bool:
         return False
 
 
+def _fix_amass_data_dir(log: ReconLogger) -> None:
+    """Ensure Amass data directory exists and is writable by the current user.
+    Amass v4+/v5 fails with exit 1 if it cannot create/chmod its data dir.
+    On Linux: ~/.config/amass  (XDG default)
+    On macOS: ~/Library/Application Support/amass
+    """
+    home = Path.home()
+    if IS_MACOS:
+        data_dir = home / "Library" / "Application Support" / "amass"
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        data_dir = Path(xdg) / "amass" if xdg else home / ".config" / "amass"
+    try:
+        if data_dir.exists():
+            if not os.access(str(data_dir), os.W_OK):
+                uid = os.getuid()
+                st  = data_dir.stat()
+                if st.st_uid != uid:
+                    _tool_log(log, f"[tools] amass data dir {data_dir} owned by "
+                              f"uid {st.st_uid}, fixing to uid {uid}", "WARNING")
+                    subprocess.run(["sudo", "chown", "-R",
+                                    f"{uid}:{os.getgid()}", str(data_dir)],
+                                   capture_output=True, timeout=10)
+                else:
+                    data_dir.chmod(0o755)
+        else:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            _tool_log(log, f"[tools] Created amass data dir: {data_dir}", "INFO")
+    except Exception as exc:
+        _tool_log(log, f"[tools] Could not fix amass data dir {data_dir}: {exc}",
+                  "WARNING")
+
+
 def check_amass(log: ReconLogger) -> bool:
     """Detect amass, auto-install in managed mode, prompt-to-skip in TTY mode."""
     if shutil.which("amass"):
         ver = TOOL_REGISTRY.query_and_register("amass")
         _tool_log(log, f"[tools] amass found (version: {ver})", "SUCCESS")
+        _fix_amass_data_dir(log)
         return True
 
     _tool_log(log, "[tools] amass not found — attempting install", "WARNING")
@@ -7996,73 +8030,117 @@ class AmassEnumerator:
         self.log        = log
         self.data       = data
 
+    @staticmethod
+    def _strip_amass_banner(text: str) -> str:
+        """Strip the Amass ASCII-art banner from output so the real error
+        message is visible.  The banner is lines of +W@@# art characters
+        plus the version/project taglines."""
+        lines = []
+        for ln in text.splitlines():
+            s = ln.strip()
+            # Banner lines are made of: . + : W @ # & o 8 spaces and tabs
+            if s and all(c in ".+:W@#&o8 \t" for c in s):
+                continue
+            # Version / project tagline lines
+            if s.startswith("v") and re.match(r"^v\d+\.\d+", s):
+                continue
+            if "OWASP Amass" in s or "@owaspamass" in s:
+                continue
+            if "Attack Surface Mapping" in s:
+                continue
+            lines.append(ln)
+        return "\n".join(lines).strip()
+
+    def _detect_amass_flags(self):
+        """Probe 'amass enum -h' to detect which CLI flags exist.
+        Returns dict of flag booleans.  Amass evolution:
+          v3: -o (single file), -passive, -timeout, -json
+          v4 early: dropped -o, -json; some builds dropped -passive
+          v4 late / v5: -oA (prefix), -passive (deprecated, default),
+                        -timeout restored, no -o, no -json
+        """
+        _amass_ver = TOOL_REGISTRY.query_and_register("amass")
+        _major = 3
+        if _amass_ver and _amass_ver != "unknown":
+            try:
+                _major = int(re.match(r"v?(\d+)", _amass_ver).group(1))
+            except Exception:
+                pass
+
+        _probe_out, _probe_err, _ = _shell("amass enum -h", timeout=10)
+        _h = _probe_out + _probe_err
+        # Match flag names from the help text — each flag appears as
+        # "  -flagname" at the start of a line in the usage block.
+        def _has(flag):
+            return bool(re.search(rf'^\s+-{re.escape(flag)}\b', _h, re.M))
+
+        flags = {
+            "major":    _major,
+            "ver":      _amass_ver,
+            "o":        _has("o"),       # single-file output (v3)
+            "oA":       _has("oA"),      # prefix-based output (v4+/v5)
+            "passive":  _has("passive"), # present but deprecated in v5
+            "timeout":  _has("timeout"), # v3 and v5; some v4 dropped it
+            "dir":      _has("dir"),     # output directory (v4+/v5)
+        }
+        self.log.info(f"[Amass] Detected {_amass_ver} — flags: "
+                      + ", ".join(f"-{k}" for k, v in flags.items()
+                                 if isinstance(v, bool) and v))
+        return flags
+
     def run(self):
         if not check_tool("amass"):
             self.log.warning("[Amass] Not available, skipping")
             return
         self.log.set_tool_context("amass")
 
-        out_file  = self.output_dir / f"{_safe_filename(self.domain)}_amass.txt"
+        out_file = self.output_dir / f"{_safe_filename(self.domain)}_amass.txt"
+        fl = self._detect_amass_flags()
 
-        # Detect amass version — v4 changed CLI flags (dropped -json, -timeout)
-        _amass_ver = TOOL_REGISTRY.query_and_register("amass")
-        _v4 = False
-        if _amass_ver and _amass_ver != "unknown":
-            try:
-                _major = int(re.match(r"v?(\d+)", _amass_ver).group(1))
-                _v4 = _major >= 4
-            except Exception:
-                pass
-        # If version detection failed, probe for v4 by running 'amass enum -h'
-        # and checking if '-passive' appears (v3) vs absent (v4)
-        if _amass_ver == "unknown":
-            _probe_out, _probe_err, _ = _shell("amass enum -h", timeout=10)
-            _probe_text = _probe_out + _probe_err
-            # v4 dropped -passive as a direct flag
-            if "-passive" not in _probe_text.lower():
-                _v4 = True
+        # ── Build command based on detected capabilities ─────────────
+        _oA_prefix = self.output_dir / f"{_safe_filename(self.domain)}_amass"
+        _q = '"' if IS_WINDOWS else "'"
 
-        if _v4:
-            # Amass v4: -json removed, -passive may not be a flag.
-            # Use 'amass enum -d <domain> -o <file> -passive' (some v4 builds)
-            # or fall back to just '-d <domain> -o <file>' if that fails.
-            if IS_WINDOWS:
-                cmd = f'amass enum -passive -d {self.domain} -o "{out_file}"'
-            else:
-                cmd = f"amass enum -passive -d {self.domain} -o '{out_file}'"
-        else:
-            # Amass v3 syntax (drop -json — output was never consumed)
-            if IS_WINDOWS:
-                cmd = f'amass enum -passive -d {self.domain} -o "{out_file}" -timeout 10'
-            else:
-                cmd = f"amass enum -passive -d {self.domain} -o '{out_file}' -timeout 10"
+        cmd = f"amass enum -d {self.domain}"
+        if fl["timeout"]:
+            cmd += " -timeout 10"
 
-        self.log.info(f"[Amass] Running ({('v4' if _v4 else 'v3')} mode): {cmd}")
+        # Output handling: prefer -oA (v5), fall back to -o (v3),
+        # otherwise capture from stdout.
+        if fl["oA"]:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            cmd += f" -oA {_q}{_oA_prefix}{_q}"
+        elif fl["o"]:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            cmd += f" -o {_q}{out_file}{_q}"
+        self.log.info(f"[Amass] Running (v{fl['major']} mode): {cmd}")
         stdout, stderr, rc = _shell(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
+        # -oA writes <prefix>.txt — copy/rename to our canonical name
+        if fl["oA"]:
+            _oA_txt = Path(str(_oA_prefix) + ".txt")
+            if _oA_txt.exists() and _oA_txt != out_file:
+                import shutil as _sh
+                _sh.copy2(str(_oA_txt), str(out_file))
+
+        # If neither -oA nor -o, capture stdout to file
+        if not fl["oA"] and not fl["o"] and stdout.strip():
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(stdout, encoding="utf-8")
+
         has_output = out_file.exists() and out_file.stat().st_size > 0
 
-        # If amass exited 1 with no output, retry without -passive (v4 builds
-        # that dropped the flag entirely).
-        if rc != 0 and not has_output and "-passive" in cmd:
-            self.log.warning("[Amass] Retrying without -passive (v4 CLI change)")
-            if IS_WINDOWS:
-                cmd2 = f'amass enum -d {self.domain} -o "{out_file}"'
-            else:
-                cmd2 = f"amass enum -d {self.domain} -o '{out_file}'"
-            stdout, stderr, rc = _shell(cmd2)
-            self.log.log_command(cmd2, stdout, stderr, rc)
-            has_output = out_file.exists() and out_file.stat().st_size > 0
-
         if rc != 0:
+            _err_msg = self._strip_amass_banner(_strip_ansi(stderr))
             if has_output:
-                # Amass prints its ASCII art banner to stderr even on success; with output
-                # this is expected — log at debug level without the banner noise.
-                self.log.warning(f"[Amass] Command exited with code {rc} — output produced (amass banner on stderr is normal)")
+                self.log.warning(f"[Amass] Command exited with code {rc} — "
+                                 "output produced (banner on stderr is normal)")
             else:
-                self.log.error(f"[Amass] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
-                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.txt",
+                self.log.error(f"[Amass] Command exited with code {rc}"
+                               + (f": {_err_msg[:300]}" if _err_msg else ""))
+                _write_placeholder(self.output_dir,
+                                   f"{_safe_filename(self.domain)}_amass.txt",
                                    cmd, f"(Amass exited with code {rc})")
 
         if has_output:
@@ -8082,7 +8160,8 @@ class AmassEnumerator:
         else:
             self.log.info("[Amass] Output file missing or empty — no subdomains ingested")
             if rc == 0:
-                _write_placeholder(self.output_dir, f"{_safe_filename(self.domain)}_amass.txt",
+                _write_placeholder(self.output_dir,
+                                   f"{_safe_filename(self.domain)}_amass.txt",
                                    cmd, "(Amass produced no subdomain output)")
 
 

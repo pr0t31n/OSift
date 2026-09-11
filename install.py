@@ -598,6 +598,54 @@ def parse_args():
     return p.parse_args()
 
 
+def fix_amass_data_dir():
+    """Ensure the Amass data directory is owned by the real user.
+    The installer runs as root, but amass at runtime runs as the real
+    user and fails with exit 1 if it can't write to its data dir.
+    Linux: ~/.config/amass   macOS: ~/Library/Application Support/amass
+    """
+    real_user = os.environ.get("SUDO_USER", "")
+    if not real_user:
+        return  # not running under sudo, nothing to fix
+
+    real_home = Path(f"/home/{real_user}")
+    if not real_home.exists():
+        real_home = Path(f"/Users/{real_user}")  # macOS
+    if not real_home.exists():
+        return
+
+    system = platform.system()
+    if system == "Darwin":
+        data_dir = real_home / "Library" / "Application Support" / "amass"
+    else:
+        data_dir = real_home / ".config" / "amass"
+
+    if data_dir.exists():
+        st = data_dir.stat()
+        import pwd
+        try:
+            real_uid = pwd.getpwnam(real_user).pw_uid
+            real_gid = pwd.getpwnam(real_user).pw_gid
+        except KeyError:
+            warn(f"Could not resolve uid for {real_user}; skipping amass dir fix.")
+            return
+        if st.st_uid != real_uid:
+            info(f"Fixing amass data dir ownership → {real_user}")
+            subprocess.run(["chown", "-R", f"{real_user}:{real_gid}", str(data_dir)],
+                           check=False)
+    else:
+        # Pre-create it as the real user so amass doesn't create it as root
+        info(f"Pre-creating amass data dir for {real_user}")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        import pwd
+        try:
+            real_uid = pwd.getpwnam(real_user).pw_uid
+            real_gid = pwd.getpwnam(real_user).pw_gid
+            os.chown(str(data_dir), real_uid, real_gid)
+        except (KeyError, OSError) as exc:
+            warn(f"Could not set amass dir ownership: {exc}")
+
+
 def main():
     banner()
     args = parse_args()
@@ -625,6 +673,10 @@ def main():
 
     # Phase 4 — Git tools
     install_git_tools(args)
+
+    # Fix Amass data directory ownership (installer runs as root but
+    # Amass needs the data dir writable by the real user at runtime)
+    fix_amass_data_dir()
 
     # Symlinks
     install_symlinks()

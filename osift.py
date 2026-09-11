@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.6"
+VERSION = "2.14.7"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -14389,8 +14389,8 @@ class PDASNmap:
         return list(orgs)[:5], list(asns)[:10]
 
     # Per-process timeout (seconds).  asnmap makes a single upstream lookup
-    # per invocation — 60 s is generous; the old global _shell() timeout was 700 s.
-    _QUERY_TIMEOUT = 60
+    # per invocation.  120 s allows for upstream API slowness / rate limiting.
+    _QUERY_TIMEOUT = 120
 
     def run(self) -> int:
         binary = _pd_binary("asnmap")
@@ -14446,7 +14446,9 @@ class PDASNmap:
         all_ranges: List[Dict] = []
         cidr_count = 0
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
+        # Cap concurrency — the upstream API rate-limits concurrent requests,
+        # causing timeouts when all queries fire at once.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(targets))) as pool:
             futures = {
                 pool.submit(_query_one, label, cmd, out_tmp): label
                 for label, cmd, out_tmp in targets

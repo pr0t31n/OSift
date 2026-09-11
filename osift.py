@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.8"
+VERSION = "2.14.9"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -12115,6 +12115,14 @@ class CloudEnumRunner:
             p = shutil.which(candidate)
             if p:
                 return p
+        # Explicit fallback paths (sudo secure_path strips ~/.local/bin)
+        for explicit in (
+            os.path.expanduser("~/.local/bin/cloud_enum"),
+            "/Users/pr0t31n/.local/bin/cloud_enum",
+            "/opt/cloud_enum/cloud_enum.py",
+        ):
+            if os.path.isfile(explicit):
+                return explicit
         # pip-installed scripts location
         for script_dir in (
             os.path.join(sys.prefix, "bin"),

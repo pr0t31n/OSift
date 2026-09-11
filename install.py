@@ -74,6 +74,7 @@ PIP_PKGS = [
     "selenium>=4.15.0",
     "webdriver-manager>=4.0.0",
     "maigret",
+    "cloud-enum",
     "EmailHarvester",
     "playwright",
 ]
@@ -172,7 +173,7 @@ GIT_TOOLS = [
         "name":   "cloud_enum",
         "url":    "https://github.com/initstring/cloud_enum",
         "dest":   OPT_DIR / "cloud_enum",
-        "action": "pip_install_requirements",
+        "action": None,  # CLI installed via pip (PIP_PKGS); clone kept for reference
     },
 ]
 
@@ -180,7 +181,7 @@ GIT_TOOLS = [
 VERIFY_BINS = [
     "amass", "nmap", "subfinder", "httpx", "dnsx",
     "nuclei", "naabu", "waybackurls", "ffuf",
-    "maigret", "trufflehog",
+    "maigret", "trufflehog", "cloud_enum",
 ]
 VERIFY_MODS = [
     "requests", "dns", "whois", "bs4",

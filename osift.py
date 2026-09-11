@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.9"
+VERSION = "2.14.10"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -1835,6 +1835,70 @@ def _is_css_hiding_comment(val: str) -> bool:
     # Must look like actual CSS (color:, font-size:, margin:), not TODO:/FIXME:/NOTE:
     if re.match(r'[a-z]+(?:-[a-z]+)*\s*:\s*[#\w]', inner) and not re.match(r'[A-Z]', inner):
         return True
+    return False
+
+
+def _is_benign_password_match(text: str, match_start: int, val: str) -> bool:
+    """Return True when a Passwords regex hit is clearly benign.
+
+    False-positive patterns skipped:
+    - URL query parameters: ``zoom.us/j/…?pwd=TOKEN`` — a meeting
+      passcode token, not a leaked credential.
+    - JavaScript DOM accessors: ``password = document.getElementById(…)`` —
+      references a form field's DOM element, not an actual password value.
+    - HTML form markup: ``<input type="password"``, ``<label for="password">`` —
+      standard login-page boilerplate.
+    - CSS / styling references: ``.password-field``, ``#password-input`` —
+      element selectors, not secrets.
+    """
+    # ── value-side heuristics (applied to what's after the ``= / :`` sign) ───
+    # Extract the matched value — everything after the operator.
+    _op = re.search(r'[=:]', val)
+    if _op:
+        _rhs = val[_op.end():].strip().strip('"\'').strip()
+    else:
+        _rhs = ""
+
+    if _rhs:
+        # JS DOM accessor: document.getElementById / querySelector / forms / etc.
+        if re.match(r'document\b|window\b|this\b|self\b|\$\s*[\(\.]', _rhs):
+            return True
+        # jQuery / JS variable that's clearly not a literal credential
+        if re.match(r'(?:el|elem|element|input|field|form|btn|node)\b', _rhs, re.I):
+            return True
+        # Empty/null/placeholder values
+        if _rhs.lower() in ('null', 'none', 'undefined', "''", '""', 'false',
+                            'true', '***', '****', '*****', '******', '********'):
+            return True
+
+    # ── context heuristics (look at surrounding text) ────────────────────────
+    _left  = max(0, match_start - 200)
+    _right = min(len(text), match_start + len(val) + 200)
+    ctx    = text[_left:_right]
+
+    # URL query-parameter context: pwd= inside a ?key=val&key=val URL
+    # This catches Zoom, WebEx, GoToMeeting, Teams, and similar meeting URLs
+    # where pwd= or password= is a URL query parameter, not a credential.
+    if re.search(r'https?://\S*[?&](?:password|passwd|pwd)=', ctx, re.I):
+        return True
+
+    # HTML form element markup context:
+    # <input type="password"  /  <label for="password"  /  id="password"
+    if re.search(
+        r'<(?:input|label|select|textarea|button)\b[^>]*'
+        r'(?:type|for|id|name|class)\s*=\s*["\']?password',
+        ctx, re.I,
+    ):
+        return True
+
+    # CSS selector context: .password-field, #password, [name="password"]
+    if re.search(r'[.#]\s*password[\w\-]*\s*[{,]', ctx, re.I):
+        return True
+
+    # Inline event handlers / JS templates: onsubmit="...password..."
+    if re.search(r'on\w+\s*=\s*["\'][^"\']*password', ctx, re.I):
+        return True
+
     return False
 
 
@@ -9934,12 +9998,8 @@ class WebCrawler:
                     _match_start = match.start()
 
                     # Per-category validation and field assignment.
-                    # _confirmed_source: if not None, a second "Confirmed" finding is
-                    # created with this source after the primary finding.
-                    _confirmed_source: Optional[str] = None
                     _email_arg: str = ""           # unique fingerprint for email findings
                     _phone_arg: str = ""           # unique fingerprint for phone findings
-                    _confirmed_type: str = "sensitive_data"  # override for phone_confirmed
                     # Generator-comment secondary finding fields (Comments branch only)
                     _gen_sw_affected: str = ""
                     _gen_sw_name:     str = ""
@@ -9958,6 +10018,11 @@ class WebCrawler:
                     # ── Passwords / API Keys — skip minified JS property access
                     if category in ("Passwords", "API Keys"):
                         if _is_minified_js(text, _match_start):
+                            continue
+
+                    # ── Passwords — skip benign URL params, DOM refs, form markup
+                    if category == "Passwords":
+                        if _is_benign_password_match(text, _match_start, val):
                             continue
 
                     # ── Social Security — skip minified JS bundles
@@ -10008,19 +10073,16 @@ class WebCrawler:
                         _ph_e164 = _ph_full.get("e164") or val
                         if val not in self.data.phone_numbers:
                             self.data.phone_numbers.append(val)
-                        # "Unconfirmed" = pattern spotted and both validators passed;
-                        # analyst may still want to verify.  A separate "Confirmed"
-                        # finding (type=phone_confirmed, source=phone-validator) is
-                        # created alongside with the same enriched affected string.
                         _ph_affected      = _build_phone_affected(_ph_full)
-                        _title            = "Phone Number Pattern Spotted - Unconfirmed"
+                        # PhoneValidator already confirmed the number — emit a
+                        # single "Confirmed" finding instead of duplicating as
+                        # both Unconfirmed + Confirmed with identical data.
+                        _title            = "Phone Number Pattern Spotted - Confirmed"
                         _affected         = _ph_affected
                         _phone_arg        = _ph_e164
-                        _confirmed_type   = "phone_confirmed"
                         _url_arg          = ""
                         _host_arg         = _domain   # originating domain, not crawled hostname
-                        _source           = "OSift-Crawl"
-                        _confirmed_source = "phone-validator"
+                        _source           = "phone-validator"
 
                     # ── Social Security Numbers ───────────────────────────────
                     elif category == "Social Security":
@@ -10164,22 +10226,8 @@ class WebCrawler:
                         output_file=content_file or str(page_file),
                     )
 
-                    # Phone-number confirmation: a separate finding with type
-                    # "phone_confirmed" so it can merge with the classifier path.
-                    # Different type_ from the Unconfirmed ensures they stay separate.
-                    if _confirmed_source:
-                        add_finding(
-                            self.data, _confirmed_source,
-                            _confirmed_type, category, "info",
-                            "Phone Number Pattern Spotted - Confirmed",
-                            url="", affected=_affected,
-                            host=_host_arg,
-                            phone=_phone_arg,
-                            timestamp=ts,
-                            matched_value=val[:200],
-                            pattern=pattern,
-                            output_file=content_file or str(page_file),
-                        )
+                    # (Phone-validator confirmation is now folded into the
+                    # primary finding — no separate Confirmed finding emitted.)
 
                     # Generator/plugin-comment secondary: "Software Version Identified"
                     # Emitted when a <!-- Generator: Name Ver --> or plugin ver comment parsed.
@@ -10188,9 +10236,8 @@ class WebCrawler:
                             self.data, "OSift-Crawl",
                             "software_version", CAT_WEB, "info",
                             "Software Version Identified",
-                            host=_url_host,
-                            url=url,
-                            affected=f"{_gen_sw_name} {_gen_sw_ver} - {url}",
+                            domain=_domain,
+                            affected=f"{_gen_sw_name} {_gen_sw_ver} — {url}",
                             timestamp=ts,
                             software=_gen_sw_name,
                             version=_gen_sw_ver,
@@ -10206,7 +10253,7 @@ class WebCrawler:
                         "tool":         _source,
                         "tool_version": VERSION,
                         "timestamp":    ts,
-                        "validated":    bool(_confirmed_source) or _source in ("phone-validator", "ssn-validator"),
+                        "validated":    _source in ("phone-validator", "ssn-validator"),
                     }
                     findings.append(finding)
                     with open(cat_file, "a", encoding="utf-8") as f:
@@ -10272,9 +10319,8 @@ class WebCrawler:
                 self.data, "OSift-Crawl",
                 "software_version", CAT_WEB, "info",
                 "Software Version Identified",
-                host=_host,
-                url=url,
-                affected=f"{software} {version} - {url}",
+                domain=self.data.domain,
+                affected=f"{software} {version} — {url}",
                 timestamp=_ts,
                 software=software,
                 version=version,
@@ -13612,7 +13658,7 @@ class DNSEnrichmentRunner:
                         category="DNS Intelligence",
                         severity="INFO",
                         detail=f"DNS records resolved: {rec_summary}",
-                        host=fqdn,
+                        host=self.domain,
                         domain=self.domain,
                         affected=fqdn,
                         output_file=_a_out,
@@ -13705,7 +13751,7 @@ class DNSEnrichmentRunner:
                     category="DNS Intelligence",
                     severity="INFO",
                     detail=f"TXT records resolved: {'; '.join(txt_records[:5])}",
-                    host=host, domain=self.domain, affected=host,
+                    host=self.domain, domain=self.domain, affected=host,
                     output_file=str(_host_file),
                     title="DNS: DNS Records Resolved",
                 )
@@ -14323,6 +14369,8 @@ class PDKatana:
                         if category == "Google API" and not val.startswith("AIza"):
                             continue
                         if category in ("Passwords", "API Keys") and _is_minified_js(body, _kt_pos):
+                            continue
+                        if category == "Passwords" and _is_benign_password_match(body, _kt_pos, val):
                             continue
                         if category == "Social Security":
                             if _is_minified_js(body, _kt_pos):

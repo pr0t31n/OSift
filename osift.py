@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.11"
+VERSION = "2.14.12"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -10790,7 +10790,7 @@ class XurlFind3rRunner:
             f"-s"                    # --silent: suppress banner/logging, only results
         )
         self.log.info(f"[xurlfind3r] Passive URL discovery for {self.domain}")
-        stdout, stderr, rc = _shell(cmd, timeout=300)  # 5 min — partial results ingested on timeout
+        stdout, stderr, rc = _shell(cmd, timeout=900)  # 15 min — Wayback/CommonCrawl can be slow
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if rc != 0:

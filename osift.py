@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.5"
+VERSION = "2.14.6"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -13932,23 +13932,64 @@ class PDTlsx:
         input_file = _write_hosts_file(hosts, self.out.parent.parent, "tlsx_input.txt")
         out_json   = self.out / "tlsx_results.json"
 
-        cmd = (
+        # tlsx forbids -san/-cn combined with other probes (-tv/-cipher).
+        # Run two passes: (1) SAN/CN extraction, (2) TLS version + cipher.
+        out_san  = self.out / "tlsx_san.json"
+        out_tls  = self.out / "tlsx_tls.json"
+
+        cmd_san = (
             f'"{binary}" -l "{input_file}" '
-            f"-san -cn -tv -cipher "
+            f"-san -cn "
             f"-expired -self-signed -mismatched "
-            f'-json -o "{out_json}" '
+            f'-json -o "{out_san}" '
             f"-c 100 -timeout 5 -silent"
         )
+        cmd_tls = (
+            f'"{binary}" -l "{input_file}" '
+            f"-tv -cipher "
+            f'-json -o "{out_tls}" '
+            f"-c 100 -timeout 5 -silent"
+        )
+
         self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")
-        stdout, stderr, rc = _shell(cmd)
-        self.log.log_command(cmd, stdout, stderr, rc)
 
-        if rc != 0:
-            self.log.warning(f"[tlsx] Command exited with code {rc}" + (f": {_strip_ansi(stderr)[:200]}" if stderr else ""))
+        stdout1, stderr1, rc1 = _shell(cmd_san)
+        self.log.log_command(cmd_san, stdout1, stderr1, rc1)
+        if rc1 != 0:
+            self.log.warning(f"[tlsx] SAN/CN pass exited with code {rc1}" + (f": {_strip_ansi(stderr1)[:200]}" if stderr1 else ""))
+
+        stdout2, stderr2, rc2 = _shell(cmd_tls)
+        self.log.log_command(cmd_tls, stdout2, stderr2, rc2)
+        if rc2 != 0:
+            self.log.warning(f"[tlsx] TLS version pass exited with code {rc2}" + (f": {_strip_ansi(stderr2)[:200]}" if stderr2 else ""))
+
+        rc = rc1 if rc1 != 0 else rc2
+        if rc1 != 0 and rc2 != 0:
             _write_placeholder(self.out, "tlsx_results.json",
-                               cmd, f"(tlsx exited with code {rc})")
+                               cmd_san, f"(tlsx exited with code {rc1})")
 
-        records     = _parse_jsonl(out_json)
+        # Merge results: SAN/CN pass is primary, overlay TLS version/cipher
+        san_records = _parse_jsonl(out_san)
+        tls_records = _parse_jsonl(out_tls)
+        tls_by_host = {}
+        for t in tls_records:
+            tls_by_host[t.get("host", "")] = t
+        for s in san_records:
+            overlay = tls_by_host.get(s.get("host", ""), {})
+            if overlay.get("tls_version"):
+                s["tls_version"] = overlay["tls_version"]
+            if overlay.get("cipher"):
+                s["cipher"] = overlay["cipher"]
+
+        # Write merged output for downstream consumers
+        try:
+            with open(out_json, "w", encoding="utf-8") as fh:
+                for rec in san_records:
+                    fh.write(json.dumps(rec) + "\n")
+        except Exception:
+            pass
+
+        records     = san_records
         san_new     = 0
         cert_count  = 0
         flagged     = 0

@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.7"
+VERSION = "2.14.8"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6045,8 +6045,7 @@ class ReconLogger:
         self.logger.warning(f"{self._tag()} {msg}")
         self._log_json("WARNING", msg, kw)
         if _VANTAGE_MANAGED:
-            _vc.error(msg, source=getattr(self._tool_local, "tool", "OSift"),
-                      level="WARNING")
+            _vc.log(msg, level="WARNING")
 
     def success(self, msg: str, **kw):
         self.logger.info(f"{self._tag()} [OK] {msg}")

@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.10"
+VERSION = "2.14.11"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -10199,6 +10199,7 @@ class WebCrawler:
                         "Phone Numbers":   "info",
                         "IP Addresses":    "info",
                         "Comments":        "info",
+                        "Internal Paths":  "low",
                         "Credit Cards":    "critical",
                         "Social Security": "high",
                     }
@@ -20468,6 +20469,23 @@ class PeopleDorker:
 
         if _people:
             sources_seen = sorted({p["source"].split(":")[1] for p in _people})
+            # Build affected list: each discovered person as a line
+            _aff_lines = []
+            for _pp in _people:
+                _fn = _pp.get("first_name", "")
+                _ln = _pp.get("last_name", "")
+                _ps = _pp.get("source", "").split(":")[-1] if _pp.get("source") else ""
+                _pe = _pp.get("email", "")
+                _ph = _pp.get("phone", "")
+                _parts = [f"{_fn} {_ln}".strip()]
+                if _pe:
+                    _parts.append(_pe)
+                if _ph:
+                    _parts.append(_ph)
+                if _ps:
+                    _parts.append(f"({_ps})")
+                _aff_lines.append(" — ".join(_parts))
+            _people_file = self._out_dir / "discovered_people.json"
             add_finding(
                 self.data,
                 tool     = "people_dorker",
@@ -20478,10 +20496,11 @@ class PeopleDorker:
                     f"Search-engine dorking discovered {len(_people)} potential employee "
                     f"name(s) and/or personal information for '{self.company}' via "
                     f"people-finder and professional directory sites. Sources: "
-                    + ", ".join(sources_seen)
-                    + ". Review people_dorking/discovered_people.json for full details."
+                    + ", ".join(sources_seen) + "."
                 ),
-                domain = self.domain,
+                domain   = self.domain,
+                affected = "\n".join(_aff_lines),
+                output_file = str(_people_file),
             )
             self.log.success(
                 f"[DORK] Phase 14 complete: {len(_people)} people, "

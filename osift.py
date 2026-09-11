@@ -396,11 +396,13 @@ class VantageConsole:
             sys.stdout.flush()
 
     def error(self, message: str, source: str = "osift",
-              detail: str = "", category: str = "") -> None:
+              detail: str = "", category: str = "",
+              level: str = "ERROR") -> None:
         with self._lock:
             if self._managed:
                 entry = {
                     "ts":       datetime.datetime.now().isoformat(),
+                    "level":    level,
                     "source":   source,
                     "message":  message,
                     "detail":   detail,
@@ -630,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.4"
+VERSION = "2.14.5"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6042,6 +6044,9 @@ class ReconLogger:
     def warning(self, msg: str, **kw):
         self.logger.warning(f"{self._tag()} {msg}")
         self._log_json("WARNING", msg, kw)
+        if _VANTAGE_MANAGED:
+            _vc.error(msg, source=getattr(self._tool_local, "tool", "OSift"),
+                      level="WARNING")
 
     def success(self, msg: str, **kw):
         self.logger.info(f"{self._tag()} [OK] {msg}")
@@ -11742,16 +11747,14 @@ class MaigretRunner:
     def run(self) -> int:
         binary = self._find_binary()
         if not binary:
-            # Try as a Python module
+            # Try as a Python module via subprocess
             try:
                 import maigret as _mg_mod  # type: ignore
-                binary = None  # will use module-based approach if needed
-                # For now, fall through to subprocess if CLI binary found
-                self.log.warning(
-                    "[maigret] CLI binary not on PATH (module found but CLI preferred).\n"
-                    "        Install: pip install maigret  then re-run"
+                binary = f"{sys.executable} -m maigret"
+                self.log.info(
+                    "[maigret] CLI binary not on PATH — falling back to "
+                    f"'{binary}'"
                 )
-                return 0
             except ImportError:
                 self.log.warning(
                     "[maigret] Not found — skipping.\n"
@@ -11764,7 +11767,10 @@ class MaigretRunner:
             self.log.info("[maigret] No username candidates derived — skipping")
             return 0
 
-        TOOL_REGISTRY.query_and_register(binary, "maigret")
+        # binary may be a path (CLI) or "python3 -m maigret" (module fallback)
+        _is_module = binary.endswith("-m maigret")
+        if not _is_module:
+            TOOL_REGISTRY.query_and_register(binary, "maigret")
         self.log.set_tool_context("maigret")
         self.log.info(
             f"[maigret] Social media enumeration for {len(usernames)} username(s): "
@@ -11774,8 +11780,9 @@ class MaigretRunner:
         all_profiles: List[Dict] = []
         for username in usernames:
             out_file = self.out / f"{username}.json"
+            _bin_part = binary if _is_module else f'"{binary}"'
             cmd = (
-                f'"{binary}" {username} '
+                f'{_bin_part} {username} '
                 f'--output-type json -o "{out_file}" '
                 f"--timeout 30 --no-color --retries 1 "
                 f"--ignore-ids unknown --top-sites 500"
@@ -14192,8 +14199,11 @@ class PDKatana:
             f"-ct 30 -c 10 -rl 50 "
             f'-jsonl -o "{out_json}" -silent'
         )
-        self.log.info(f"[katana] Crawling {sum(1 for _ in seed_file.open())} seed URLs (depth={self.max_depth})")
-        stdout, stderr, rc = _shell(cmd)
+        _seed_count = sum(1 for _ in seed_file.open())
+        self.log.info(f"[katana] Crawling {_seed_count} seed URLs (depth={self.max_depth})")
+        # katana can take a long time with many seeds; scale the timeout
+        _katana_timeout = max(900, _seed_count * 15)  # ~15s per seed, min 15min
+        stdout, stderr, rc = _shell(cmd, timeout=_katana_timeout)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if rc != 0:

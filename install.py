@@ -97,6 +97,7 @@ GO_INSTALL_TOOLS = [
     "github.com/tomnomnom/waybackurls@latest",
     "github.com/ffuf/ffuf/v2@latest",
     "github.com/trufflesecurity/trufflehog/v3@latest",
+    "github.com/d3mondev/puredns/v2@latest",
 ]
 
 # Git tools -------------------------------------------------------------------
@@ -119,15 +120,7 @@ GIT_TOOLS = [
         "name":   "theHarvester",
         "url":    "https://github.com/laramies/theHarvester",
         "dest":   OPT_DIR / "theHarvester",
-        "action": "pip_install_requirements_base",
-    },
-    {
-        "name":   "puredns",
-        "url":    "https://github.com/d3mondev/puredns",
-        "dest":   OPT_DIR / "puredns",
-        "action": "go_build_output",
-        "output": "/usr/local/bin/puredns",
-        "go_args": ["./..."],
+        "action": "pip_install_dot",  # upstream switched to pyproject.toml
     },
     {
         "name":   "cent",
@@ -161,14 +154,7 @@ GIT_TOOLS = [
         "dest":   OPT_DIR / "maigret",
         "action": None,  # CLI installed via pip (PIP_PKGS); clone kept for reference
     },
-    {
-        "name":   "trufflehog",
-        "url":    "https://github.com/trufflesecurity/trufflehog",
-        "dest":   OPT_DIR / "trufflehog",
-        "action": "go_build_output",
-        "output": "/usr/local/bin/trufflehog",
-        "go_args": ["."],
-    },
+    # trufflehog: installed via go install (GO_INSTALL_TOOLS), no clone needed
     {
         "name":   "cloud_enum",
         "url":    "https://github.com/initstring/cloud_enum",
@@ -181,7 +167,7 @@ GIT_TOOLS = [
 VERIFY_BINS = [
     "amass", "nmap", "subfinder", "httpx", "dnsx",
     "nuclei", "naabu", "waybackurls", "ffuf",
-    "maigret", "trufflehog", "cloud_enum",
+    "maigret", "trufflehog", "cloud_enum", "puredns",
 ]
 VERIFY_MODS = [
     "requests", "dns", "whois", "bs4",

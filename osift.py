@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.13"
+VERSION = "2.14.14"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -14014,12 +14014,13 @@ class PDTlsx:
 
         self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")
 
-        stdout1, stderr1, rc1 = _shell(cmd_san)
+        _tlsx_timeout = min(60 * len(hosts), 600)  # ~60s/host, cap at 10 min per pass
+        stdout1, stderr1, rc1 = _shell(cmd_san, timeout=_tlsx_timeout)
         self.log.log_command(cmd_san, stdout1, stderr1, rc1)
         if rc1 != 0:
             self.log.warning(f"[tlsx] SAN/CN pass exited with code {rc1}" + (f": {_strip_ansi(stderr1)[:200]}" if stderr1 else ""))
 
-        stdout2, stderr2, rc2 = _shell(cmd_tls)
+        stdout2, stderr2, rc2 = _shell(cmd_tls, timeout=_tlsx_timeout)
         self.log.log_command(cmd_tls, stdout2, stderr2, rc2)
         if rc2 != 0:
             self.log.warning(f"[tlsx] TLS version pass exited with code {rc2}" + (f": {_strip_ansi(stderr2)[:200]}" if stderr2 else ""))
@@ -14132,7 +14133,7 @@ class PDTlsx:
         if not records:
             self.log.info("[tlsx] No TLS certificate records returned")
             _write_placeholder(self.out, "tlsx_results.json",
-                               cmd, "(tlsx returned no TLS certificate data)")
+                               cmd_san, "(tlsx returned no TLS certificate data)")
         self.log.success(
             f"[tlsx] {cert_count} certs | {san_new} new SAN subdomains | {flagged} TLS issues flagged"
         )

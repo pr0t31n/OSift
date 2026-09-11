@@ -15765,10 +15765,46 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
         items.append(entry)
         _vc.action_item(entry)
 
+    # ── Load existing SS3 targets so we skip IPs already in scope ────────
+    _ss_nets: list = []
+    if _project_dir:
+        _ss_cfg_path = _project_dir / "ss_settings.json"
+        if _ss_cfg_path.exists():
+            try:
+                import ipaddress as _ipa
+                _ss_cfg = json.loads(_ss_cfg_path.read_text(encoding="utf-8"))
+                for _st in _ss_cfg.get("scan", {}).get("targets", []):
+                    _st = str(_st).strip()
+                    if not _st:
+                        continue
+                    try:
+                        _ss_nets.append(_ipa.ip_network(_st, strict=False))
+                    except ValueError:
+                        # Could be a hostname or range — try as single host
+                        try:
+                            _ss_nets.append(_ipa.ip_network(f"{_st}/32", strict=False))
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
+
+    def _ip_in_ss_scope(addr: str) -> bool:
+        """Check if an IP falls within any existing SS3 target range."""
+        if not _ss_nets:
+            return False
+        try:
+            import ipaddress as _ipa
+            _a = _ipa.ip_address(addr)
+            return any(_a in net for net in _ss_nets)
+        except ValueError:
+            return False
+
     # ── Resolved IPs → Scattershot3 ───────────────────────────────────────
     for ip_addr, ip_meta in data.ip_addresses.items():
         if not ip_addr or ip_addr.startswith("127.") or ip_addr == "0.0.0.0":
             continue
+        if _ip_in_ss_scope(ip_addr):
+            continue  # already in SS3 target scope — no action item needed
         fqdns = ip_meta.get("fqdns") or []
         hostname = fqdns[0] if fqdns else ""
         ports = sorted(set(data.open_ports.get(ip_addr, [])))

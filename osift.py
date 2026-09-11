@@ -11935,11 +11935,18 @@ class TruffleHogRunner:
         p = shutil.which("trufflehog")
         if p:
             return p
-        gobin = os.path.join(
-            os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin"
-        )
-        candidate = os.path.join(gobin, "trufflehog")
-        return candidate if os.path.isfile(candidate) else None
+        # Fallback: check common install locations (sudo secure_path may
+        # strip /usr/local/bin from PATH even with -E)
+        for candidate in (
+            "/usr/local/bin/trufflehog",
+            os.path.join(
+                os.environ.get("GOPATH", os.path.expanduser("~/go")),
+                "bin", "trufflehog",
+            ),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+        return None
 
     def _resolve_org(self) -> Optional[str]:
         """Determine GitHub org name from provided hint or heuristics."""

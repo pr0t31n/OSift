@@ -630,7 +630,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.2"
+VERSION = "2.14.3"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6078,8 +6078,8 @@ class ReconLogger:
         available), also emit a sibling .log file via the shared pr0t31n_tool_
         runner — a bash-prompted transcript per CLAUDE.md Section 15.
         """
-        tool_name = tool or self._tool
-        tool_ver  = version or (TOOL_REGISTRY.get_version(tool_name) if tool else self._version)
+        tool_name = tool or getattr(self._tool_local, "tool", "OSift")
+        tool_ver  = version or (TOOL_REGISTRY.get_version(tool_name) if tool else getattr(self._tool_local, "version", VERSION))
         ts        = datetime.datetime.now(_UTC).isoformat()
 
         entry = {

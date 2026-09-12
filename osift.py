@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.15"
+VERSION = "2.14.16"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -13998,18 +13998,24 @@ class PDTlsx:
         out_san  = self.out / "tlsx_san.json"
         out_tls  = self.out / "tlsx_tls.json"
 
+        # Cap concurrency — tlsx buffers full cert chains per goroutine;
+        # at -c 100 it consumed 2.7 GB and triggered the OOM killer on a
+        # 6 GB box running SS3 concurrently.  Tie to the adaptive limit
+        # (hardware-aware) with an upper bound of 25.
+        _tlsx_c = min(25, _SCAN_CONCURRENCY)
+
         cmd_san = (
             f'"{binary}" -l "{input_file}" '
             f"-san -cn "
             f'-json -o "{out_san}" '
-            f"-c 100 -timeout 5 -silent"
+            f"-c {_tlsx_c} -timeout 5 -silent"
         )
         cmd_tls = (
             f'"{binary}" -l "{input_file}" '
             f"-tv -cipher "
             f"-expired -self-signed -mismatched "
             f'-json -o "{out_tls}" '
-            f"-c 100 -timeout 5 -silent"
+            f"-c {_tlsx_c} -timeout 5 -silent"
         )
 
         self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")

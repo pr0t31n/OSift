@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.1"
+VERSION = "2.15.2"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5674,6 +5674,11 @@ class GitLeakScanner:
             self.log.info("[gitleaks] No repos supplied — skipping")
             return 0
         trufflehog = _shu.which("trufflehog")
+        if not trufflehog:
+            # Fallback: check /usr/local/bin (sudo secure_path may strip it)
+            _tf_fb = "/usr/local/bin/trufflehog"
+            if os.path.isfile(_tf_fb):
+                trufflehog = _tf_fb
         gitleaks   = _shu.which("gitleaks")
         if not trufflehog and not gitleaks:
             self.log.info("[gitleaks] Neither trufflehog nor gitleaks installed — skipping")
@@ -7121,14 +7126,17 @@ def _find_binary(candidates: list) -> Optional[str]:
         p = shutil.which(name)
         if p:
             return p
-    # Also probe GOPATH/bin for Go binaries
+    # Probe common install dirs that may not be on PATH under sudo secure_path
+    _extra_dirs = ["/usr/local/bin"]
     gobin = os.path.join(os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin")
-    for name in candidates:
-        full = os.path.join(gobin, name + (".exe" if IS_WINDOWS else ""))
-        if os.path.isfile(full):
-            if gobin not in os.environ.get("PATH", ""):
-                os.environ["PATH"] = gobin + os.pathsep + os.environ.get("PATH", "")
-            return full
+    _extra_dirs.append(gobin)
+    for _edir in _extra_dirs:
+        for name in candidates:
+            full = os.path.join(_edir, name + (".exe" if IS_WINDOWS else ""))
+            if os.path.isfile(full):
+                if _edir not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = _edir + os.pathsep + os.environ.get("PATH", "")
+                return full
     return None
 
 

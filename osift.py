@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.4"
+VERSION = "2.15.5"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -17172,6 +17172,10 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             "service":     "",
             "output_file": (_f.get("output_file") or "").strip(),
             "affected":    _affected,
+            "remediation": (_f.get("remediation") or "").strip(),
+            "exploitdb":   _f.get("exploitdb", False),
+            "metasploit":  _f.get("metasploit", False),
+            "exploit_details": _f.get("exploit_details", []),
             "_scope":      "osint",
             "_tool":       "osift",
             "_category":   _category,
@@ -19561,8 +19565,11 @@ class IntelAggregator:
 
         def _row(title: str, description: str, *,
                  ip: str = "", port: str = "", hostname: str = "",
-                 risk: str = "info", command: str = "osift",
-                 output: str = "") -> Dict:
+                 risk: str = "INFO", command: str = "osift",
+                 output: str = "", output_file: str = "",
+                 remediation: str = "", cves: str = "",
+                 sources: str = "osift", service: str = "",
+                 affected: str = "") -> Dict:
             return {
                 "title":       title,
                 "datetime":    ts,
@@ -19573,6 +19580,15 @@ class IntelAggregator:
                 "command":     command,
                 "description": description,
                 "output":      output,
+                "cves":        cves,
+                "sources":     sources,
+                "service":     service,
+                "output_file": output_file,
+                "affected":    affected or hostname or ip,
+                "remediation": remediation,
+                "exploitdb":   False,
+                "metasploit":  False,
+                "exploit_details": [],
             }
 
         # ── Subdomains ────────────────────────────────────────────────────────

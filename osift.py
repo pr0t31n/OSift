@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.0"
+VERSION = "2.15.1"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6373,7 +6373,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-001",
         "name": "Ivanti Cloud Services Appliance (CSA)",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)cloud\s*services?\s*appliance", r"(?i)ivanti.*csa"],
         "san_patterns": [r"(?i)ivanti[\-\.]?csa"],
         "severity": "CRITICAL",
@@ -6400,7 +6400,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-002",
         "name": "WSO2 Carbon Server",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)wso2", r"(?i)carbon\s*server"],
         "san_patterns": [r"(?i)wso2"],
         "severity": "HIGH",
@@ -6427,7 +6427,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-003",
         "name": "Fortinet FortiGate / FortiOS",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)fortinet", r"(?i)forti(?:gate|os|guard|web|mail|analyzer)"],
         "san_patterns": [r"(?i)forti(?:gate|os|net)"],
         "severity": "HIGH",
@@ -6453,7 +6453,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-004",
         "name": "Pulse Secure / Ivanti Connect Secure VPN",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)pulse\s*secure", r"(?i)ivanti\s*connect\s*secure", r"(?i)ivanti.*pulse"],
         "san_patterns": [r"(?i)pulse(?:secure)?[\.\-]", r"(?i)ivanti[\.\-]connect"],
         "severity": "HIGH",
@@ -6478,7 +6478,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-005",
         "name": "Citrix ADC / NetScaler",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)citrix", r"(?i)netscaler"],
         "san_patterns": [r"(?i)citrix|netscaler"],
         "severity": "HIGH",
@@ -6503,7 +6503,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-006",
         "name": "F5 BIG-IP",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)f5\s*(networks|big[\-\s]?ip)", r"(?i)big[\-\s]?ip"],
         "san_patterns": [r"(?i)big[\-\.]?ip|f5[\.\-]"],
         "severity": "HIGH",
@@ -6528,7 +6528,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-007",
         "name": "SonicWall SMA / SRA",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)sonicwall", r"(?i)sonic[\-\s]?wall"],
         "san_patterns": [r"(?i)sonicwall"],
         "severity": "HIGH",
@@ -6553,7 +6553,7 @@ _KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
     {
         "id": "OS-APPL-008",
         "name": "Palo Alto Networks PAN-OS",
-        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org", "issuer_org"],
         "patterns": [r"(?i)palo\s*alto", r"(?i)pan[\-\s]?os"],
         "san_patterns": [r"(?i)paloalto|pan[\.\-]os"],
         "severity": "HIGH",
@@ -6616,9 +6616,16 @@ def _check_appliance_fingerprints(
             val = entry.get(field, "")
             if not val:
                 continue
-            for pat in fp.get("patterns", []):
-                if _compile_appliance_re(pat).search(val):
-                    matched = True
+            # Handle list values (e.g. issuer_org: ["Ivanti, Inc."])
+            vals = val if isinstance(val, list) else [val]
+            for v in vals:
+                if not isinstance(v, str) or not v:
+                    continue
+                for pat in fp.get("patterns", []):
+                    if _compile_appliance_re(pat).search(v):
+                        matched = True
+                        break
+                if matched:
                     break
             if matched:
                 break
@@ -8594,6 +8601,31 @@ class CertificateCollector:
         self.log.success(f"[CERT] Collected {len(self.data.certificates)} certificates")
         self._extract_alt_names()
 
+        # Run appliance fingerprinting on collected certs
+        # CertificateCollector uses different field names from tlsx, so
+        # translate before passing to the fingerprint checker.
+        _appl_seen: set = set()
+        _appl_count = 0
+        for _crec in self.data.certificates:
+            if _crec.get("source") != "direct_tls":
+                continue
+            _translated = {
+                "subject_cn":  _crec.get("common_name", ""),
+                "issuer_cn":   _crec.get("issuer", ""),
+                "subject_org": _crec.get("subject_org", []),
+                "issuer_org":  _crec.get("issuer_org", []),
+                "subject_an":  _crec.get("alt_names", []),
+            }
+            _appl_count += _check_appliance_fingerprints(
+                _translated, _crec.get("hostname", ""), self.data,
+                _seen=_appl_seen,
+            )
+        if _appl_count:
+            self.log.success(
+                f"[CERT] Appliance fingerprinting: {_appl_count} "
+                f"known-vulnerable appliance(s) detected from certificate data"
+            )
+
     def _get_cert(self, hostname: str, ip: str):
         hostname = hostname.rstrip(".")
         # Connect by pre-resolved IP to skip getaddrinfo; pass hostname as SNI
@@ -8653,6 +8685,16 @@ class CertificateCollector:
                 cert_info["issuer"] = issuer_cn[0].value if issuer_cn else ""
             except Exception:
                 cert_info["issuer"] = ""
+            try:
+                _subj_org = cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
+                cert_info["subject_org"] = [o.value for o in _subj_org] if _subj_org else []
+            except Exception:
+                cert_info["subject_org"] = []
+            try:
+                _iss_org = cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
+                cert_info["issuer_org"] = [o.value for o in _iss_org] if _iss_org else []
+            except Exception:
+                cert_info["issuer_org"] = []
 
         self.data.certificates.append(cert_info)
         out = self.output_dir / "parsed" / f"{_safe_filename(hostname)}.json"
@@ -16251,9 +16293,12 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
         except ValueError:
             return False
 
-    # ── Resolved IPs → Scattershot3 ───────────────────────────────────────
+    # ── Resolved IPs → action items ──────────────────────────────────────
     for ip_addr, ip_meta in data.ip_addresses.items():
         if not ip_addr or ip_addr.startswith("127.") or ip_addr == "0.0.0.0":
+            continue
+        # Skip IPv6 addresses entirely — only IPv4 gets action items
+        if ":" in ip_addr:
             continue
         if _ip_in_ss_scope(ip_addr):
             continue  # already in SS3 target scope — no action item needed
@@ -16265,10 +16310,11 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
             desc += f" (associated with {hostname})"
         if ports:
             desc += f" — known open ports: {', '.join(str(p) for p in ports[:10])}"
-        _add("network_scan", "Scattershot3", ip_addr, ip_addr, 0,
+        _add("network_scan", "Manual", ip_addr, ip_addr, 0,
              hostname,
-             f"Network scan recommended: {ip_addr}",
-             desc + ". Full port scan and service enumeration recommended.",
+             f"Out of Scope IP Identified: {ip_addr}",
+             desc + ". This IP was identified during OSINT but is outside the "
+             "current Scattershot3 target scope.",
              priority="MEDIUM",
              metadata={"fqdns": fqdns[:20], "known_ports": ports[:50]})
 
@@ -21252,7 +21298,9 @@ class DnsTwistRunner:
                 fuzzer = entry.get("fuzzer", "")
                 perm_domain = entry.get("domain", "").strip().lower()
 
-                if not perm_domain or fuzzer.startswith("original"):
+                # Skip the *original entry (target domain itself) and
+                # any permutation that exactly matches the target domain
+                if not perm_domain or "original" in fuzzer.lower() or perm_domain == domain:
                     continue
 
                 total_registered += 1

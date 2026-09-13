@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.16"
+VERSION = "2.14.17"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -14037,17 +14037,22 @@ class PDTlsx:
                                cmd_san, f"(tlsx exited with code {rc1})")
 
         # Merge results: SAN/CN pass is primary, overlay TLS version/cipher
+        # AND security flags (self_signed, expired, mismatched, untrusted)
+        # which may only appear in the TLS pass that uses the detection flags.
         san_records = _parse_jsonl(out_san)
         tls_records = _parse_jsonl(out_tls)
         tls_by_host = {}
         for t in tls_records:
             tls_by_host[t.get("host", "")] = t
+        _MERGE_FIELDS = ("tls_version", "cipher", "self_signed", "expired",
+                         "mismatched", "untrusted", "wildcard_certificate",
+                         "client_cert_required")
         for s in san_records:
             overlay = tls_by_host.get(s.get("host", ""), {})
-            if overlay.get("tls_version"):
-                s["tls_version"] = overlay["tls_version"]
-            if overlay.get("cipher"):
-                s["cipher"] = overlay["cipher"]
+            for _mf in _MERGE_FIELDS:
+                _mv = overlay.get(_mf)
+                if _mv is not None and not s.get(_mf):
+                    s[_mf] = _mv
 
         # Write merged output for downstream consumers
         try:
@@ -14062,11 +14067,25 @@ class PDTlsx:
         cert_count  = 0
         flagged     = 0
 
+        # Build scope set: primary domain + all configured domains
+        _scope_set = set(self.data.domains if self.data.domains else [])
+        _scope_set.add(self.domain)
+        _scope_set = {d.lower().rstrip(".") for d in _scope_set if d}
+
+        def _host_in_scope(h: str) -> bool:
+            h = h.lower().rstrip(".")
+            return any(h == sd or h.endswith("." + sd) for sd in _scope_set)
+
+        # RFC 1918 / link-local patterns for internal IP detection in SANs
+        _INTERNAL_RE = re.compile(
+            r'^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.)'
+        )
+
         for entry in records:
             host = entry.get("host", "").split(":")[0].lower()
             cert_count += 1
 
-            # Build cert record
+            # Build cert record (always — even for out-of-scope hosts)
             cert_rec: Dict[str, Any] = {
                 "hostname":      host,
                 "source":        "tlsx",
@@ -14080,53 +14099,153 @@ class PDTlsx:
                 "self_signed":   entry.get("self_signed", False),
                 "expired":       entry.get("expired", False),
                 "mismatched":    entry.get("mismatched", False),
+                "untrusted":     entry.get("untrusted", False),
             }
             self.data.certificates.append(cert_rec)
 
-            # Flag security issues
-            for flag, label in [
-                ("self_signed", "self-signed certificate"),
-                ("expired",     "expired certificate"),
-                ("mismatched",  "hostname mismatch certificate"),
-            ]:
-                if entry.get(flag):
-                    if flag == "expired":
-                        add_finding(
-                            self.data, "tlsx",
-                            f"tls_{flag}", CAT_TLS, "HIGH",
-                            "The server's TLS certificate has passed its expiry date, causing browser trust errors and indicating a breakdown in certificate lifecycle management.",
-                            host=host, affected=host,
-                            tls_version=entry.get("tls_version"),
-                            cipher=entry.get("cipher"),
-                            title="SSL/TLS Certificate: Expired",
-                            remediation="Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
-                        )
-                    elif flag == "self_signed":
-                        add_finding(
-                            self.data, "tlsx",
-                            f"tls_{flag}", CAT_TLS, "medium",
-                            "The server presented a self-signed TLS certificate that is not anchored to a publicly trusted CA, preventing clients from verifying the server's identity and enabling trivial MITM attacks.",
-                            host=host, affected=host,
-                            tls_version=entry.get("tls_version"),
-                            cipher=entry.get("cipher"),
-                            title="SSL/TLS Certificate: Self-Signed",
-                            remediation="Replace self-signed certificates with certificates issued by a trusted CA; use ACME/Let's Encrypt for cost-free automation.",
-                        )
-                    else:
-                        add_finding(
-                            self.data, "tlsx",
-                            f"tls_{flag}", CAT_TLS, "medium",
-                            f"tlsx: {label} detected",
-                            host=host, affected=host,
-                            tls_version=entry.get("tls_version"),
-                            cipher=entry.get("cipher"),
-                        )
+            # Gate all findings on host being in scope
+            if not _host_in_scope(host):
+                # Still harvest SANs even for out-of-scope hosts
+                for san in entry.get("subject_an", []):
+                    san = san.lstrip("*.").lower().rstrip(".")
+                    if any(san.endswith(sd) or san == sd for sd in _scope_set) and san not in self.data.subdomains:
+                        self.data.subdomains[san] = {
+                            "sources": ["tlsx_san"], "ips": [], "ports": [], "http_status": None
+                        }
+                        san_new += 1
+                continue
+
+            _tv  = entry.get("tls_version", "")
+            _cip = entry.get("cipher", "")
+            _cn  = entry.get("subject_cn", "")
+
+            # ── Expired certificate ───────────────────────────────────────
+            if entry.get("expired"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_expired", CAT_TLS, "HIGH",
+                    "The server's TLS certificate has passed its expiry date, causing browser trust errors and indicating a breakdown in certificate lifecycle management.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS Certificate: Expired",
+                    remediation="Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
+                )
+                flagged += 1
+
+            # ── Self-signed certificate ───────────────────────────────────
+            if entry.get("self_signed"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_self_signed", CAT_TLS, "MEDIUM",
+                    "The server presented a self-signed TLS certificate that is not anchored to a publicly trusted CA, preventing clients from verifying the server's identity and enabling trivial MITM attacks.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS Certificate: Self-Signed",
+                    remediation="Replace self-signed certificates with certificates issued by a trusted CA; use ACME/Let's Encrypt for cost-free automation.",
+                )
+                flagged += 1
+
+            # ── Hostname mismatch ─────────────────────────────────────────
+            if entry.get("mismatched"):
+                _served_cn = _cn or "(unknown)"
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_mismatched", CAT_TLS, "MEDIUM",
+                    f"The TLS certificate presented by {host} has a Common Name / SAN of '{_served_cn}' which does not match the requested hostname. "
+                    f"This causes browser trust warnings and may indicate a misconfigured virtual host, shared hosting, or a decommissioned service still accepting connections.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS Certificate: Hostname Mismatch",
+                    remediation="Ensure each externally-facing hostname is served by a certificate whose CN or SAN list includes that hostname. Remove DNS records for decommissioned services.",
+                )
+                flagged += 1
+
+            # ── Untrusted certificate chain ───────────────────────────────
+            if entry.get("untrusted"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_untrusted", CAT_TLS, "MEDIUM",
+                    f"The TLS certificate chain presented by {host} is not trusted — the issuing CA is not in standard trust stores. "
+                    f"Issuer: {entry.get('issuer_cn', 'unknown')}. "
+                    f"Clients connecting to this host will receive certificate warnings, and MITM attacks become trivial to execute.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS Certificate: Untrusted Chain",
+                    remediation="Replace the certificate with one issued by a publicly trusted CA. If internal-only, deploy the private CA root to all clients via group policy or MDM.",
+                )
+                flagged += 1
+
+            # ── Wildcard certificate ──────────────────────────────────────
+            if entry.get("wildcard_certificate"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_wildcard", CAT_TLS, "INFO",
+                    f"A wildcard TLS certificate (CN: {_cn}) is in use on {host}. "
+                    f"Wildcard certificates simplify management but increase blast radius if the private key is compromised — "
+                    f"any subdomain under the wildcard scope can be impersonated.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS Certificate: Wildcard in Use",
+                    remediation="Evaluate whether single-host certificates or shorter-lived automated certificates (ACME) would reduce risk. Ensure wildcard private keys are stored securely and rotated regularly.",
+                )
+                flagged += 1
+
+            # ── Deprecated TLS version ────────────────────────────────────
+            _tv_low = _tv.lower().replace(" ", "")
+            if _tv_low in ("tls10", "tls1.0", "tls1"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_deprecated_version", CAT_TLS, "HIGH",
+                    f"{host} supports TLS 1.0, which has known cryptographic weaknesses (BEAST, POODLE) and is prohibited by PCI DSS 3.2+ and NIST SP 800-52r2.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS: Deprecated Protocol Version (TLS 1.0)",
+                    remediation="Disable TLS 1.0 on the server and require TLS 1.2 or higher. Update client compatibility requirements if necessary.",
+                )
+                flagged += 1
+            elif _tv_low in ("tls11", "tls1.1"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_deprecated_version", CAT_TLS, "HIGH",
+                    f"{host} supports TLS 1.1, which is deprecated by all major browsers and prohibited by PCI DSS 3.2+ and NIST SP 800-52r2.",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS: Deprecated Protocol Version (TLS 1.1)",
+                    remediation="Disable TLS 1.1 on the server and require TLS 1.2 or higher.",
+                )
+                flagged += 1
+            elif _tv_low in ("tls12", "tls1.2"):
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_legacy_version", CAT_TLS, "INFO",
+                    f"{host} negotiated TLS 1.2 (highest supported). While TLS 1.2 remains acceptable, TLS 1.3 offers improved security (removal of legacy ciphers, faster handshakes, forward secrecy by default).",
+                    host=host, affected=host,
+                    tls_version=_tv, cipher=_cip,
+                    title="SSL/TLS: TLS 1.3 Not Supported",
+                    remediation="Enable TLS 1.3 on the server alongside TLS 1.2 to benefit from stronger cipher suites and reduced handshake latency.",
+                )
+                flagged += 1
+
+            # ── Internal IP address leaked in SAN ─────────────────────────
+            for _san_entry in entry.get("subject_an", []):
+                if _INTERNAL_RE.match(_san_entry):
+                    add_finding(
+                        self.data, "tlsx",
+                        "tls_internal_ip_leak", CAT_INFRA, "LOW",
+                        f"The TLS certificate for {host} (CN: {_cn}) contains an internal/private IP address ({_san_entry}) in its Subject Alternative Name list. "
+                        f"This leaks internal network topology to external observers.",
+                        host=host, affected=f"{host} (SAN: {_san_entry})",
+                        tls_version=_tv, cipher=_cip,
+                        title="TLS Certificate: Internal IP Address in SAN",
+                        remediation="Re-issue the certificate without internal IP addresses in the SAN list. Use split-horizon DNS or separate internal certificates for private services.",
+                    )
                     flagged += 1
+                    break  # one finding per host, not per IP
 
             # Harvest SANs for new subdomains
             for san in entry.get("subject_an", []):
                 san = san.lstrip("*.").lower().rstrip(".")
-                if san.endswith(self.domain) and san not in self.data.subdomains:
+                if any(san.endswith(sd) or san == sd for sd in _scope_set) and san not in self.data.subdomains:
                     self.data.subdomains[san] = {
                         "sources": ["tlsx_san"], "ips": [], "ports": [], "http_status": None
                     }

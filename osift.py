@@ -13972,9 +13972,11 @@ class PDTlsx:
     def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
         self.domain = domain
         self.out    = _domain_path(output_dir, domain) / "certificates" / "tlsx"
+        self._root_tlsx = output_dir / "certificates" / "tlsx"
         self.log    = log
         self.data   = data
         self.out.mkdir(parents=True, exist_ok=True)
+        self._root_tlsx.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> int:
         binary = _pd_binary("tlsx")
@@ -14066,6 +14068,10 @@ class PDTlsx:
         san_new     = 0
         cert_count  = 0
         flagged     = 0
+
+        # Accumulators for grouped findings (emitted after the per-entry loop)
+        _wc_certs:    Dict[str, List[str]] = {}   # wildcard CN → [hosts]
+        _tls12_hosts: List[str]            = []   # hosts with TLS 1.2 only
 
         # Build scope set: primary domain + all configured domains
         _scope_set = set(self.data.domains if self.data.domains else [])
@@ -14175,22 +14181,14 @@ class PDTlsx:
                 )
                 flagged += 1
 
-            # ── Wildcard certificate ──────────────────────────────────────
-            if entry.get("wildcard_certificate"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_wildcard", CAT_TLS, "INFO",
-                    f"A wildcard TLS certificate (CN: {_cn}) is in use on {host}. "
-                    f"Wildcard certificates simplify management but increase blast radius if the private key is compromised — "
-                    f"any subdomain under the wildcard scope can be impersonated.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS Certificate: Wildcard in Use",
-                    remediation="Evaluate whether single-host certificates or shorter-lived automated certificates (ACME) would reduce risk. Ensure wildcard private keys are stored securely and rotated regularly.",
-                )
-                flagged += 1
+            # ── Collect grouped findings (emitted after the loop) ─────────
+            # Wildcard: group by certificate CN so we get one finding per
+            # unique wildcard cert, not one per host.
+            if entry.get("wildcard_certificate") and _cn:
+                _wc_certs.setdefault(_cn, []).append(host)
 
-            # ── Deprecated TLS version ────────────────────────────────────
+            # TLS version: per-host for deprecated (1.0/1.1 = HIGH),
+            # grouped for TLS-1.2-only (INFO — many hosts share this).
             _tv_low = _tv.lower().replace(" ", "")
             if _tv_low in ("tls10", "tls1.0", "tls1"):
                 add_finding(
@@ -14199,7 +14197,7 @@ class PDTlsx:
                     f"{host} supports TLS 1.0, which has known cryptographic weaknesses (BEAST, POODLE) and is prohibited by PCI DSS 3.2+ and NIST SP 800-52r2.",
                     host=host, affected=host,
                     tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS: Deprecated Protocol Version (TLS 1.0)",
+                    title="Deprecated Protocol Enabled: TLSv1.0",
                     remediation="Disable TLS 1.0 on the server and require TLS 1.2 or higher. Update client compatibility requirements if necessary.",
                 )
                 flagged += 1
@@ -14210,37 +14208,27 @@ class PDTlsx:
                     f"{host} supports TLS 1.1, which is deprecated by all major browsers and prohibited by PCI DSS 3.2+ and NIST SP 800-52r2.",
                     host=host, affected=host,
                     tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS: Deprecated Protocol Version (TLS 1.1)",
+                    title="Deprecated Protocol Enabled: TLSv1.1",
                     remediation="Disable TLS 1.1 on the server and require TLS 1.2 or higher.",
                 )
                 flagged += 1
             elif _tv_low in ("tls12", "tls1.2"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_legacy_version", CAT_TLS, "INFO",
-                    f"{host} negotiated TLS 1.2 (highest supported). While TLS 1.2 remains acceptable, TLS 1.3 offers improved security (removal of legacy ciphers, faster handshakes, forward secrecy by default).",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS: TLS 1.3 Not Supported",
-                    remediation="Enable TLS 1.3 on the server alongside TLS 1.2 to benefit from stronger cipher suites and reduced handshake latency.",
-                )
-                flagged += 1
+                _tls12_hosts.append(host)
 
             # ── Internal IP address leaked in SAN ─────────────────────────
-            for _san_entry in entry.get("subject_an", []):
-                if _INTERNAL_RE.match(_san_entry):
-                    add_finding(
-                        self.data, "tlsx",
-                        "tls_internal_ip_leak", CAT_INFRA, "LOW",
-                        f"The TLS certificate for {host} (CN: {_cn}) contains an internal/private IP address ({_san_entry}) in its Subject Alternative Name list. "
-                        f"This leaks internal network topology to external observers.",
-                        host=host, affected=f"{host} (SAN: {_san_entry})",
-                        tls_version=_tv, cipher=_cip,
-                        title="TLS Certificate: Internal IP Address in SAN",
-                        remediation="Re-issue the certificate without internal IP addresses in the SAN list. Use split-horizon DNS or separate internal certificates for private services.",
-                    )
-                    flagged += 1
-                    break  # one finding per host, not per IP
+            _leaked_ips = [s for s in entry.get("subject_an", []) if _INTERNAL_RE.match(s)]
+            if _leaked_ips:
+                add_finding(
+                    self.data, "tlsx",
+                    "tls_internal_ip_leak", CAT_INFRA, "LOW",
+                    f"The TLS certificate for {host} (CN: {_cn}) contains internal/private IP address(es) ({', '.join(_leaked_ips)}) in its Subject Alternative Name list. "
+                    f"This leaks internal network topology to external observers.",
+                    host=host, affected=f"{host} (SAN: {', '.join(_leaked_ips)})",
+                    tls_version=_tv, cipher=_cip,
+                    title="TLS Certificate: Internal IP Address in SAN",
+                    remediation="Re-issue the certificate without internal IP addresses in the SAN list. Use split-horizon DNS or separate internal certificates for private services.",
+                )
+                flagged += 1
 
             # Harvest SANs for new subdomains
             for san in entry.get("subject_an", []):
@@ -14251,10 +14239,52 @@ class PDTlsx:
                     }
                     san_new += 1
 
+        # ── Emit grouped findings (one per unique wildcard CN / TLS 1.2) ──
+        for _wc_cn, _wc_hosts in _wc_certs.items():
+            _affected = "\n".join(sorted(set(_wc_hosts)))
+            add_finding(
+                self.data, "tlsx",
+                "tls_wildcard", CAT_TLS, "INFO",
+                f"A wildcard TLS certificate (CN: {_wc_cn}) is in use on {len(_wc_hosts)} host(s). "
+                f"Wildcard certificates simplify management but increase blast radius if the private key is compromised — "
+                f"any subdomain under the wildcard scope can be impersonated.",
+                host=self.domain, affected=_affected,
+                title="SSL/TLS Certificate: Wildcard in Use",
+                remediation="Evaluate whether single-host certificates or shorter-lived automated certificates (ACME) would reduce risk. Ensure wildcard private keys are stored securely and rotated regularly.",
+            )
+            flagged += 1
+
+        if _tls12_hosts:
+            _affected = "\n".join(sorted(set(_tls12_hosts)))
+            add_finding(
+                self.data, "tlsx",
+                "tls_legacy_version", CAT_TLS, "INFO",
+                f"{len(_tls12_hosts)} host(s) negotiated TLS 1.2 as the highest supported version. "
+                f"While TLS 1.2 remains acceptable, TLS 1.3 offers improved security "
+                f"(removal of legacy ciphers, faster handshakes, forward secrecy by default).",
+                host=self.domain, affected=_affected,
+                title="SSL/TLS: TLS 1.3 Not Supported",
+                remediation="Enable TLS 1.3 on the server alongside TLS 1.2 to benefit from stronger cipher suites and reduced handshake latency.",
+            )
+            flagged += 1
+
         # Persist parsed output
         (self.out / "tlsx_parsed.json").write_text(
             json.dumps(records, indent=2, default=str), encoding="utf-8"
         )
+        # Root-level summary so Vantage file-presence check detects completion
+        # (per-domain output lives under domains/<domain>/certificates/tlsx/)
+        try:
+            _summary = {
+                "domain": self.domain, "certs": cert_count,
+                "san_new": san_new, "flagged": flagged,
+                "records": len(records),
+            }
+            (self._root_tlsx / "tlsx_summary.json").write_text(
+                json.dumps(_summary, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
         if not records:
             self.log.info("[tlsx] No TLS certificate records returned")
             _write_placeholder(self.out, "tlsx_results.json",
@@ -21498,7 +21528,7 @@ API key sources (all free tiers available):
     if not _pm.is_phase_complete("pd_wave_ce"):
         _pm.set_phase_status("pd_wave_ce", "running", label="PD Wave C+E: TLS/CDN/Cloud")
         _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="running",
-                   active_tools=["certificates/tlsx", "ip_addresses", "api_intel/uncover", "company_info/cloudlist"])
+                   active_tools=["certificates/tlsx", "ip_addresses", "api_intel/uncover", "company/info/cloudlist"])
         pd.run_wave_c_and_e()
         _pm.set_phase_status("pd_wave_ce", "complete", label="PD Wave C+E: TLS/CDN/Cloud")
         _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="complete")
@@ -21536,7 +21566,7 @@ API key sources (all free tiers available):
     else:
         _pm.set_phase_status("phase6_company", "running", label="Phase 6: Company Intelligence")
         _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="running",
-                   active_tools=["company_info", "osint/maltego"])
+                   active_tools=["company/info", "osint/maltego"])
         _section(log, "PHASE 6: Company Intelligence")
         CompanyIntelligence(
             args.company, args.domains[0], output_dir, log, data,

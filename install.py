@@ -77,7 +77,6 @@ PIP_PKGS = [
     "cloud-enum",
     "EmailHarvester",
     "playwright",
-    "o365spray",
 ]
 
 # Go tools (go install) -------------------------------------------------------
@@ -98,14 +97,20 @@ GO_INSTALL_TOOLS = [
     "github.com/tomnomnom/waybackurls@latest",
     "github.com/ffuf/ffuf/v2@latest",
     "github.com/d3mondev/puredns/v2@latest",
-    "github.com/zricethezav/gitleaks/v8/cmd/gitleaks@latest",
+    "github.com/zricethezav/gitleaks/v8@latest",
 ]
 
 # Git tools -------------------------------------------------------------------
 # Each entry: (repo_url, clone_dir, post_clone_action)
 # post_clone_action is a callable that receives the clone path
 GIT_TOOLS = [
-    # TREVORspray — repo deleted upstream; replaced by o365spray (pip)
+    # TREVORspray — repo deleted upstream; replaced by o365spray
+    {
+        "name":   "o365spray",
+        "url":    "https://github.com/0xZDH/o365spray",
+        "dest":   OPT_DIR / "o365spray",
+        "action": "pip_install_dot",
+    },
     {
         "name":   "GitDorker",
         "url":    "https://github.com/obheda12/GitDorker",
@@ -155,7 +160,7 @@ GIT_TOOLS = [
         "name":   "cloud_enum",
         "url":    "https://github.com/initstring/cloud_enum",
         "dest":   OPT_DIR / "cloud_enum",
-        "action": "pip_install_requirements",
+        "action": "pip_install_dot",
     },
 ]
 

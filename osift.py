@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.18"
+VERSION = "2.15.0"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6290,6 +6290,8 @@ CAT_BREACH           = "Credential Breach"
 CAT_WEB              = "Web Intelligence"
 CAT_RECON            = "Reconnaissance"
 CAT_DNS              = "DNS"
+CAT_APPLIANCE        = "Known-Vulnerable Appliance"
+CAT_BRAND            = "Brand Protection"
 
 # Map legacy 'source' strings → canonical tool names
 _SOURCE_TO_TOOL: Dict[str, str] = {
@@ -6363,6 +6365,287 @@ _SOURCE_TO_TOOL: Dict[str, str] = {
     "nslookup-cname":    "OSift-DNS",
     "nslookup-reverse":  "OSift-DNS",
 }
+
+
+# ─── Known-Vulnerable Appliance Fingerprints ──────────────────────────────────
+
+_KNOWN_APPLIANCE_FINGERPRINTS: list[dict] = [
+    {
+        "id": "OS-APPL-001",
+        "name": "Ivanti Cloud Services Appliance (CSA)",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)cloud\s*services?\s*appliance", r"(?i)ivanti.*csa"],
+        "san_patterns": [r"(?i)ivanti[\-\.]?csa"],
+        "severity": "CRITICAL",
+        "title": "Ivanti Cloud Services Appliance (CSA) Detected",
+        "cves": "CVE-2024-8963, CVE-2024-9379, CVE-2024-9380, CVE-2024-8190",
+        "description": (
+            "The TLS certificate identifies this host as an Ivanti Cloud Services Appliance (CSA). "
+            "Ivanti CSA has been the target of multiple critical actively-exploited vulnerabilities: "
+            "CVE-2024-8963 (path traversal, CVSS 9.1), CVE-2024-9379 (SQL injection, CVSS 6.5), "
+            "CVE-2024-9380 (OS command injection, CVSS 7.2), and CVE-2024-8190 (remote code execution, CVSS 7.2). "
+            "CISA added these to the Known Exploited Vulnerabilities (KEV) catalogue in October 2024. "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the CSA version (Admin Console → About, or /api/v1/system/info).\n"
+            "2. Confirm CSA 5.0.2 or later is installed (patches CVE-2024-8963/9379/9380/8190).\n"
+            "3. If CSA 4.6.x: upgrade immediately — EOL branch, no further patches.\n"
+            "4. Check for indicators of compromise per Ivanti advisory AA24-1002A.\n"
+            "5. Review access logs for path-traversal attempts (/../../../ patterns).\n"
+            "6. Verify the admin interface is not exposed to the internet."
+        ),
+    },
+    {
+        "id": "OS-APPL-002",
+        "name": "WSO2 Carbon Server",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)wso2", r"(?i)carbon\s*server"],
+        "san_patterns": [r"(?i)wso2"],
+        "severity": "HIGH",
+        "title": "WSO2 Carbon Server Detected",
+        "cves": "CVE-2022-29464",
+        "description": (
+            "The TLS certificate or server header identifies this host as a WSO2 Carbon Server. "
+            "WSO2 products are affected by CVE-2022-29464 (CVSS 9.8), an unrestricted arbitrary file upload "
+            "vulnerability that allows unauthenticated remote code execution. This vulnerability was actively "
+            "exploited in the wild and affects WSO2 API Manager, Identity Server, Enterprise Integrator, and "
+            "Open Banking AM versions prior to their respective patches. "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Identify the WSO2 product and version (server header, /carbon/admin/login.jsp, or management console).\n"
+            "2. Check for CVE-2022-29464 patch (WSO2 Security Advisory 2022-0507).\n"
+            "3. Test for unrestricted file upload: POST to /fileupload/toolsAny with a JSP payload.\n"
+            "4. Review server access logs for suspicious file uploads.\n"
+            "5. Ensure the Carbon management console (/carbon/) is not exposed to the internet.\n"
+            "6. Apply all available WSO2 security updates."
+        ),
+    },
+    {
+        "id": "OS-APPL-003",
+        "name": "Fortinet FortiGate / FortiOS",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)fortinet", r"(?i)forti(?:gate|os|guard|web|mail|analyzer)"],
+        "san_patterns": [r"(?i)forti(?:gate|os|net)"],
+        "severity": "HIGH",
+        "title": "Fortinet Appliance Detected",
+        "cves": "CVE-2024-21762, CVE-2024-23113, CVE-2023-27997, CVE-2022-42475",
+        "description": (
+            "The TLS certificate identifies this host as a Fortinet appliance (FortiGate/FortiOS). "
+            "Fortinet products have been the target of multiple critical actively-exploited vulnerabilities: "
+            "CVE-2024-21762 (out-of-bounds write, CVSS 9.6), CVE-2024-23113 (format string RCE, CVSS 9.8), "
+            "CVE-2023-27997 (heap buffer overflow in SSL-VPN, CVSS 9.2), and CVE-2022-42475 (heap-based buffer overflow, CVSS 9.8). "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the FortiOS version (management console or HTTP response headers).\n"
+            "2. Check the Fortinet PSIRT advisory page for applicable patches.\n"
+            "3. Test SSL-VPN endpoint (/remote/logincheck) for CVE-2023-27997.\n"
+            "4. Verify FortiOS is not running a known-vulnerable version.\n"
+            "5. Review logs for indicators of compromise.\n"
+            "6. Ensure admin interface is restricted to trusted networks."
+        ),
+    },
+    {
+        "id": "OS-APPL-004",
+        "name": "Pulse Secure / Ivanti Connect Secure VPN",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)pulse\s*secure", r"(?i)ivanti\s*connect\s*secure", r"(?i)ivanti.*pulse"],
+        "san_patterns": [r"(?i)pulse(?:secure)?[\.\-]", r"(?i)ivanti[\.\-]connect"],
+        "severity": "HIGH",
+        "title": "Pulse Secure / Ivanti Connect Secure VPN Detected",
+        "cves": "CVE-2024-21887, CVE-2023-46805, CVE-2021-22893",
+        "description": (
+            "The TLS certificate identifies this host as a Pulse Secure / Ivanti Connect Secure VPN appliance. "
+            "This product line has been the target of critical actively-exploited vulnerabilities: "
+            "CVE-2024-21887 (command injection, CVSS 9.1), CVE-2023-46805 (auth bypass, CVSS 8.2), "
+            "and CVE-2021-22893 (RCE, CVSS 10.0). These have been widely exploited by state-sponsored actors. "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the ICS/PCS version (admin console or /dana-na/ endpoint).\n"
+            "2. Run Ivanti's Integrity Checker Tool (ICT) for compromise indicators.\n"
+            "3. Verify all CISA KEV-listed patches are applied.\n"
+            "4. Check for unauthorized admin accounts or web shells.\n"
+            "5. Review VPN access logs for anomalous connections."
+        ),
+    },
+    {
+        "id": "OS-APPL-005",
+        "name": "Citrix ADC / NetScaler",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)citrix", r"(?i)netscaler"],
+        "san_patterns": [r"(?i)citrix|netscaler"],
+        "severity": "HIGH",
+        "title": "Citrix ADC / NetScaler Detected",
+        "cves": "CVE-2023-4966, CVE-2023-3519, CVE-2019-19781",
+        "description": (
+            "The TLS certificate identifies this host as a Citrix ADC / NetScaler appliance. "
+            "This product has been the target of critical actively-exploited vulnerabilities: "
+            "CVE-2023-4966 'Citrix Bleed' (information disclosure, CVSS 9.4), "
+            "CVE-2023-3519 (RCE, CVSS 9.8), and CVE-2019-19781 (path traversal RCE, CVSS 9.8). "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the Citrix ADC version (/vpn/index.html or management console).\n"
+            "2. Test for Citrix Bleed (CVE-2023-4966): check if session tokens leak via crafted Host header.\n"
+            "3. Verify all CISA KEV-listed patches are applied.\n"
+            "4. Check for web shells in /var/vpn/bookmark/ and /netscaler/portal/.\n"
+            "5. Review access logs for exploitation attempts."
+        ),
+    },
+    {
+        "id": "OS-APPL-006",
+        "name": "F5 BIG-IP",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)f5\s*(networks|big[\-\s]?ip)", r"(?i)big[\-\s]?ip"],
+        "san_patterns": [r"(?i)big[\-\.]?ip|f5[\.\-]"],
+        "severity": "HIGH",
+        "title": "F5 BIG-IP Detected",
+        "cves": "CVE-2023-46747, CVE-2022-1388, CVE-2021-22986",
+        "description": (
+            "The TLS certificate identifies this host as an F5 BIG-IP appliance. "
+            "F5 BIG-IP has been the target of critical actively-exploited vulnerabilities: "
+            "CVE-2023-46747 (auth bypass to RCE, CVSS 9.8), CVE-2022-1388 (auth bypass, CVSS 9.8), "
+            "and CVE-2021-22986 (RCE, CVSS 9.8). "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the BIG-IP version (management interface or /tmui/login.jsp).\n"
+            "2. Test for CVE-2023-46747 (AJP smuggling via /mgmt/tm/util/bash).\n"
+            "3. Verify all CISA KEV-listed patches are applied.\n"
+            "4. Ensure TMUI/management interface is not exposed to the internet.\n"
+            "5. Review iRules and persistence profiles for tampering."
+        ),
+    },
+    {
+        "id": "OS-APPL-007",
+        "name": "SonicWall SMA / SRA",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)sonicwall", r"(?i)sonic[\-\s]?wall"],
+        "san_patterns": [r"(?i)sonicwall"],
+        "severity": "HIGH",
+        "title": "SonicWall Appliance Detected",
+        "cves": "CVE-2024-40766, CVE-2023-0656, CVE-2021-20016",
+        "description": (
+            "The TLS certificate identifies this host as a SonicWall appliance. "
+            "SonicWall products have been the target of critical actively-exploited vulnerabilities: "
+            "CVE-2024-40766 (SSLVPN access control, CVSS 9.3), CVE-2023-0656 (stack buffer overflow, CVSS 7.5), "
+            "and CVE-2021-20016 (SQL injection in SMA 100 series, CVSS 9.8). "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the SonicWall product and firmware version.\n"
+            "2. Check PSIRT advisories for applicable patches.\n"
+            "3. Test SSLVPN endpoint for CVE-2024-40766.\n"
+            "4. Verify firmware is current and MFA is enabled on VPN.\n"
+            "5. Review VPN access logs for anomalous sessions."
+        ),
+    },
+    {
+        "id": "OS-APPL-008",
+        "name": "Palo Alto Networks PAN-OS",
+        "match_fields": ["subject_cn", "issuer_cn", "subject_org"],
+        "patterns": [r"(?i)palo\s*alto", r"(?i)pan[\-\s]?os"],
+        "san_patterns": [r"(?i)paloalto|pan[\.\-]os"],
+        "severity": "HIGH",
+        "title": "Palo Alto Networks PAN-OS Detected",
+        "cves": "CVE-2024-3400, CVE-2024-0012, CVE-2024-9474",
+        "description": (
+            "The TLS certificate identifies this host as a Palo Alto Networks appliance (PAN-OS). "
+            "PAN-OS has been the target of critical actively-exploited vulnerabilities: "
+            "CVE-2024-3400 (GlobalProtect command injection, CVSS 10.0), "
+            "CVE-2024-0012 (management interface auth bypass, CVSS 9.3), "
+            "and CVE-2024-9474 (PAN-OS privilege escalation, CVSS 6.9). "
+            "Manual testing is required to determine the installed version and patch status."
+        ),
+        "remediation": (
+            "ACTION REQUIRED — MANUAL TESTING:\n"
+            "1. Determine the PAN-OS version (management interface or API).\n"
+            "2. Test GlobalProtect endpoint for CVE-2024-3400 (path traversal + command injection).\n"
+            "3. Verify management interface is not exposed to the internet.\n"
+            "4. Apply all Palo Alto security advisories.\n"
+            "5. Run Palo Alto's threat prevention signatures and review logs."
+        ),
+    },
+]
+
+_APPLIANCE_RE_CACHE: dict[str, re.Pattern] = {}
+
+
+def _compile_appliance_re(pattern: str) -> re.Pattern:
+    """Compile and cache appliance fingerprint regexes."""
+    if pattern not in _APPLIANCE_RE_CACHE:
+        _APPLIANCE_RE_CACHE[pattern] = re.compile(pattern)
+    return _APPLIANCE_RE_CACHE[pattern]
+
+
+def _check_appliance_fingerprints(
+    entry: dict,
+    host: str,
+    data: "ReconData",
+    *,
+    _seen: set | None = None,
+) -> int:
+    """
+    Check a tlsx certificate entry against known-vulnerable appliance fingerprints.
+    Returns the number of new findings generated.
+    """
+    if _seen is None:
+        _seen = set()
+    count = 0
+    for fp in _KNOWN_APPLIANCE_FINGERPRINTS:
+        fp_id = fp["id"]
+        # Deduplicate: one finding per appliance type per host
+        dedup_key = (fp_id, host)
+        if dedup_key in _seen:
+            continue
+
+        matched = False
+
+        # Check cert fields (CN, issuer, org)
+        for field in fp.get("match_fields", []):
+            val = entry.get(field, "")
+            if not val:
+                continue
+            for pat in fp.get("patterns", []):
+                if _compile_appliance_re(pat).search(val):
+                    matched = True
+                    break
+            if matched:
+                break
+
+        # Check SANs if not yet matched
+        if not matched and fp.get("san_patterns"):
+            for san in entry.get("subject_an", []):
+                for pat in fp["san_patterns"]:
+                    if _compile_appliance_re(pat).search(san):
+                        matched = True
+                        break
+                if matched:
+                    break
+
+        if matched:
+            _seen.add(dedup_key)
+            add_finding(
+                data, "tlsx",
+                f"appliance_{fp_id.lower()}", CAT_APPLIANCE, fp["severity"],
+                fp["description"],
+                host=host, affected=host,
+                cve=fp.get("cves", ""),
+                title=fp["title"],
+                remediation=fp["remediation"],
+            )
+            count += 1
+    return count
 
 
 def add_finding(
@@ -6818,6 +7101,10 @@ _BINARY_TOOLS: list = [
      "dnsutils",       None,
      None,
      "bind",           None),
+    ("dnstwist",       ["dnstwist"],
+     "dnstwist",       "dnstwist",
+     None,
+     "dnstwist",       None),
 ]
 
 
@@ -8239,11 +8526,14 @@ class CertificateCollector:
     def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
         self.output_dir = output_dir / "certificates"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Subdirectories for raw DER and parsed JSON output
+        (self.output_dir / "raw").mkdir(exist_ok=True)
+        (self.output_dir / "parsed").mkdir(exist_ok=True)
         self.log        = log
         self.data       = data
 
     # Per-host TCP connect + TLS handshake timeout (seconds)
-    _CERT_TIMEOUT = 5
+    _CERT_TIMEOUT = 8
 
     def run(self):
         self.log.set_tool_context("OSift-Certs")
@@ -14068,6 +14358,7 @@ class PDTlsx:
         san_new     = 0
         cert_count  = 0
         flagged     = 0
+        _appliance_seen: set = set()
 
         # Accumulators for grouped findings (emitted after the per-entry loop)
         _wc_certs:    Dict[str, List[str]] = {}   # wildcard CN → [hosts]
@@ -14124,6 +14415,11 @@ class PDTlsx:
             _tv  = entry.get("tls_version", "")
             _cip = entry.get("cipher", "")
             _cn  = entry.get("subject_cn", "")
+
+            # ── Known-vulnerable appliance detection ──────────────────
+            flagged += _check_appliance_fingerprints(
+                entry, host, self.data, _seen=_appliance_seen,
+            )
 
             # ── Expired certificate ───────────────────────────────────────
             if entry.get("expired"):
@@ -16026,6 +16322,66 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
              f"API security testing recommended.",
              priority="HIGH",
              metadata={"indicator_url": url})
+
+    # ── Known-vulnerable appliances → Manual Testing ────────────────────
+    # Scan findings for appliance detections (from tlsx fingerprinting)
+    # and generate action items so they appear in the Vantage Action Items tab.
+    for f in data.findings.all_findings():
+        if f.get("category") != "Known-Vulnerable Appliance":
+            continue
+        _host = f.get("host") or f.get("affected") or ""
+        if not _host:
+            continue
+        # Resolve IP from subdomain data if available
+        _sub = data.subdomains.get(_host, {})
+        _ips = list(_sub.get("ips") or [])
+        _ip  = _ips[0] if _ips else ""
+        _cves = f.get("cve", "")
+        _title = f.get("title", "Manual testing recommended")
+        _remediation = f.get("remediation", "")
+        _add("manual_testing", "Manual", _host, _ip, 443, _host,
+             _title,
+             f"{f.get('detail', '')}",
+             priority="CRITICAL" if f.get("severity") == "CRITICAL" else "HIGH",
+             metadata={"cves": _cves,
+                        "remediation_steps": _remediation,
+                        "source_category": "appliance_fingerprint"})
+
+    # ── Typosquatting domains (dnstwist) → Manual investigation ─────────
+    for f in data.findings.all_findings():
+        ftype = (f.get("type") or "").lower()
+        if ftype != "typosquatting":
+            continue
+        _host = f.get("domain") or f.get("affected") or ""
+        if not _host:
+            continue
+        _sev = f.get("severity", "info").upper()
+        _pri = "HIGH" if _sev in ("HIGH", "CRITICAL") else "MEDIUM"
+        _add("manual_testing", "Manual", _host, "", 0, _host,
+             f"Investigate typosquatting domain: {_host}",
+             f"{f.get('detail', '')}. Investigate for brand impersonation, "
+             f"phishing infrastructure, or domain squatting.",
+             priority=_pri,
+             metadata={"source_category": "typosquatting",
+                        "fuzzer": f.get("fuzzer", "")})
+
+    # ── VT-flagged subdomains/IPs → Manual investigation ───────────────
+    for f in data.findings.all_findings():
+        ftype = (f.get("type") or "").lower()
+        if ftype not in ("malicious_subdomain_sweep", "suspicious_subdomain_sweep",
+                         "malicious_ip_sweep"):
+            continue
+        _host = f.get("domain") or f.get("ip") or f.get("affected") or ""
+        if not _host:
+            continue
+        _sev = f.get("severity", "info").upper()
+        _pri = "CRITICAL" if _sev == "CRITICAL" else "HIGH"
+        _add("manual_testing", "Manual", _host, f.get("ip", ""), 0, _host,
+             f"Investigate VT-flagged asset: {_host}",
+             f"{f.get('detail', '')}. VirusTotal has flagged this asset as "
+             f"malicious or suspicious — investigate for compromise.",
+             priority=_pri,
+             metadata={"source_category": "vt_reputation_sweep"})
 
     # ── Write action_items.json ───────────────────────────────────────────
     ai_path = output_dir / "action_items.json"
@@ -20768,6 +21124,464 @@ class PeopleDorker:
         )
 
 
+# ─── dnstwist — Typosquatting & Brand Impersonation Detection ─────────────────
+
+class DnsTwistRunner:
+    """
+    dnstwist — domain permutation scanner for typosquatting detection.
+    https://github.com/elceef/dnstwist
+
+    Generates domain permutations (homoglyphs, bitsquatting, hyphenation,
+    insertion, omission, transposition, etc.) and resolves them to identify
+    registered look-alike domains that may be used for phishing or brand
+    impersonation.
+
+    CLI flags used:
+      --registered     only show registered (live) domains
+      --format json    output as JSON array
+      --threads 10     parallel resolution threads
+
+    Findings:
+      INFO   — registered look-alike domain (no A/MX records)
+      MEDIUM — look-alike resolves to an IP (live web presence)
+      HIGH   — look-alike has MX records (can receive email → phishing-ready)
+
+    Placement: Phase 15 — after all recon phases, before aggregation.
+    """
+
+    def __init__(
+        self,
+        domains: list,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domains    = list(domains)
+        self.output_dir = output_dir
+        self.log        = log
+        self.data       = data
+
+    def run(self) -> list:
+        """Run dnstwist for each target domain.  Returns list of live typosquatting domains."""
+        binary = _find_binary(["dnstwist"])
+        if not binary:
+            self.log.warning(
+                "[dnstwist] Binary not found — skipping.\n"
+                "        macOS  : brew install dnstwist\n"
+                "        Linux  : apt install dnstwist  or  pip install dnstwist\n"
+                "        GitHub : https://github.com/elceef/dnstwist"
+            )
+            return []
+
+        TOOL_REGISTRY.query_and_register(binary, "dnstwist")
+        self.log.set_tool_context("dnstwist")
+        self.log.info(f"[dnstwist] Starting typosquatting scan for {len(self.domains)} domain(s)")
+
+        all_live: list = []
+
+        for domain in self.domains:
+            live = self._scan_domain(binary, domain)
+            all_live.extend(live)
+
+        self.log.reset_tool_context()
+        self.log.success(f"[dnstwist] Complete — {len(all_live)} live typosquatting domain(s) found")
+        return all_live
+
+    def _scan_domain(self, binary: str, domain: str) -> list:
+        """Run dnstwist for a single domain.  Returns list of live domains."""
+        out_dir = _domain_path(self.output_dir, domain) / "tools" / "dnstwist"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        safe = _safe_filename(domain)
+        out_file = out_dir / f"dnstwist_{safe}.json"
+
+        cmd = [binary, "--registered", "--format", "json", "--threads", "10", domain]
+        self.log.info(f"[dnstwist] Scanning domain: {domain}")
+
+        started = datetime.datetime.now(_UTC).isoformat()
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300,
+            )
+            ended = datetime.datetime.now(_UTC).isoformat()
+
+            self.log.log_command(
+                cmd=" ".join(cmd),
+                stdout=result.stdout[:8192] if result.stdout else "",
+                stderr=result.stderr[:4096] if result.stderr else "",
+                returncode=result.returncode,
+                tool="dnstwist", tool_path=binary,
+                output_file=str(out_file),
+                started=started, ended=ended,
+            )
+
+            if result.returncode != 0:
+                self.log.error(
+                    f"[dnstwist] Exit code {result.returncode} for {domain}: "
+                    f"{(result.stderr or '')[:200]}"
+                )
+                _write_placeholder(out_dir, out_file.name,
+                                   " ".join(cmd),
+                                   f"(dnstwist exited {result.returncode})")
+                return []
+
+            # Parse JSON output
+            try:
+                entries = json.loads(result.stdout)
+            except (json.JSONDecodeError, ValueError) as e:
+                self.log.error(f"[dnstwist] JSON parse error for {domain}: {e}")
+                _write_placeholder(out_dir, out_file.name,
+                                   " ".join(cmd),
+                                   f"(dnstwist JSON parse error: {e})")
+                return []
+
+            if not isinstance(entries, list):
+                entries = []
+
+            # Save raw output
+            out_file.write_text(
+                json.dumps(entries, indent=2, default=str),
+                encoding="utf-8",
+            )
+
+            # Process results
+            live_domains: list = []
+            total_registered = 0
+
+            for entry in entries:
+                fuzzer = entry.get("fuzzer", "")
+                perm_domain = entry.get("domain", "").strip().lower()
+
+                if not perm_domain or fuzzer.startswith("original"):
+                    continue
+
+                total_registered += 1
+
+                dns_a = entry.get("dns_a") or []
+                dns_aaaa = entry.get("dns_aaaa") or []
+                dns_mx = entry.get("dns_mx") or []
+                dns_ns = entry.get("dns_ns") or []
+                has_ip = bool(dns_a or dns_aaaa)
+                has_mx = bool(dns_mx)
+                whois_reg = entry.get("whois_registrar", "")
+                whois_created = entry.get("whois_created", "")
+
+                # Severity escalation
+                if has_mx:
+                    severity = "high"
+                    detail_suffix = " — has MX records (phishing-ready: can receive email)"
+                elif has_ip:
+                    severity = "medium"
+                    detail_suffix = " — resolves to IP (active web presence)"
+                else:
+                    severity = "info"
+                    detail_suffix = " — registered but not resolving"
+
+                detail = f"Typosquatting Domain Detected: {perm_domain}"
+                detail += f" (fuzzer: {fuzzer}){detail_suffix}"
+                if whois_reg:
+                    detail += f"\nRegistrar: {whois_reg}"
+                if whois_created:
+                    detail += f"\nCreated: {whois_created}"
+                if dns_a:
+                    detail += f"\nA records: {', '.join(dns_a[:5])}"
+                if dns_mx:
+                    detail += f"\nMX records: {', '.join(str(m) for m in dns_mx[:5])}"
+
+                add_finding(
+                    self.data, "dnstwist", "typosquatting", CAT_BRAND,
+                    severity, detail,
+                    domain=perm_domain, affected=perm_domain,
+                    host=domain,
+                    output_file=str(out_file),
+                    fuzzer=fuzzer,
+                )
+
+                if has_ip:
+                    live_domains.append(perm_domain)
+
+            self.log.success(
+                f"[dnstwist] {domain}: {total_registered} registered permutations, "
+                f"{len(live_domains)} live"
+            )
+            return live_domains
+
+        except subprocess.TimeoutExpired:
+            ended = datetime.datetime.now(_UTC).isoformat()
+            self.log.error(f"[dnstwist] Timeout (300s) scanning {domain}")
+            self.log.log_command(
+                cmd=" ".join(cmd),
+                stdout="", stderr="(timeout after 300s)",
+                returncode=-1,
+                tool="dnstwist", tool_path=binary,
+                output_file=str(out_file),
+                started=started, ended=ended,
+            )
+            _write_placeholder(out_dir, out_file.name,
+                               " ".join(cmd), "(dnstwist timed out after 300s)")
+            return []
+        except Exception as e:
+            self.log.error(f"[dnstwist] Error scanning {domain}: {e}", exc=e)
+            return []
+
+
+# ─── VT Reputation Sweep — subdomain + typosquatting domain check ─────────────
+
+class VTReputationSweep:
+    """
+    VirusTotal Reputation Sweep — bulk-check discovered subdomains and
+    dnstwist live domains against VirusTotal for malicious indicators.
+
+    Unlike the Phase 10 VirusTotal integration (which checks the target
+    domain and VT-known subdomains only), this sweep checks ALL subdomains
+    discovered by every other tool (hackertarget, rapiddns, subfinder,
+    dnsx, etc.) plus any live typosquatting domains from dnstwist.
+
+    Rate-limited to VT free-tier: 4 requests/minute (16s between calls).
+    Caps at max_domains domain lookups + max_ips IP lookups.
+
+    Findings:
+      CRITICAL — subdomain/domain flagged malicious by ≥5 VT vendors
+      HIGH     — flagged malicious by 1-4 vendors, or IP hosting subdomain flagged
+      MEDIUM   — flagged suspicious by VT vendors
+
+    Placement: Phase 16 — after Phase 15 dnstwist, before aggregation.
+    """
+
+    BASE = "https://www.virustotal.com/api/v3"
+
+    def __init__(
+        self,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        api_key: str = "",
+        dnstwist_domains: list = None,
+        max_domains: int = 100,
+        max_ips: int = 50,
+    ):
+        self.output_dir       = output_dir
+        self.log              = log
+        self.data             = data
+        self.key              = (api_key or "").strip()
+        self.dnstwist_domains = dnstwist_domains or []
+        self.max_domains      = max_domains
+        self.max_ips          = max_ips
+        self.session          = make_session() if REQUESTS_AVAILABLE else None
+        if self.session and self.key:
+            self.session.headers.update({"x-apikey": self.key})
+
+    def run(self):
+        if not self.key:
+            self.log.info("[VT Sweep] No VirusTotal API key — skipping")
+            return
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[VT Sweep] requests library not available — skipping")
+            return
+
+        self.log.set_tool_context("virustotal")
+        self.log.info("[VT Sweep] Starting subdomain + typosquatting domain reputation sweep")
+
+        vt_out = _api_dir(self.output_dir, "virustotal")
+
+        # ── Build prioritised domain list ─────────────────────────────────
+        # Subdomains with ports/services first (more likely interesting targets)
+        scored: list = []
+        for sub, meta in self.data.subdomains.items():
+            if not sub or sub.startswith("*."):
+                continue
+            ports = len(meta.get("ports") or [])
+            ips   = len(meta.get("ips") or [])
+            score = ports * 2 + ips  # prefer subdomains with more infrastructure
+            scored.append((score, sub))
+
+        # Sort descending by score so high-value targets are checked first
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        domain_queue = [s for _, s in scored]
+
+        # Append dnstwist live domains (deduplicate)
+        seen_domains = set(d.lower() for d in domain_queue)
+        for d in self.dnstwist_domains:
+            dl = d.strip().lower()
+            if dl and dl not in seen_domains:
+                domain_queue.append(dl)
+                seen_domains.add(dl)
+
+        # Cap at max_domains
+        domain_queue = domain_queue[:self.max_domains]
+
+        self.log.info(
+            f"[VT Sweep] Checking {len(domain_queue)} domains "
+            f"({len(self.dnstwist_domains)} from dnstwist)"
+        )
+
+        # ── Domain reputation checks ─────────────────────────────────────
+        domain_results: dict = {}
+        malicious_ips: set = set()
+
+        for i, dom in enumerate(domain_queue):
+            if i > 0:
+                _rate_sleep(16)
+            try:
+                resp = self.session.get(f"{self.BASE}/domains/{dom}", timeout=20)
+                if resp.status_code == 401:
+                    self.log.warning("[VT Sweep] API key rejected (401) — aborting sweep")
+                    break
+                if resp.status_code == 429:
+                    self.log.warning("[VT Sweep] Rate limit hit — pausing 60s")
+                    _rate_sleep(60)
+                    resp = self.session.get(f"{self.BASE}/domains/{dom}", timeout=20)
+                if resp.status_code != 200:
+                    continue
+
+                payload = resp.json()
+                attrs  = payload.get("data", {}).get("attributes", {})
+                stats  = attrs.get("last_analysis_stats", {})
+                mal    = stats.get("malicious", 0)
+                sus    = stats.get("suspicious", 0)
+
+                domain_results[dom] = {
+                    "malicious": mal,
+                    "suspicious": sus,
+                    "stats": stats,
+                    "reputation": attrs.get("reputation"),
+                    "categories": attrs.get("categories", {}),
+                }
+
+                # Collect IPs from VT's last_dns_records for IP sweep
+                for rec in (attrs.get("last_dns_records") or []):
+                    if rec.get("type") in ("A", "AAAA"):
+                        val = rec.get("value", "").strip()
+                        if val:
+                            malicious_ips.add(val)
+
+                is_dnstwist = dom in set(d.lower() for d in self.dnstwist_domains)
+                source_label = "typosquatting domain" if is_dnstwist else "subdomain"
+
+                if mal >= 5:
+                    add_finding(
+                        self.data, "virustotal", "malicious_subdomain_sweep",
+                        CAT_THREAT_INTEL, "critical",
+                        f"Malicious {source_label.title()}: {dom} — "
+                        f"flagged by {mal} VirusTotal vendors",
+                        domain=dom, affected=dom,
+                        output_file=str(vt_out / "subdomain_sweep.json"),
+                        vt_malicious=mal, vt_suspicious=sus,
+                    )
+                elif mal >= 1:
+                    add_finding(
+                        self.data, "virustotal", "suspicious_subdomain_sweep",
+                        CAT_THREAT_INTEL, "high",
+                        f"Suspicious {source_label.title()}: {dom} — "
+                        f"flagged by {mal} VirusTotal vendor(s)",
+                        domain=dom, affected=dom,
+                        output_file=str(vt_out / "subdomain_sweep.json"),
+                        vt_malicious=mal, vt_suspicious=sus,
+                    )
+                elif sus >= 3:
+                    add_finding(
+                        self.data, "virustotal", "suspicious_subdomain_sweep",
+                        CAT_THREAT_INTEL, "medium",
+                        f"Suspicious {source_label.title()}: {dom} — "
+                        f"flagged suspicious by {sus} VirusTotal vendor(s)",
+                        domain=dom, affected=dom,
+                        output_file=str(vt_out / "subdomain_sweep.json"),
+                        vt_malicious=mal, vt_suspicious=sus,
+                    )
+
+                if (i + 1) % 10 == 0:
+                    self.log.info(f"[VT Sweep] Checked {i + 1}/{len(domain_queue)} domains")
+
+            except Exception as e:
+                self.log.error(f"[VT Sweep] Domain check error for {dom}: {e}", exc=e)
+
+        # Save domain sweep results
+        if domain_results:
+            _save_api_result(vt_out, "subdomain_sweep.json", domain_results)
+        else:
+            _write_placeholder(vt_out, "subdomain_sweep.json",
+                               "VT Reputation Sweep — domains",
+                               "(No domain results returned)")
+
+        # Also collect IPs from data.subdomains for the IP sweep
+        for sub, meta in self.data.subdomains.items():
+            for ip in (meta.get("ips") or []):
+                if ip:
+                    malicious_ips.add(ip)
+
+        # ── IP reputation checks ─────────────────────────────────────────
+        ip_queue = sorted(malicious_ips)[:self.max_ips]
+        self.log.info(f"[VT Sweep] Checking {len(ip_queue)} unique IPs")
+
+        ip_results: dict = {}
+        for i, ip in enumerate(ip_queue):
+            _rate_sleep(16)
+            try:
+                resp = self.session.get(f"{self.BASE}/ip_addresses/{ip}", timeout=20)
+                if resp.status_code == 429:
+                    _rate_sleep(60)
+                    resp = self.session.get(f"{self.BASE}/ip_addresses/{ip}", timeout=20)
+                if resp.status_code != 200:
+                    continue
+
+                ip_data = resp.json()
+                attrs   = ip_data.get("data", {}).get("attributes", {})
+                stats   = attrs.get("last_analysis_stats", {})
+                mal     = stats.get("malicious", 0)
+
+                ip_results[ip] = {
+                    "malicious": mal,
+                    "suspicious": stats.get("suspicious", 0),
+                    "stats": stats,
+                    "asn": attrs.get("asn"),
+                    "as_owner": attrs.get("as_owner"),
+                    "country": attrs.get("country"),
+                }
+
+                if mal >= 1:
+                    # Find which subdomains resolve to this IP
+                    affected_subs = []
+                    for sub, meta in self.data.subdomains.items():
+                        if ip in (meta.get("ips") or []):
+                            affected_subs.append(sub)
+                    affected_str = ", ".join(affected_subs[:10]) or ip
+
+                    add_finding(
+                        self.data, "virustotal", "malicious_ip_sweep",
+                        CAT_THREAT_INTEL, "high",
+                        f"Malicious IP Hosting Subdomain: {ip} — "
+                        f"flagged by {mal} VirusTotal vendor(s) "
+                        f"(hosts: {affected_str})",
+                        ip=ip, affected=affected_str,
+                        output_file=str(vt_out / "ip_sweep.json"),
+                        vt_malicious=mal,
+                    )
+
+                if (i + 1) % 10 == 0:
+                    self.log.info(f"[VT Sweep] Checked {i + 1}/{len(ip_queue)} IPs")
+
+            except Exception as e:
+                self.log.error(f"[VT Sweep] IP check error for {ip}: {e}", exc=e)
+
+        # Save IP sweep results
+        if ip_results:
+            _save_api_result(vt_out, "ip_sweep.json", ip_results)
+        else:
+            _write_placeholder(vt_out, "ip_sweep.json",
+                               "VT Reputation Sweep — IPs",
+                               "(No IP results returned)")
+
+        # ── Summary ──────────────────────────────────────────────────────
+        mal_domains = sum(1 for v in domain_results.values() if v.get("malicious", 0) > 0)
+        mal_ips     = sum(1 for v in ip_results.values() if v.get("malicious", 0) > 0)
+        self.log.reset_tool_context()
+        self.log.success(
+            f"[VT Sweep] Complete — "
+            f"{len(domain_results)} domains checked ({mal_domains} malicious), "
+            f"{len(ip_results)} IPs checked ({mal_ips} malicious)"
+        )
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -21115,6 +21929,9 @@ API key sources (all free tiers available):
     parser.add_argument("--github-token",         default="",     metavar="TOKEN", help="GitHub personal access token for GitDorker (Phase 13)")
     parser.add_argument("--no-dork",              action="store_true", help="Skip Phase 14 People Dorking (search-engine dorks for employee PII)")
     parser.add_argument("--serpapi-key",          default="",     metavar="KEY",   help="SerpAPI key for Google-backed dork execution in Phase 14 (optional; DuckDuckGo used if omitted)")
+    parser.add_argument("--no-dnstwist",          action="store_true", help="Skip Phase 15 dnstwist typosquatting detection")
+    parser.add_argument("--no-vt-sweep",          action="store_true", help="Skip Phase 16 VirusTotal subdomain reputation sweep")
+    parser.add_argument("--max-vt-sweep",         type=int, default=100, metavar="N", help="Max subdomains to check in VT sweep (default: 100)")
     parser.add_argument("--wordlist",             default="",     help="Custom wordlist for DNS brute force")
     parser.add_argument("--client-short",         default="",     metavar="SLUG",
                         help="Client short name / abbreviation for project directory naming")
@@ -21823,6 +22640,57 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase4_5_shodan_cli", "complete", label="Phase 4.5: Shodan CLI")
         _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
         write_targets_snapshot(output_dir, data)
+
+    # ── Phase 15: dnstwist — Typosquatting & Brand Impersonation ─────────
+    _dnstwist_live: list = []
+    if getattr(args, "no_dnstwist", False):
+        log.info("[dnstwist] Phase 15 skipped (--no-dnstwist)")
+        _pm.set_phase_status("phase15_dnstwist", "skipped", label="Phase 15: dnstwist")
+        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="skipped")
+    elif _pm.is_phase_complete("phase15_dnstwist"):
+        _vc.log("Phase 15 dnstwist already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
+    else:
+        _pm.set_phase_status("phase15_dnstwist", "running", label="Phase 15: dnstwist")
+        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="running",
+                   active_tool="tools/dnstwist")
+        _section(log, "PHASE 15: dnstwist — Typosquatting & Brand Impersonation Detection")
+        _dnstwist_live = DnsTwistRunner(
+            domains=list(args.domains),
+            output_dir=output_dir,
+            log=log,
+            data=data,
+        ).run()
+        _pm.set_phase_status("phase15_dnstwist", "complete", label="Phase 15: dnstwist")
+        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
+
+    # ── Phase 16: VT Reputation Sweep — subdomain + dnstwist domain check ──
+    if getattr(args, "no_vt_sweep", False) or args.skip_api:
+        log.info("[VT Sweep] Phase 16 skipped (--no-vt-sweep or --skip-api)")
+        _pm.set_phase_status("phase16_vt_sweep", "skipped", label="Phase 16: VT Reputation Sweep")
+        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="skipped")
+    elif not getattr(args, "virustotal_key", ""):
+        log.info("[VT Sweep] Phase 16 skipped (no VirusTotal API key)")
+        _pm.set_phase_status("phase16_vt_sweep", "skipped", label="Phase 16: VT Reputation Sweep")
+        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="skipped")
+    elif _pm.is_phase_complete("phase16_vt_sweep"):
+        _vc.log("Phase 16 VT Reputation Sweep already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
+    else:
+        _pm.set_phase_status("phase16_vt_sweep", "running", label="Phase 16: VT Reputation Sweep")
+        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="running",
+                   active_tool="api_intel/virustotal")
+        _section(log, "PHASE 16: VirusTotal Reputation Sweep — Subdomain + Typosquatting Domains")
+        VTReputationSweep(
+            output_dir=output_dir,
+            log=log,
+            data=data,
+            api_key=args.virustotal_key,
+            dnstwist_domains=_dnstwist_live,
+            max_domains=getattr(args, "max_vt_sweep", 100),
+        ).run()
+        _pm.set_phase_status("phase16_vt_sweep", "complete", label="Phase 16: VT Reputation Sweep")
+        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
 
     # ── Phase 9: Aggregation & Report ─────────────────────────────────────
     _pm.set_phase_status("phase9_report", "running", label="Phase 9: Aggregation & Report")

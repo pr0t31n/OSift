@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.14.17"
+VERSION = "2.14.18"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -11286,7 +11286,7 @@ class WaybackURLsRunner:
         self.log.set_tool_context("waybackurls")
         _vc.status("tool_waybackurls",
                    label="waybackurls (Wayback Machine CDX mining)",
-                   status="running", active_tool="osint/waybackurls")
+                   status="running", active_tool="tools/waybackurls")
 
         _safe_dom  = _safe_filename(self.domain)
         out_file   = self.out / f"wayback_urls_{_safe_dom}.txt"
@@ -11332,7 +11332,7 @@ class WaybackURLsRunner:
         self.log.success(f"[waybackurls] Complete — {count} new historical URLs ingested")
         _vc.status("tool_waybackurls",
                    label="waybackurls (Wayback Machine CDX mining)",
-                   status="complete", active_tool="osint/waybackurls")
+                   status="complete", active_tool="tools/waybackurls")
         return count
 
     # ── Compiled patterns for URL analysis ───────────────────────────────────
@@ -21417,7 +21417,7 @@ API key sources (all free tiers available):
         elif not args.skip_passive:
             _pm.set_phase_status(_p15_key, "running", label=_p15_label)
             _vc.status(_p15_key, label=_p15_label, status="running",
-                       active_tools=["osint/theharvester", "osint/xurlfind3r"])
+                       active_tools=["tools/theharvester", "tools/xurlfind3r"])
             _section(log, f"PHASE 1.5: Passive OSINT Wave A{_lbl}")
             if is_primary:
                 passive.run_wave_a()
@@ -21441,7 +21441,7 @@ API key sources (all free tiers available):
             else:
                 _pm.set_phase_status(_amass_key, "running", label=_amass_label)
                 _vc.status(_amass_key, label=_amass_label, status="running",
-                           active_tool="amass")
+                           active_tool="tools/amass")
                 _section(log, f"PHASE 2: Amass{_lbl}")
                 AmassEnumerator(domain, output_dir, log, data).run()
                 _pm.set_phase_status(_amass_key, "complete", label=_amass_label)
@@ -21490,7 +21490,7 @@ API key sources (all free tiers available):
     else:
         _pm.set_phase_status("phase1_5_wave_b", "running", label="Phase 1.5: puredns/waybackurls")
         _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="running",
-                   active_tools=["dns/puredns", "osint/waybackurls"])
+                   active_tools=["dns/puredns", "tools/waybackurls"])
         _section(log, "PHASE 1.5 Wave B: puredns DNS brute-force + waybackurls")
         passive.run_wave_b()
         _pm.set_phase_status("phase1_5_wave_b", "complete", label="Phase 1.5: puredns/waybackurls")
@@ -21504,7 +21504,7 @@ API key sources (all free tiers available):
     else:
         _pm.set_phase_status("phase3_certs", "running", label="Phase 3: Certificates")
         _vc.status("phase3_certs", label="Phase 3: Certificates", status="running",
-                   active_tool="certificates/parsed")
+                   active_tool="certificates")
         _section(log, "PHASE 3: Certificate Collection & Analysis")
         CertificateCollector(output_dir, log, data).run()
         _pm.set_phase_status("phase3_certs", "complete", label="Phase 3: Certificates")
@@ -21566,7 +21566,7 @@ API key sources (all free tiers available):
     else:
         _pm.set_phase_status("phase6_company", "running", label="Phase 6: Company Intelligence")
         _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="running",
-                   active_tools=["company/info", "osint/maltego"])
+                   active_tools=["company/info", "company/tools/maltego"])
         _section(log, "PHASE 6: Company Intelligence")
         CompanyIntelligence(
             args.company, args.domains[0], output_dir, log, data,
@@ -21583,7 +21583,7 @@ API key sources (all free tiers available):
     else:
         _pm.set_phase_status("phase7_email", "running", label="Phase 7: Email & People OSINT")
         _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="running",
-                   active_tools=["emails", "breach_data", "osint/maigret", "osint/trufflehog"])
+                   active_tools=["company/emails", "api_intel/hibp", "company/tools/maigret", "company/tools/trufflehog"])
         _section(log, "PHASE 7: Email & People OSINT")
         # Run EmailAndPeopleOSINT and the Phase 1.5 email/social tools concurrently.
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _p7_ex:
@@ -21629,7 +21629,7 @@ API key sources (all free tiers available):
     else:
         _pm.set_phase_status("phase1_5_wave_c", "running", label="Phase 1.5: Wappalyzer/cloud_enum")
         _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="running",
-                   active_tools=["web/wappalyzer", "osint/cloud_enum"])
+                   active_tools=["tools/wappalyzer", "company/tools/cloud_enum"])
         _section(log, "PHASE 1.5 Wave C: Wappalyzer tech fingerprinting + cloud_enum bucket scan")
         passive.run_wave_c()
         _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: Wappalyzer/cloud_enum")
@@ -21812,7 +21812,7 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase4_5_shodan_cli", "running", label="Phase 4.5: Shodan CLI")
         _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="running",
                    step=f"{len(data.ip_addresses)} IPs",
-                   active_tool="osint/shodan_cli")
+                   active_tool="company/tools/shodan_cli")
         _section(log, "PHASE 4.5: Shodan CLI — per-IP open-port enumeration")
         ShodanCLIRunner(
             output_dir  = output_dir,

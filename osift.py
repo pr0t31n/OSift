@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.5"
+VERSION = "2.15.6"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -14323,6 +14323,8 @@ class PDTlsx:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[tlsx] Binary not found — skipping")
             return 0
+        _vc.status("tool_tlsx", label="tlsx (TLS cert extraction at scale)",
+                   status="running", active_tool="certificates/tlsx")
 
         hosts = list(self.data.subdomains.keys())
         if not hosts:
@@ -14638,6 +14640,8 @@ class PDTlsx:
         self.log.success(
             f"[tlsx] {cert_count} certs | {san_new} new SAN subdomains | {flagged} TLS issues flagged"
         )
+        _vc.status("tool_tlsx", label="tlsx (TLS cert extraction at scale)",
+                   status="complete", active_tool="certificates/tlsx")
         return cert_count
 
 
@@ -14669,6 +14673,8 @@ class PDCdncheck:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[cdncheck] Binary not found — skipping")
             return 0
+        _vc.status("tool_cdncheck", label="cdncheck / asnmap (CDN / ASN / cloud)",
+                   status="running", active_tool="ip_addresses")
 
         targets = list(self.data.ip_addresses.keys()) + list(self.data.subdomains.keys())
         if not targets:
@@ -14726,6 +14732,8 @@ class PDCdncheck:
             json.dumps(records, indent=2, default=str), encoding="utf-8"
         )
         self.log.success(f"[cdncheck] Classified {cdn_count} CDN/cloud/WAF targets")
+        _vc.status("tool_cdncheck", label="cdncheck / asnmap (CDN / ASN / cloud)",
+                   status="complete", active_tool="ip_addresses")
         return cdn_count
 
 
@@ -14962,6 +14970,8 @@ class PDASNmap:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[asnmap] Binary not found — skipping")
             return 0
+        _vc.status("tool_asnmap", label="asnmap (ASN to CIDR expansion)",
+                   status="running", active_tool="ip_addresses")
 
         orgs, asns = self._collect_orgs_and_asns()
         if not orgs and not asns:
@@ -15042,6 +15052,8 @@ class PDASNmap:
         out_json = self.out / "asnmap_results.json"
         out_json.write_text(json.dumps(all_ranges, indent=2, default=str), encoding="utf-8")
         self.log.success(f"[asnmap] {cidr_count} CIDR ranges discovered from {len(targets)} target(s)")
+        _vc.status("tool_asnmap", label="asnmap (ASN to CIDR expansion)",
+                   status="complete", active_tool="ip_addresses")
         return cidr_count
 
 
@@ -15119,6 +15131,8 @@ class PDUncover:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[uncover] Binary not found — skipping")
             return 0
+        _vc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
+                   status="running", active_tool="api_intel/uncover")
 
         env    = self._setup_env()
         total  = 0
@@ -15142,6 +15156,8 @@ class PDUncover:
 
         if not engines_available:
             self.log.info("[uncover] No engine API keys detected — skipping")
+            _vc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
+                       status="skipped", active_tool="api_intel/uncover")
             return 0
 
         TOOL_REGISTRY.query_and_register(binary, "uncover")
@@ -15197,6 +15213,8 @@ class PDUncover:
                     )
 
         self.log.success(f"[uncover] {total} unique hosts found via {engines_str}")
+        _vc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
+                   status="complete", active_tool="api_intel/uncover")
         return total
 
 
@@ -15239,14 +15257,20 @@ class PDCloudlist:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[cloudlist] Binary not found — skipping")
             return 0
+        _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+                   status="running", active_tool="company/info/cloudlist")
         if not self.cloud_config:
             self.log.info(
                 "[cloudlist] No cloud config path provided — skipping "
                 "(use --cloudlist-config to point to a cloudlist YAML)"
             )
+            _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+                       status="skipped", active_tool="company/info/cloudlist")
             return 0
         if not os.path.isfile(self.cloud_config):
             self.log.warning(f"[cloudlist] Config file not found: {self.cloud_config}")
+            _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+                       status="skipped", active_tool="company/info/cloudlist")
             return 0
 
         TOOL_REGISTRY.query_and_register(binary, "cloudlist")
@@ -15310,6 +15334,8 @@ class PDCloudlist:
         self.log.success(
             f"[cloudlist] {len(records)} cloud assets | {host_count} in-scope hosts | {ip_count} IPs"
         )
+        _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+                   status="complete", active_tool="company/info/cloudlist")
         return len(records)
 
 

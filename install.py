@@ -77,6 +77,7 @@ PIP_PKGS = [
     "cloud-enum",
     "EmailHarvester",
     "playwright",
+    "o365spray",
 ]
 
 # Go tools (go install) -------------------------------------------------------
@@ -96,20 +97,15 @@ GO_INSTALL_TOOLS = [
     "github.com/projectdiscovery/chaos-client/cmd/chaos@latest",
     "github.com/tomnomnom/waybackurls@latest",
     "github.com/ffuf/ffuf/v2@latest",
-    "github.com/trufflesecurity/trufflehog/v3@latest",
     "github.com/d3mondev/puredns/v2@latest",
+    "github.com/zricethezav/gitleaks/v8/cmd/gitleaks@latest",
 ]
 
 # Git tools -------------------------------------------------------------------
 # Each entry: (repo_url, clone_dir, post_clone_action)
 # post_clone_action is a callable that receives the clone path
 GIT_TOOLS = [
-    {
-        "name":   "TREVORspray",
-        "url":    "https://github.com/m8sec/TREVORspray",
-        "dest":   OPT_DIR / "TREVORspray",
-        "action": "pip_install_dot",
-    },
+    # TREVORspray — repo deleted upstream; replaced by o365spray (pip)
     {
         "name":   "GitDorker",
         "url":    "https://github.com/obheda12/GitDorker",
@@ -154,12 +150,12 @@ GIT_TOOLS = [
         "dest":   OPT_DIR / "maigret",
         "action": None,  # CLI installed via pip (PIP_PKGS); clone kept for reference
     },
-    # trufflehog: installed via go install (GO_INSTALL_TOOLS), no clone needed
+    # trufflehog: installed via install_trufflehog() GitHub release download
     {
         "name":   "cloud_enum",
         "url":    "https://github.com/initstring/cloud_enum",
         "dest":   OPT_DIR / "cloud_enum",
-        "action": None,  # CLI installed via pip (PIP_PKGS); clone kept for reference
+        "action": "pip_install_requirements",
     },
 ]
 
@@ -168,6 +164,7 @@ VERIFY_BINS = [
     "amass", "nmap", "subfinder", "httpx", "dnsx",
     "nuclei", "naabu", "waybackurls", "ffuf",
     "maigret", "trufflehog", "cloud_enum", "puredns",
+    "gitleaks", "o365spray",
 ]
 VERIFY_MODS = [
     "requests", "dns", "whois", "bs4",
@@ -296,6 +293,10 @@ def _clone_or_update(url, dest):
     if dest.exists():
         info(f"Updating {dest.name} …")
         try:
+            # Reset local changes so ff-only pull can succeed
+            subprocess.run(["git", "-C", str(dest), "checkout", "--", "."],
+                           check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
             run(["git", "-C", str(dest), "pull", "--ff-only"])
         except RuntimeError:
             warn(f"git pull failed for {dest.name}; continuing with existing checkout.")
@@ -396,6 +397,74 @@ def install_go_tools(args):
         except RuntimeError as exc:
             warn(f"go install failed for {tool}: {exc}")
 
+    # trufflehog v3 has go.mod replace directives, so `go install` fails.
+    # Download the pre-built binary from GitHub releases instead.
+    install_trufflehog()
+
+
+def install_trufflehog():
+    """Download trufflehog from GitHub releases (go install fails due to replace directives)."""
+    if shutil.which("trufflehog"):
+        info("trufflehog already installed — skipping")
+        return
+    if (BIN_DIR / "trufflehog").exists():
+        info("trufflehog already at /usr/local/bin — skipping")
+        return
+
+    import json
+    import tarfile
+    import tempfile
+
+    info("Installing trufflehog from GitHub release …")
+    api_url = "https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest"
+    try:
+        result = subprocess.run(
+            ["curl", "-fsSL", api_url],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        release = json.loads(result.stdout)
+    except Exception as exc:
+        warn(f"Failed to fetch trufflehog release info: {exc}")
+        return
+
+    machine = platform.machine().lower()
+    arch_map = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+    arch = arch_map.get(machine, "amd64")
+    system = platform.system().lower()
+
+    # Find the right asset (e.g. trufflehog_3.x.x_linux_amd64.tar.gz)
+    asset_url = None
+    for asset in release.get("assets", []):
+        name = asset["name"].lower()
+        if system in name and arch in name and name.endswith(".tar.gz"):
+            asset_url = asset["browser_download_url"]
+            break
+
+    if not asset_url:
+        warn(f"No trufflehog release asset found for {system}/{arch}")
+        return
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            tarball = os.path.join(td, "trufflehog.tar.gz")
+            subprocess.run(["curl", "-fsSL", "-o", tarball, asset_url],
+                           check=True, timeout=120)
+            with tarfile.open(tarball, "r:gz") as tf:
+                for member in tf.getmembers():
+                    if member.name == "trufflehog" or member.name.endswith("/trufflehog"):
+                        member.name = "trufflehog"
+                        tf.extract(member, td)
+                        break
+            src = os.path.join(td, "trufflehog")
+            if os.path.isfile(src):
+                dst = str(BIN_DIR / "trufflehog")
+                subprocess.run(["install", "-m", "0755", src, dst], check=True)
+                info(f"trufflehog installed to {dst}")
+            else:
+                warn("trufflehog binary not found in release tarball")
+    except Exception as exc:
+        warn(f"trufflehog install failed: {exc}")
+
 
 # ─── phase 4: git tools ──────────────────────────────────────────────────────
 
@@ -459,6 +528,29 @@ def install_git_tools(args):
 
         except RuntimeError as exc:
             warn(f"Post-clone action failed for {name}: {exc}")
+
+    # Create symlinks for git tools that aren't installed to PATH
+    _create_tool_symlinks()
+
+
+def _create_tool_symlinks():
+    """Create /usr/local/bin symlinks for git-cloned tools without pip entry points."""
+    symlinks = {
+        "cloud_enum":      OPT_DIR / "cloud_enum" / "cloud_enum.py",
+        "EmailHarvester":  OPT_DIR / "EmailHarvester" / "EmailHarvester.py",
+    }
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    for link_name, target in symlinks.items():
+        link_path = BIN_DIR / link_name
+        if not target.exists():
+            warn(f"Target {target} not found; skipping symlink {link_name}.")
+            continue
+        # Ensure executable
+        target.chmod(target.stat().st_mode | 0o755)
+        if link_path.is_symlink() or link_path.exists():
+            link_path.unlink()
+        link_path.symlink_to(target)
+        info(f"Symlink: {link_path} → {target}")
 
 
 # ─── symlinks ────────────────────────────────────────────────────────────────

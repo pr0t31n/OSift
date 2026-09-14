@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.9"
+VERSION = "2.15.10"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -8112,11 +8112,12 @@ class DNSEnumerator:
                                            "(no subdomains found in response)")
                     self.log.success("[DNS] DNSDumpster scraped successfully")
             else:
+                self.log.warning("[DNS] DNSDumpster: could not obtain CSRF token — site may have changed layout")
                 _write_placeholder(passive_dir, f"dnsdumpster_{_sfn}.txt",
                                    f"DNSDumpster lookup for {self.domain}",
                                    "(could not obtain CSRF token — site may have changed)")
         except Exception as e:
-            self.log.debug(f"[DNS] DNSDumpster: {e}")
+            self.log.warning(f"[DNS] DNSDumpster failed: {e}")
 
     # ── nslookup ──────────────────────────────────────────────────────────────
 
@@ -8712,6 +8713,23 @@ class CertificateCollector:
                 cert_info["issuer_org"] = [o.value for o in _iss_org] if _iss_org else []
             except Exception:
                 cert_info["issuer_org"] = []
+            # Self-signed detection: issuer DN == subject DN
+            try:
+                cert_info["self_signed"] = (cert.issuer == cert.subject)
+            except Exception:
+                cert_info["self_signed"] = False
+            # Wildcard detection
+            _cn = cert_info.get("common_name", "")
+            cert_info["wildcard"] = (
+                _cn.startswith("*.") or
+                any(str(a).startswith("*.") for a in cert_info.get("alt_names", []))
+            )
+            # SHA-256 fingerprint
+            try:
+                import hashlib as _hl
+                cert_info["fingerprint"] = _hl.sha256(der_cert).hexdigest()
+            except Exception:
+                cert_info["fingerprint"] = ""
 
         self.data.certificates.append(cert_info)
         out = self.output_dir / "parsed" / f"{_safe_filename(hostname)}.json"
@@ -10828,11 +10846,24 @@ class TheHarvesterRunner:
             "/usr/local/bin/theharvester",
             "/usr/bin/theHarvester",
             "/usr/local/bin/theHarvester",
+            "/usr/share/theHarvester/theHarvester.py",
+            os.path.expanduser("~/.local/bin/theHarvester"),
+            os.path.expanduser("~/.local/bin/theharvester"),
             os.path.expanduser("~/theHarvester/theHarvester.py"),
             os.path.expanduser("~/tools/theHarvester/theHarvester.py"),
         ]:
             if os.path.isfile(candidate):
                 return candidate
+        # Last resort: check if installed as a Python module (pip / pipx)
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", "theHarvester", "--help"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                return f"{sys.executable} -m theHarvester"
+        except Exception:
+            pass
         return None
 
     # ── main entry point ──────────────────────────────────────────────────────
@@ -11127,6 +11158,13 @@ class XurlFind3rRunner:
             )
             return 0
 
+        try:
+            return self._run_inner(binary)
+        except Exception as exc:
+            self.log.error(f"[xurlfind3r] Unexpected error — skipping: {exc}", exc=exc)
+            return 0
+
+    def _run_inner(self, binary: str) -> int:
         TOOL_REGISTRY.query_and_register(binary, "xurlfind3r")
         self.log.set_tool_context("xurlfind3r")
 
@@ -19210,6 +19248,137 @@ class IntelAggregator:
         # DNS security posture findings
         self._emit_dns_security_findings(ts)
 
+        # Certificate security findings
+        self._emit_certificate_findings(ts)
+
+    def _emit_certificate_findings(self, ts: str) -> None:
+        """
+        Inspect collected TLS certificates and raise FindingStore entries for
+        security-relevant conditions: self-signed, expired, near-expiry,
+        hostname mismatch, internal IPs in SANs, and wildcard certs.
+        """
+        import ipaddress as _ipa
+        data = self.data
+        if not data.certificates:
+            return
+
+        _now = datetime.datetime.now(datetime.timezone.utc)
+        _30d = datetime.timedelta(days=30)
+        _seen_fps: set = set()
+
+        for cert in data.certificates:
+            _host = cert.get("hostname", "")
+            _fp   = cert.get("fingerprint") or cert.get("serial") or str(cert.get("common_name", ""))
+            if _fp in _seen_fps:
+                continue
+            _seen_fps.add(_fp)
+
+            _cert_file = str(
+                Path(self.output_dir) / "certificates" / "parsed"
+                / f"{_safe_filename(_host)}.json"
+            ) if _host else ""
+
+            cn   = cert.get("common_name", "")
+            sans = cert.get("alt_names", cert.get("san", []))
+            if isinstance(sans, str):
+                sans = [s.strip() for s in sans.split(",") if s.strip()]
+
+            # ── Self-signed ────────────────────────────────────────────────
+            if cert.get("self_signed"):
+                add_finding(
+                    data, "OSift-Certs", "cert_self_signed", self.CAT_DNS, "medium",
+                    f"Self-signed certificate on {_host or cn}. Self-signed certificates "
+                    f"are not trusted by browsers or mail clients, indicating a missing "
+                    f"or misconfigured CA-issued certificate.",
+                    domain=data.domain, affected=_host or cn, timestamp=ts,
+                    output_file=_cert_file,
+                    title=f"Certificate: Self-Signed ({_host or cn})",
+                )
+
+            # ── Expired / near-expiry ──────────────────────────────────────
+            _not_after_raw = cert.get("not_after", cert.get("valid_to", cert.get("expiry", "")))
+            if _not_after_raw:
+                try:
+                    _na_str = str(_not_after_raw).replace(" ", "T") if "T" not in str(_not_after_raw) else str(_not_after_raw)
+                    _na = datetime.datetime.fromisoformat(_na_str.replace("Z", "+00:00"))
+                    if _na.tzinfo is None:
+                        _na = _na.replace(tzinfo=datetime.timezone.utc)
+                    if _na < _now:
+                        add_finding(
+                            data, "OSift-Certs", "cert_expired", self.CAT_DNS, "high",
+                            f"Expired certificate on {_host or cn} (expired {_na.date()}). "
+                            f"Expired certificates cause browser warnings and may indicate "
+                            f"abandoned infrastructure.",
+                            domain=data.domain, affected=_host or cn, timestamp=ts,
+                            output_file=_cert_file,
+                            title=f"Certificate: Expired ({_host or cn})",
+                        )
+                    elif _na - _now < _30d:
+                        _days = (_na - _now).days
+                        add_finding(
+                            data, "OSift-Certs", "cert_near_expiry", self.CAT_DNS, "medium",
+                            f"Certificate on {_host or cn} expires in {_days} day(s) "
+                            f"({_na.date()}). Plan renewal to avoid outage.",
+                            domain=data.domain, affected=_host or cn, timestamp=ts,
+                            output_file=_cert_file,
+                            title=f"Certificate: Near Expiry ({_host or cn})",
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+            # ── Hostname mismatch ──────────────────────────────────────────
+            if _host and cn:
+                _all_names = set(str(s).lower().rstrip(".") for s in sans)
+                _all_names.add(cn.lower().rstrip("."))
+                _host_lower = _host.lower().rstrip(".")
+                _matches = any(
+                    _host_lower == n or
+                    (n.startswith("*.") and _host_lower.endswith(n[1:]) and "." not in _host_lower[:-(len(n)-1)])
+                    for n in _all_names
+                )
+                if not _matches:
+                    add_finding(
+                        data, "OSift-Certs", "cert_hostname_mismatch", self.CAT_DNS, "medium",
+                        f"Certificate on {_host} does not match hostname. "
+                        f"CN={cn}, SANs={', '.join(sorted(sans)[:5]) or 'none'}. "
+                        f"This causes TLS warnings and may indicate a misconfigured vhost.",
+                        domain=data.domain, affected=_host, timestamp=ts,
+                        output_file=_cert_file,
+                        title=f"Certificate: Hostname Mismatch ({_host})",
+                    )
+
+            # ── Internal / private IPs in SANs ─────────────────────────────
+            _internal_ips = []
+            for _san in sans:
+                _sv = str(_san).strip()
+                try:
+                    _addr = _ipa.ip_address(_sv)
+                    if _addr.is_private or _addr.is_loopback or _addr.is_reserved:
+                        _internal_ips.append(_sv)
+                except ValueError:
+                    pass
+            if _internal_ips:
+                add_finding(
+                    data, "OSift-Certs", "cert_internal_ip_san", self.CAT_DNS, "low",
+                    f"Certificate on {_host or cn} contains internal/private IP address(es) "
+                    f"in SANs: {', '.join(_internal_ips)}. This reveals internal infrastructure.",
+                    domain=data.domain, affected=_host or cn, timestamp=ts,
+                    output_file=_cert_file,
+                    title=f"Certificate: Internal IP in SAN ({_host or cn})",
+                )
+
+            # ── Wildcard certificate ───────────────────────────────────────
+            if cert.get("wildcard"):
+                add_finding(
+                    data, "OSift-Certs", "cert_wildcard", self.CAT_DNS, "info",
+                    f"Wildcard certificate on {_host or cn} (CN={cn}). "
+                    f"Wildcard certs simplify management but increase blast radius if "
+                    f"the private key is compromised.",
+                    domain=data.domain, affected=_host or cn, timestamp=ts,
+                    output_file=_cert_file,
+                    title=f"Certificate: Wildcard ({_host or cn})",
+                )
+
     def _emit_dns_security_findings(self, ts: str) -> None:
         """
         Inspect the security_summary block written by DNSEnumerator._get_dns_records
@@ -19337,11 +19506,30 @@ class IntelAggregator:
                     output_file=_dns_rec_file,
                     title="DNS: DMARC Record Present",
                 )
+            # Check subdomain policy (sp=) — inherits from p= if absent
+            dmarc_recs = rec_dict.get("DMARC", [])
+            _dmarc_sp = ""
+            for _dr in dmarc_recs:
+                if isinstance(_dr, dict):
+                    _dmarc_sp = _dr.get("dmarc_subdomain_policy", "")
+                    if _dmarc_sp:
+                        break
+            if _dmarc_sp == "none" and dmarc_policy != "none":
+                add_finding(
+                    data, "OSift-DNS", "dns_dmarc_sp_none", self.CAT_DNS, "medium",
+                    f"DMARC subdomain policy is 'sp=none' while the apex policy is "
+                    f"'p={dmarc_policy}'. Subdomains can still be spoofed because "
+                    f"the subdomain policy overrides the apex for sub.{domain} addresses. "
+                    f"Set sp=quarantine or sp=reject.",
+                    domain=domain, affected=f"*.{domain}", timestamp=ts,
+                    output_file=_dns_rec_file,
+                    title="DNS: DMARC Subdomain Policy: Monitor Only",
+                )
 
         # ── CAA ───────────────────────────────────────────────────────────────
         if not ss.get("caa_present"):
             add_finding(
-                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "LOW",
+                data, "OSift-DNS", "dns_no_caa", self.CAT_DNS, "low",
                 "No CAA record found. Without CAA, any public Certificate Authority can issue "
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,
@@ -19432,6 +19620,26 @@ class IntelAggregator:
                 output_file=_dns_rec_file,
                 title="DNS: DKIM Record Present",
             )
+            # Check for weak DKIM keys (< 2048-bit RSA ≈ < 300 chars base64)
+            _weak_dkim = []
+            for _dkr in dkim_recs:
+                if not isinstance(_dkr, dict):
+                    continue
+                _pk_len = _dkr.get("dkim_pubkey_length", 0)
+                _sel    = _dkr.get("selector", "?")
+                # base64-encoded 1024-bit RSA key ≈ 216 chars, 2048-bit ≈ 392 chars
+                if _pk_len and 0 < _pk_len < 300 and not _dkr.get("dkim_pubkey_absent"):
+                    _weak_dkim.append(_sel)
+            if _weak_dkim:
+                add_finding(
+                    data, "OSift-DNS", "dns_dkim_weak_key", self.CAT_DNS, "medium",
+                    f"DKIM selector(s) {_weak_dkim} use a key shorter than 2048 bits. "
+                    f"RSA keys below 2048 bits are considered weak and can be factored. "
+                    f"Rotate to at least 2048-bit RSA or Ed25519.",
+                    domain=domain, affected=domain, timestamp=ts,
+                    output_file=_dns_rec_file,
+                    title="DNS: Weak DKIM Key",
+                )
 
         # ── MTA-STS ───────────────────────────────────────────────────────────
         if not ss.get("mta_sts"):
@@ -19485,6 +19693,39 @@ class IntelAggregator:
                 output_file=_dns_rec_file,
                 title="DNS: BIMI Record Present",
             )
+
+        # ── Secondary domains: check DMARC presence ─────────────────────────
+        _secondary = [d for d in (self.data.domains or []) if d != domain]
+        for _sec_dom in _secondary:
+            _sec_rec = self.data.dns_records.get(_sec_dom)
+            if not isinstance(_sec_rec, dict):
+                continue
+            _sec_ss = _sec_rec.get("security_summary")
+            if not isinstance(_sec_ss, dict):
+                continue
+            _sec_dns_file = str(
+                _domain_path(self.output_dir, _sec_dom) / "dns" / "records"
+                / f"{_safe_filename(_sec_dom)}_records.json"
+            )
+            if not _sec_ss.get("dmarc_present"):
+                add_finding(
+                    data, "OSift-DNS", "dns_no_dmarc", self.CAT_DNS, "medium",
+                    f"No DMARC record found for secondary domain {_sec_dom}. "
+                    f"Without DMARC, receiving servers have no policy for handling "
+                    f"SPF/DKIM failures on mail claiming to be from {_sec_dom}.",
+                    domain=_sec_dom, affected=_sec_dom, timestamp=ts,
+                    output_file=_sec_dns_file,
+                    title=f"DNS: Missing DMARC Record ({_sec_dom})",
+                )
+            if not _sec_ss.get("spf_present"):
+                add_finding(
+                    data, "OSift-DNS", "dns_no_spf", self.CAT_DNS, "medium",
+                    f"No SPF record found for secondary domain {_sec_dom}. "
+                    f"Without SPF, any host can send email claiming to be from {_sec_dom}.",
+                    domain=_sec_dom, affected=_sec_dom, timestamp=ts,
+                    output_file=_sec_dns_file,
+                    title=f"DNS: Missing SPF Record ({_sec_dom})",
+                )
 
     # ─── File writer ──────────────────────────────────────────────────────────
 

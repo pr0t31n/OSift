@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.6"
+VERSION = "2.15.7"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -14415,6 +14415,7 @@ class PDTlsx:
         # Accumulators for grouped findings (emitted after the per-entry loop)
         _wc_certs:    Dict[str, List[str]] = {}   # wildcard CN → [hosts]
         _tls12_hosts: List[str]            = []   # hosts with TLS 1.2 only
+        _mismatch_entries: "List[tuple]"   = []   # (host, cert_cn) pairs
 
         # Build scope set: primary domain + all configured domains
         _scope_set = set(self.data.domains if self.data.domains else [])
@@ -14499,20 +14500,10 @@ class PDTlsx:
                 )
                 flagged += 1
 
-            # ── Hostname mismatch ─────────────────────────────────────────
+            # ── Hostname mismatch (accumulated, emitted as grouped finding) ──
             if entry.get("mismatched"):
                 _served_cn = _cn or "(unknown)"
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_mismatched", CAT_TLS, "MEDIUM",
-                    f"The TLS certificate presented by {host} has a Common Name / SAN of '{_served_cn}' which does not match the requested hostname. "
-                    f"This causes browser trust warnings and may indicate a misconfigured virtual host, shared hosting, or a decommissioned service still accepting connections.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS Certificate: Hostname Mismatch",
-                    remediation="Ensure each externally-facing hostname is served by a certificate whose CN or SAN list includes that hostname. Remove DNS records for decommissioned services.",
-                )
-                flagged += 1
+                _mismatch_entries.append((host, _served_cn))
 
             # ── Untrusted certificate chain ───────────────────────────────
             if entry.get("untrusted"):
@@ -14587,7 +14578,25 @@ class PDTlsx:
                     }
                     san_new += 1
 
-        # ── Emit grouped findings (one per unique wildcard CN / TLS 1.2) ──
+        # ── Emit grouped findings ────────────────────────────────────────
+
+        # Hostname mismatches — one merged finding, all hosts in affected
+        if _mismatch_entries:
+            _mm_lines = [f"{h}|--|{cn}" for h, cn in _mismatch_entries]
+            _mm_affected = "\n".join(_mm_lines)
+            _mm_hostnames = ", ".join(sorted(set(h for h, _ in _mismatch_entries)))
+            add_finding(
+                self.data, "tlsx",
+                "tls_mismatched", CAT_TLS, "MEDIUM",
+                f"{len(_mismatch_entries)} hostname(s) present TLS certificates whose Common Name / SAN "
+                f"does not match the requested hostname. This causes browser trust warnings and may indicate "
+                f"misconfigured virtual hosts, shared hosting, or decommissioned services still accepting connections.",
+                host=_mm_hostnames, affected=_mm_affected,
+                title="SSL/TLS Certificate: Hostname Mismatch",
+                remediation="Ensure each externally-facing hostname is served by a certificate whose CN or SAN list includes that hostname. Remove DNS records for decommissioned services.",
+            )
+            flagged += 1
+
         for _wc_cn, _wc_hosts in _wc_certs.items():
             _affected = "\n".join(sorted(set(_wc_hosts)))
             add_finding(

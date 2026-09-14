@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.8"
+VERSION = "2.15.9"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -8635,7 +8635,7 @@ class CertificateCollector:
             _appl_count += _check_appliance_fingerprints(
                 _translated, _crec.get("hostname", ""), self.data,
                 _seen=_appl_seen,
-                output_file=str(self.out / "ssl_cert_search.json"),
+                output_file=str(self.output_dir / "ssl_cert_search.json"),
             )
         if _appl_count:
             self.log.success(

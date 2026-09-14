@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.7"
+VERSION = "2.15.8"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -5452,6 +5452,7 @@ class CrtShAPI:
                 domain=self.domain,
                 hostname=sub,
                 affected=sub,
+                output_file=str(out_json),
             )
             added += 1
         self.log.success(f"[crt.sh] {len(seen)} unique subdomains "
@@ -5530,6 +5531,7 @@ class IntelXAPI:
                          f"Preview: {preview[:200]}"),
                 domain=self.domain,
                 affected=name or self.domain,
+                output_file=str(out_json),
             )
         self.log.success(f"[intelx] {len(records)} records returned, "
                           f"{min(50, len(records))} findings emitted")
@@ -5592,6 +5594,7 @@ class FOFAAPI:
                        f"(server={server}, title={title!r})",
                 hostname=sub_domain, ip=ip,
                 affected=sub_domain, domain=self.domain,
+                output_file=str(out_json),
             )
         self.log.success(f"[fofa] {len(results)} assets returned")
         return len(results)
@@ -5648,6 +5651,7 @@ class ZoomEyeAPI:
                 severity="info",
                 detail=f"ZoomEye: {host or ip}:{port} ({svc})",
                 hostname=host, ip=ip, affected=host or ip, domain=self.domain,
+                output_file=str(out_json),
             )
         self.log.success(f"[zoomeye] {len(matches)} matches returned")
         return len(matches)
@@ -5718,7 +5722,8 @@ class GitLeakScanner:
                                               detail=(f"trufflehog flagged secret in {repo_url}: "
                                                        f"{hit.get('DetectorName', '?')} "
                                                        f"({'VERIFIED' if hit.get('Verified') else 'unverified'})"),
-                                              affected=repo_url, domain=self.domain)
+                                              affected=repo_url, domain=self.domain,
+                                              output_file=str(out_path))
                     except Exception as exc:
                         self.log.error(f"[trufflehog] {repo_url}: {exc}", exc=exc)
                 elif gitleaks:
@@ -5740,7 +5745,8 @@ class GitLeakScanner:
                                               detail=(f"gitleaks flagged secret in {repo_url}: "
                                                        f"{hit.get('Description', '?')} "
                                                        f"(rule: {hit.get('RuleID', '?')})"),
-                                              affected=repo_url, domain=self.domain)
+                                              affected=repo_url, domain=self.domain,
+                                              output_file=str(out_path))
                     except Exception as exc:
                         self.log.error(f"[gitleaks] {repo_url}: {exc}", exc=exc)
         self.log.success(f"[gitleaks] {total_findings} leak findings across {len(self.repos[:20])} repos")
@@ -6599,6 +6605,7 @@ def _check_appliance_fingerprints(
     data: "ReconData",
     *,
     _seen: set | None = None,
+    output_file: str = "",
 ) -> int:
     """
     Check a tlsx certificate entry against known-vulnerable appliance fingerprints.
@@ -6655,6 +6662,7 @@ def _check_appliance_fingerprints(
                 cve=fp.get("cves", ""),
                 title=fp["title"],
                 remediation=fp["remediation"],
+                output_file=output_file,
             )
             count += 1
     return count
@@ -8627,6 +8635,7 @@ class CertificateCollector:
             _appl_count += _check_appliance_fingerprints(
                 _translated, _crec.get("hostname", ""), self.data,
                 _seen=_appl_seen,
+                output_file=str(self.out / "ssl_cert_search.json"),
             )
         if _appl_count:
             self.log.success(
@@ -9794,6 +9803,7 @@ class EdgarIntelligence:
                 accession_no=target.get("accession_no", ""),
                 acquired_company=name,
                 relationship=rel,
+                output_file=str(self.output_dir / "ma_targets.json"),
             )
 
     def _resolve_domains_for_company(
@@ -11200,6 +11210,7 @@ class XurlFind3rRunner:
                     f"from passive sources (Wayback, CommonCrawl, OTX…)"
                 ),
                 domain=self.domain, affected=self.domain,
+                output_file=str(out_file),
             )
         return count
 
@@ -11395,6 +11406,7 @@ class EmailHarvesterRunner:
                     f"EmailHarvester found {count} email addresses via multi-engine search scraping"
                 ),
                 domain=self.domain, affected=self.domain,
+                output_file=str(self.out / "emails.txt"),
             )
         return count
 
@@ -11556,6 +11568,7 @@ class PureDNSRunner:
                     f"(wildcard-filtered via public DNS resolvers)"
                 ),
                 domain=self.domain, affected=self.domain,
+                output_file=str(brute_out),
             )
         self.log.success(f"[puredns] Complete — {total} new subdomains discovered")
         _vc.status("tool_puredns",
@@ -11827,6 +11840,7 @@ class WaybackURLsRunner:
                         "sensitive_data", CAT_SENSITIVE, _sev,
                         "Sensitive URL Identified",
                         url=_url, affected=_url, host=_wb_host,
+                        output_file=str(out_file),
                     )
                 else:
                     add_finding(
@@ -11834,6 +11848,7 @@ class WaybackURLsRunner:
                         "sensitive_data", CAT_SENSITIVE, _sev,
                         f"{_cat}: {_detail}",
                         url=_url, affected=_url,
+                        output_file=str(out_file),
                     )
 
         return count
@@ -11976,6 +11991,7 @@ class WappalyzerScanner:
                             host=host, url=url, affected=host,
                             technology=name,
                             categories=cats,
+                            output_file=str(self.out / "wappalyzer_results.json"),
                         )
 
                 self.log.info(f"[wappalyzer] {host}: {', '.join(t['name'] for t in techs[:5])}")
@@ -12001,6 +12017,7 @@ class WappalyzerScanner:
                     f"Wappalyzer identified {found_count} technologies across {len(results)} web targets"
                 ),
                 domain=self.domain, affected=self.domain,
+                output_file=str(self.out / "wappalyzer_results.json"),
             )
 
         self.log.success(
@@ -12203,6 +12220,7 @@ class MaigretRunner:
                     f"across {len(usernames)} usernames"
                 ),
                 domain=self.domain, affected=self.domain,
+                output_file=str(summary_file),
             )
 
         self.log.success(
@@ -12267,6 +12285,7 @@ class MaigretRunner:
                     detail=f"maigret: @{username} found on {site_name}",
                     url=profile_url, affected=profile_url,
                     domain=self.domain,
+                    output_file=str(json_path),
                 )
 
         return profiles
@@ -12440,6 +12459,7 @@ class TruffleHogRunner:
                 domain=self.domain,
                 detector=detector,
                 repository=repo,
+                output_file=str(jsonl_path),
             )
             summary[detector] = summary.get(detector, 0) + 1
             count += 1
@@ -12685,6 +12705,7 @@ class CloudEnumRunner:
                     url=bucket_url, affected=bucket_url,
                     domain=self.domain,
                     provider=provider,
+                    output_file=str(self.out / "cloud_enum_findings.json"),
                 )
                 count += 1
 
@@ -14472,6 +14493,7 @@ class PDTlsx:
             # ── Known-vulnerable appliance detection ──────────────────
             flagged += _check_appliance_fingerprints(
                 entry, host, self.data, _seen=_appliance_seen,
+                output_file=str(self.out / "tlsx_results.json"),
             )
 
             # ── Expired certificate ───────────────────────────────────────
@@ -14484,6 +14506,7 @@ class PDTlsx:
                     tls_version=_tv, cipher=_cip,
                     title="SSL/TLS Certificate: Expired",
                     remediation="Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
+                    output_file=str(self.out / "tlsx_results.json"),
                 )
                 flagged += 1
 
@@ -14497,6 +14520,7 @@ class PDTlsx:
                     tls_version=_tv, cipher=_cip,
                     title="SSL/TLS Certificate: Self-Signed",
                     remediation="Replace self-signed certificates with certificates issued by a trusted CA; use ACME/Let's Encrypt for cost-free automation.",
+                    output_file=str(self.out / "tlsx_results.json"),
                 )
                 flagged += 1
 
@@ -14517,6 +14541,7 @@ class PDTlsx:
                     tls_version=_tv, cipher=_cip,
                     title="SSL/TLS Certificate: Untrusted Chain",
                     remediation="Replace the certificate with one issued by a publicly trusted CA. If internal-only, deploy the private CA root to all clients via group policy or MDM.",
+                    output_file=str(self.out / "tlsx_results.json"),
                 )
                 flagged += 1
 
@@ -14538,6 +14563,7 @@ class PDTlsx:
                     tls_version=_tv, cipher=_cip,
                     title="Deprecated Protocol Enabled: TLSv1.0",
                     remediation="Disable TLS 1.0 on the server and require TLS 1.2 or higher. Update client compatibility requirements if necessary.",
+                    output_file=str(self.out / "tlsx_results.json"),
                 )
                 flagged += 1
             elif _tv_low in ("tls11", "tls1.1"):
@@ -14549,6 +14575,7 @@ class PDTlsx:
                     tls_version=_tv, cipher=_cip,
                     title="Deprecated Protocol Enabled: TLSv1.1",
                     remediation="Disable TLS 1.1 on the server and require TLS 1.2 or higher.",
+                    output_file=str(self.out / "tlsx_results.json"),
                 )
                 flagged += 1
             elif _tv_low in ("tls12", "tls1.2"):
@@ -14566,6 +14593,7 @@ class PDTlsx:
                     tls_version=_tv, cipher=_cip,
                     title="TLS Certificate: Internal IP Address in SAN",
                     remediation="Re-issue the certificate without internal IP addresses in the SAN list. Use split-horizon DNS or separate internal certificates for private services.",
+                    output_file=str(self.out / "tlsx_results.json"),
                 )
                 flagged += 1
 
@@ -14594,6 +14622,7 @@ class PDTlsx:
                 host=_mm_hostnames, affected=_mm_affected,
                 title="SSL/TLS Certificate: Hostname Mismatch",
                 remediation="Ensure each externally-facing hostname is served by a certificate whose CN or SAN list includes that hostname. Remove DNS records for decommissioned services.",
+                output_file=str(self.out / "tlsx_results.json"),
             )
             flagged += 1
 
@@ -14608,6 +14637,7 @@ class PDTlsx:
                 host=self.domain, affected=_affected,
                 title="SSL/TLS Certificate: Wildcard in Use",
                 remediation="Evaluate whether single-host certificates or shorter-lived automated certificates (ACME) would reduce risk. Ensure wildcard private keys are stored securely and rotated regularly.",
+                output_file=str(self.out / "tlsx_results.json"),
             )
             flagged += 1
 
@@ -14622,6 +14652,7 @@ class PDTlsx:
                 host=self.domain, affected=_affected,
                 title="SSL/TLS: TLS 1.3 Not Supported",
                 remediation="Enable TLS 1.3 on the server alongside TLS 1.2 to benefit from stronger cipher suites and reduced handshake latency.",
+                output_file=str(self.out / "tlsx_results.json"),
             )
             flagged += 1
 
@@ -14735,6 +14766,7 @@ class PDCdncheck:
                     f"cdncheck: WAF/proxy detected (provider: {provider})",
                     host=host, affected=host,
                     cdn_provider=provider,
+                    output_file=str(self.out / "cdncheck_parsed.json"),
                 )
 
         (self.out / "cdncheck_parsed.json").write_text(
@@ -14873,6 +14905,7 @@ class PDKatana:
                     url=action, affected=action,
                     form_method=form.get("method", ""),
                     form_fields=form.get("parameters", []),
+                    output_file=str(self.out / "katana_parsed.json"),
                 )
 
             # Scan response body for sensitive patterns
@@ -14919,6 +14952,7 @@ class PDKatana:
                             f"{category} pattern detected: {val[:80]}",
                             url=url, affected=url,
                             matched_value=val[:80],
+                            output_file=str(self.out / "katana_parsed.json"),
                         )
                         secret_count += 1
 

@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.11"
+VERSION = "2.15.12"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -22564,10 +22564,10 @@ API key sources (all free tiers available):
         _pda_key   = f"pd_wave_a{_d_sfx}"
         _p15_key   = f"phase1_5_wave_a{_d_sfx}"
         _amass_key = f"phase2_amass{_d_sfx}"
-        _lbl       = "" if is_primary else f" ({domain})"
+        _lbl       = f" ({domain})"
 
         # ── Phase 1 DNS ──────────────────────────────────────────────────────
-        _p1_label = "Phase 1: DNS Enumeration" if is_primary else f"Phase 1 DNS: {domain}"
+        _p1_label = f"Phase 1 DNS: {domain}"
         if _pm.is_phase_complete(_p1_key):
             _vc.log(f"Phase 1 DNS already complete{_lbl} — resuming from checkpoint.", "INFO")
             _vc.status(_p1_key, label=_p1_label, status="complete")
@@ -22589,7 +22589,7 @@ API key sources (all free tiers available):
             _snap(output_dir, data)
 
         # ── PD Wave A (subfinder / chaos) ────────────────────────────────────
-        _pda_label = "PD Wave A: Subfinder/Chaos" if is_primary else f"PD Wave A: {domain}"
+        _pda_label = f"PD Wave A: {domain}"
         if _pm.is_phase_complete(_pda_key):
             _vc.status(_pda_key, label=_pda_label, status="complete")
         else:
@@ -22608,7 +22608,7 @@ API key sources (all free tiers available):
             _snap(output_dir, data)
 
         # ── Phase 1.5 Wave A (theHarvester / xurlfind3r) ─────────────────────
-        _p15_label = "Phase 1.5: theHarvester/xurlfind3r" if is_primary else f"Passive OSINT: {domain}"
+        _p15_label = f"Passive OSINT: {domain}"
         if _pm.is_phase_complete(_p15_key):
             _vc.log(f"Phase 1.5 Wave A already complete{_lbl} — resuming from checkpoint.", "INFO")
             _vc.status(_p15_key, label=_p15_label, status="complete")
@@ -22631,7 +22631,7 @@ API key sources (all free tiers available):
             _snap(output_dir, data)
 
         # ── Phase 2 Amass ────────────────────────────────────────────────────
-        _amass_label = "Phase 2: Amass" if is_primary else f"Amass: {domain}"
+        _amass_label = f"Amass: {domain}"
         if not args.skip_amass and amass_available:
             if _pm.is_phase_complete(_amass_key):
                 _vc.log(f"Phase 2 Amass already complete{_lbl} — resuming from checkpoint.", "INFO")

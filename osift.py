@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.10"
+VERSION = "2.15.11"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -8082,40 +8082,38 @@ class DNSEnumerator:
         _sfn = _safe_filename(self.domain)
         _dd_file = passive_dir / f"dnsdumpster_{_sfn}.txt"
         try:
-            resp = session.get("https://dnsdumpster.com/", timeout=10)
-            csrf = ""
-            if resp.status_code == 200:
+            resp = session.post(
+                "https://dnsdumpster.com/htmld/",
+                data={"target": self.domain},
+                headers={"Referer": "https://dnsdumpster.com/"},
+                timeout=30,
+            )
+            if resp.status_code == 200 and "error" not in resp.text[:200].lower():
                 soup = BeautifulSoup(resp.text, "html.parser")
-                inp  = soup.find("input", {"name": "csrfmiddlewaretoken"})
-                if inp:
-                    csrf = inp.get("value", "")
-            if csrf:
-                resp2 = session.post(
-                    "https://dnsdumpster.com/",
-                    data={"csrfmiddlewaretoken": csrf, "targetip": self.domain, "user": "free"},
-                    headers={"Referer": "https://dnsdumpster.com/"},
-                    timeout=30,
-                )
-                if resp2.status_code == 200:
-                    _dd_hosts: List[str] = []
-                    for td in BeautifulSoup(resp2.text, "html.parser").find_all("td", class_="col-md-4"):
-                        txt = td.get_text(strip=True).split("\n")[0]
-                        if self.domain in txt:
-                            _dd_hosts.append(txt)
-                    if _dd_hosts:
-                        _dd_file.write_text("\n".join(sorted(set(_dd_hosts))), encoding="utf-8")
-                        for fqdn in _dd_hosts:
-                            self._add_subdomain(fqdn, "dnsdumpster", str(_dd_file))
-                    else:
-                        _write_placeholder(passive_dir, f"dnsdumpster_{_sfn}.txt",
-                                           f"DNSDumpster lookup for {self.domain}",
-                                           "(no subdomains found in response)")
+                _dd_hosts: List[str] = []
+                tbl = soup.find("table", id="a_rec_table")
+                if tbl:
+                    for tr in tbl.find_all("tr"):
+                        td = tr.find("td")
+                        if td:
+                            txt = td.get_text(strip=True).split("\n")[0]
+                            if self.domain in txt:
+                                _dd_hosts.append(txt)
+                if _dd_hosts:
+                    _dd_file.write_text("\n".join(sorted(set(_dd_hosts))), encoding="utf-8")
+                    for fqdn in _dd_hosts:
+                        self._add_subdomain(fqdn, "dnsdumpster", str(_dd_file))
+                    self.log.success(f"[DNS] DNSDumpster scraped — {len(set(_dd_hosts))} hosts")
+                else:
+                    _write_placeholder(passive_dir, f"dnsdumpster_{_sfn}.txt",
+                                       f"DNSDumpster lookup for {self.domain}",
+                                       "(no subdomains found in response)")
                     self.log.success("[DNS] DNSDumpster scraped successfully")
             else:
-                self.log.warning("[DNS] DNSDumpster: could not obtain CSRF token — site may have changed layout")
+                self.log.warning("[DNS] DNSDumpster: unexpected response — site may have changed")
                 _write_placeholder(passive_dir, f"dnsdumpster_{_sfn}.txt",
                                    f"DNSDumpster lookup for {self.domain}",
-                                   "(could not obtain CSRF token — site may have changed)")
+                                   "(unexpected response — site may have changed)")
         except Exception as e:
             self.log.warning(f"[DNS] DNSDumpster failed: {e}")
 

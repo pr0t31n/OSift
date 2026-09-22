@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.13"
+VERSION = "2.15.15"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6102,7 +6102,8 @@ class ReconLogger:
             eh.setFormatter(fh_fmt)
 
             self.logger.addHandler(fh)
-            self.logger.addHandler(ch)
+            if not _VANTAGE_MANAGED:
+                self.logger.addHandler(ch)
             self.logger.addHandler(eh)
 
     # ── Tool context ──────────────────────────────────────────────────────────
@@ -6137,7 +6138,8 @@ class ReconLogger:
         self.logger.debug(f"{self._tag()} {msg}")
 
     def warning(self, msg: str, **kw):
-        self.logger.warning(f"{self._tag()} {msg}")
+        if not _VANTAGE_MANAGED:
+            self.logger.warning(f"{self._tag()} {msg}")
         self._log_json("WARNING", msg, kw)
         if _VANTAGE_MANAGED:
             _vc.log(msg, level="WARNING")
@@ -6148,7 +6150,8 @@ class ReconLogger:
 
     def error(self, msg: str, exc: Optional[Exception] = None, **kw):
         full = msg + (f" | {type(exc).__name__}: {exc}" if exc else "")
-        self.logger.error(f"{self._tag()} {full}")
+        if not _VANTAGE_MANAGED:
+            self.logger.error(f"{self._tag()} {full}")
         self._log_json("ERROR", full, kw)
         self._write_error(full, exc)
         if _VANTAGE_MANAGED:
@@ -16426,6 +16429,43 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
         except ValueError:
             return False
 
+    # ── Load external scope CIDRs for Fracture scope tagging ─────────────
+    _ext_nets: list = []
+    _has_ext_scope = False
+    if _project_dir:
+        for _meta_name in ("crucible_meta.json", "vantage_meta.json"):
+            _meta_path = _project_dir / _meta_name
+            if _meta_path.exists():
+                try:
+                    import ipaddress as _ipa
+                    _pmeta = json.loads(_meta_path.read_text(encoding="utf-8"))
+                    _has_ext_scope = "external" in (_pmeta.get("active_scopes") or [])
+                    for _cidr in (_pmeta.get("scope_definition") or {}).get("network_cidrs", []):
+                        _cidr = str(_cidr).strip()
+                        if not _cidr:
+                            continue
+                        try:
+                            _ext_nets.append(_ipa.ip_network(_cidr, strict=False))
+                        except ValueError:
+                            try:
+                                _ext_nets.append(_ipa.ip_network(f"{_cidr}/32", strict=False))
+                            except ValueError:
+                                pass
+                    break
+                except Exception:
+                    pass
+
+    def _ip_in_ext_scope(addr: str) -> bool:
+        """Check if an IP falls within the project's external scope CIDRs."""
+        if not _ext_nets or not addr:
+            return False
+        try:
+            import ipaddress as _ipa
+            _a = _ipa.ip_address(addr)
+            return any(_a in net for net in _ext_nets)
+        except ValueError:
+            return False
+
     # ── Resolved IPs → action items ──────────────────────────────────────
     for ip_addr, ip_meta in data.ip_addresses.items():
         if not ip_addr or ip_addr.startswith("127.") or ip_addr == "0.0.0.0":
@@ -16464,14 +16504,27 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
         target_url = f"{scheme}://{sub}"
         if web_port not in (80, 443):
             target_url += f":{web_port}"
+        in_scope = _has_ext_scope and any(_ip_in_ext_scope(a) for a in ips)
+        if in_scope:
+            _fr_label = "Fracture - UNAUTH"
+            _fr_desc = (f"Live web property detected at {sub} (HTTP {http_status}). "
+                        f"Target IP is within the external test scope. "
+                        f"Unauthenticated web application security testing recommended.")
+        else:
+            _fr_label = "Fracture - UNAUTH - Out-Of-Scope"
+            _fr_desc = (f"Live web property detected at {sub} (HTTP {http_status}). "
+                        f"Target IP is outside the external test scope"
+                        f"{'' if _has_ext_scope else ' (no external scope defined)'}. "
+                        f"Unauthenticated web application security testing recommended — "
+                        f"verify scope authorization before proceeding.")
         _add("web_app", "Fracture", target_url, ip, web_port, sub,
-             f"Web application testing: {sub}",
-             f"Live web property detected at {sub} (HTTP {http_status}). "
-             f"Web application security testing recommended.",
+             f"{_fr_label}: {sub}",
+             _fr_desc,
              priority="HIGH",
              metadata={"http_status": http_status,
                         "all_ips": ips[:10],
-                        "all_ports": ports[:20]})
+                        "all_ports": ports[:20],
+                        "in_ext_scope": in_scope})
 
     # ── API indicators in crawled URLs → Siphon ───────────────────────────
     _api_hosts_seen: set = set()

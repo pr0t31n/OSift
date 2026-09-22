@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.12"
+VERSION = "2.15.13"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -2549,10 +2549,11 @@ class ShodanAPI:
                     self.log.warning("[Shodan] No query credits remaining (402)")
                     return
                 if resp.status_code != 200:
-                    self.log.error(f"[Shodan] DNS domain lookup HTTP {resp.status_code}")
+                    detail = " — API key may lack permission (paid plan required for /dns/domain)" if resp.status_code == 403 else ""
+                    self.log.error(f"[Shodan] DNS domain lookup HTTP {resp.status_code}{detail}")
                     _write_placeholder(self.out, "dns_domain.json",
                                        f"GET /dns/domain/{self.domain}",
-                                       f"(Shodan DNS domain lookup returned HTTP {resp.status_code})")
+                                       f"(Shodan DNS domain lookup returned HTTP {resp.status_code}{detail})")
                     return
 
                 payload = resp.json()
@@ -2626,10 +2627,11 @@ class ShodanAPI:
         try:
             resp = self.session.get(url, params=params, timeout=30)
             if resp.status_code not in (200, 201):
-                self.log.error(f"[Shodan] SSL search HTTP {resp.status_code}")
+                detail = " — API key may lack permission (paid plan required)" if resp.status_code == 403 else ""
+                self.log.error(f"[Shodan] SSL search HTTP {resp.status_code}{detail}")
                 _write_placeholder(self.out, "ssl_cert_search.json",
                                    f"GET /shodan/host/search?query=ssl.cert.subject.cn:{self.domain}",
-                                   f"(Shodan SSL cert search returned HTTP {resp.status_code})")
+                                   f"(Shodan SSL cert search returned HTTP {resp.status_code}{detail})")
                 return
             result = resp.json()
         except Exception as e:
@@ -2899,9 +2901,14 @@ class CensysAPI:
                     _rate_sleep(60)
                     continue
                 if resp.status_code != 200:
-                    self.log.error(f"[Censys] Host search HTTP {resp.status_code}")
+                    detail = " (likely invalid API credentials — check censys_id/censys_secret)" if 300 <= resp.status_code < 400 else ""
+                    self.log.error(f"[Censys] Host search HTTP {resp.status_code}{detail}")
                     break
-                result = resp.json().get("result", {})
+                result = resp.json()
+                if not isinstance(result, dict):
+                    self.log.warning(f"[Censys] Host search returned non-dict — skipping")
+                    break
+                result = result.get("result", {})
                 hits   = result.get("hits", [])
                 if not hits:
                     break
@@ -3799,6 +3806,9 @@ class NetlasAPI:
 
             payload = resp.json()
             _save_api_result(self.out, "host_summary.json", payload)
+            if not isinstance(payload, dict):
+                self.log.warning(f"[Netlas] Host summary returned non-dict ({type(payload).__name__}) — skipping ingestion")
+                return
 
             # Ingest related domains
             for related in payload.get("related_domains", []):
@@ -3866,6 +3876,9 @@ class NetlasAPI:
                 return
 
             payload = resp.json()
+            if not isinstance(payload, dict):
+                self.log.warning(f"[Netlas] Domain DNS search returned non-dict — skipping")
+                return
             if not payload.get("items"):
                 self.log.info("[Netlas] Domain DNS search returned no items")
                 _write_placeholder(self.out, "domain_dns.json",
@@ -3924,6 +3937,9 @@ class NetlasAPI:
                 return
 
             payload = resp.json()
+            if not isinstance(payload, dict):
+                self.log.warning(f"[Netlas] Certificate search returned non-dict — skipping")
+                return
             if not payload.get("items"):
                 self.log.info("[Netlas] Certificate search returned no items")
                 _write_placeholder(self.out, "certificates.json",
@@ -3982,6 +3998,9 @@ class NetlasAPI:
                 return
 
             payload = resp.json()
+            if not isinstance(payload, dict):
+                self.log.warning(f"[Netlas] WHOIS domain returned non-dict — skipping")
+                return
             if not payload.get("items"):
                 self.log.info("[Netlas] WHOIS domain returned no items")
                 _write_placeholder(self.out, "whois_domain.json",
@@ -4051,7 +4070,8 @@ class NetlasAPI:
                 if resp.status_code != 200:
                     continue
 
-                items = resp.json().get("items", [])
+                _jdata = resp.json()
+                items = _jdata.get("items", []) if isinstance(_jdata, dict) else []
                 if items:
                     w = items[0].get("data", {})
                     enriched[ip] = w

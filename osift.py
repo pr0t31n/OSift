@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.15"
+VERSION = "2.15.16"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -21964,7 +21964,17 @@ class VTReputationSweep:
                     malicious_ips.add(ip)
 
         # ── IP reputation checks ─────────────────────────────────────────
-        ip_queue = sorted(malicious_ips)[:self.max_ips]
+        # Filter out loopback, private, and reserved IPs — no point querying VT
+        _public_ips = set()
+        for _candidate in malicious_ips:
+            try:
+                _addr = ipaddress.ip_address(_candidate)
+                if _addr.is_loopback or _addr.is_private or _addr.is_reserved or _addr.is_link_local:
+                    continue
+                _public_ips.add(_candidate)
+            except ValueError:
+                continue
+        ip_queue = sorted(_public_ips)[:self.max_ips]
         self.log.info(f"[VT Sweep] Checking {len(ip_queue)} unique IPs")
 
         ip_results: dict = {}

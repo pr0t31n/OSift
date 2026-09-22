@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.16"
+VERSION = "2.15.17"
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────
@@ -6262,6 +6262,7 @@ class ReconLogger:
         _t = getattr(self._tool_local, "tool", "OSift")
         _v = getattr(self._tool_local, "version", VERSION)
         with self._write_lock:
+            self.error_log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.error_log_path, "a", encoding="utf-8") as f:
                 ts = datetime.datetime.now(_UTC).isoformat()
                 f.write(f"[{ts}] [{_t}/{_v}] {msg}\n")

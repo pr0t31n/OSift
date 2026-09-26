@@ -632,7 +632,7 @@ _RUNLOG = None
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-VERSION = "2.15.18"
+VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text().strip()
 
 
 # ─── Banner & Terminal UI ─────────────────────────────────────────────────────

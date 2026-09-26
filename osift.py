@@ -6131,8 +6131,11 @@ class ReconLogger:
         return f"[{tool}/{ver}]"
 
     def info(self, msg: str, **kw):
-        self.logger.info(f"{self._tag()} {msg}")
+        if not _VANTAGE_MANAGED:
+            self.logger.info(f"{self._tag()} {msg}")
         self._log_json("INFO", msg, kw)
+        if _VANTAGE_MANAGED:
+            _vc.log(msg, level="INFO")
 
     def debug(self, msg: str, **kw):
         self.logger.debug(f"{self._tag()} {msg}")
@@ -6145,8 +6148,11 @@ class ReconLogger:
             _vc.log(msg, level="WARNING")
 
     def success(self, msg: str, **kw):
-        self.logger.info(f"{self._tag()} [OK] {msg}")
+        if not _VANTAGE_MANAGED:
+            self.logger.info(f"{self._tag()} [OK] {msg}")
         self._log_json("SUCCESS", msg, kw)
+        if _VANTAGE_MANAGED:
+            _vc.log(msg, level="INFO")
 
     def error(self, msg: str, exc: Optional[Exception] = None, **kw):
         full = msg + (f" | {type(exc).__name__}: {exc}" if exc else "")

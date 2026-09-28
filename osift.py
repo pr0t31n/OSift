@@ -252,9 +252,9 @@ def _start_concurrency_monitor(sem, interval=10):
                 _cpu_pct = _psm.cpu_percent(interval=2)
                 _mem_pct = _psm.virtual_memory().percent
                 _cur     = sem.limit
-                if _cpu_pct > 80 or _mem_pct > 80:
+                if _cpu_pct > 80 or _mem_pct > 70:
                     sem.set_limit(max(2, int(_cur * 0.75)))
-                elif _cpu_pct < 50 and _mem_pct < 60:
+                elif _cpu_pct < 50 and _mem_pct < 50:
                     sem.set_limit(min(_base, int(_cur * 1.25)))
             except Exception:
                 pass
@@ -266,6 +266,75 @@ def _start_concurrency_monitor(sem, interval=10):
 _hw_cpu, _hw_ram    = _hw_detect()
 _SCAN_CONCURRENCY   = _calc_initial_concurrency(_hw_cpu, _hw_ram)
 _SCAN_SEM           = _AdaptiveSemaphore(_SCAN_CONCURRENCY)
+
+# ── Per-subprocess memory limit ──────────────────────────────────────────────
+_SUBPROCESS_MEM_LIMIT_BYTES = int(2 * 1024 ** 3)  # 2 GB per child process
+
+def _mem_limit_preexec():
+    """preexec_fn: cap each child's virtual address space to prevent OOM."""
+    if sys.platform == "win32":
+        return
+    try:
+        import resource as _rlim
+        _rlim.setrlimit(_rlim.RLIMIT_AS,
+                        (_SUBPROCESS_MEM_LIMIT_BYTES, _SUBPROCESS_MEM_LIMIT_BYTES))
+    except (AttributeError, ValueError, OSError):
+        pass
+
+# ── OOM watchdog ─────────────────────────────────────────────────────────────
+_tracked_procs: list = []
+_tracked_procs_lock = threading.Lock()
+
+def _track_proc(proc):
+    with _tracked_procs_lock:
+        _tracked_procs.append(proc)
+
+def _untrack_proc(proc):
+    with _tracked_procs_lock:
+        try:
+            _tracked_procs.remove(proc)
+        except ValueError:
+            pass
+
+def _start_oom_watchdog(threshold_pct=90, interval=15):
+    """Kill the largest tracked subprocess when system memory exceeds threshold."""
+    try:
+        import psutil as _psw
+    except ImportError:
+        return None
+
+    def _watchdog():
+        while True:
+            try:
+                time.sleep(interval)
+                mem = _psw.virtual_memory()
+                if mem.percent < threshold_pct:
+                    continue
+                with _tracked_procs_lock:
+                    _tracked_procs[:] = [p for p in _tracked_procs if p.poll() is None]
+                    live = list(_tracked_procs)
+                if not live:
+                    continue
+                biggest, biggest_rss = None, 0
+                for p in live:
+                    try:
+                        pi = _psw.Process(p.pid)
+                        rss = pi.memory_info().rss
+                        if rss > biggest_rss:
+                            biggest, biggest_rss = p, rss
+                    except (_psw.NoSuchProcess, _psw.AccessDenied, OSError):
+                        pass
+                if biggest and biggest_rss > 100 * 1024 * 1024:
+                    try:
+                        biggest.kill()
+                    except OSError:
+                        pass
+            except Exception:
+                pass
+
+    _t = threading.Thread(target=_watchdog, daemon=True, name="osift-oom-watchdog")
+    _t.start()
+    return _t
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Windows-specific: enable ANSI colour codes in cmd/PowerShell ──────────────
@@ -1417,7 +1486,7 @@ def _shell(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
             capture_output=True,
             text=True,
             timeout=timeout,
-            # Windows: hide console window for sub-processes
+            preexec_fn=_mem_limit_preexec if not IS_WINDOWS else None,
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )
         return result.stdout, result.stderr, result.returncode
@@ -2550,7 +2619,7 @@ class ShodanAPI:
                     return
                 if resp.status_code != 200:
                     detail = " — API key may lack permission (paid plan required for /dns/domain)" if resp.status_code == 403 else ""
-                    self.log.error(f"[Shodan] DNS domain lookup HTTP {resp.status_code}{detail}")
+                    self.log.warning(f"[Shodan] DNS domain lookup HTTP {resp.status_code}{detail}")
                     _write_placeholder(self.out, "dns_domain.json",
                                        f"GET /dns/domain/{self.domain}",
                                        f"(Shodan DNS domain lookup returned HTTP {resp.status_code}{detail})")
@@ -2628,7 +2697,7 @@ class ShodanAPI:
             resp = self.session.get(url, params=params, timeout=30)
             if resp.status_code not in (200, 201):
                 detail = " — API key may lack permission (paid plan required)" if resp.status_code == 403 else ""
-                self.log.error(f"[Shodan] SSL search HTTP {resp.status_code}{detail}")
+                self.log.warning(f"[Shodan] SSL search HTTP {resp.status_code}{detail}")
                 _write_placeholder(self.out, "ssl_cert_search.json",
                                    f"GET /shodan/host/search?query=ssl.cert.subject.cn:{self.domain}",
                                    f"(Shodan SSL cert search returned HTTP {resp.status_code}{detail})")
@@ -2902,7 +2971,7 @@ class CensysAPI:
                     continue
                 if resp.status_code != 200:
                     detail = " (likely invalid API credentials — check censys_id/censys_secret)" if 300 <= resp.status_code < 400 else ""
-                    self.log.error(f"[Censys] Host search HTTP {resp.status_code}{detail}")
+                    self.log.warning(f"[Censys] Host search HTTP {resp.status_code}{detail}")
                     break
                 result = resp.json()
                 if not isinstance(result, dict):
@@ -3410,7 +3479,7 @@ class SecurityTrailsAPI:
                                    "(SecurityTrails domain info rate-limited)")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[SecurityTrails] Domain info HTTP {resp.status_code}")
+                self.log.warning(f"[SecurityTrails] Domain info HTTP {resp.status_code}")
                 _write_placeholder(self.out, "domain_info.json",
                                    f"GET /v1/domain/{self.domain}",
                                    f"(SecurityTrails domain info returned HTTP {resp.status_code})")
@@ -3473,7 +3542,7 @@ class SecurityTrailsAPI:
                                    "(SecurityTrails subdomains rate-limited)")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[SecurityTrails] Subdomains HTTP {resp.status_code}")
+                self.log.warning(f"[SecurityTrails] Subdomains HTTP {resp.status_code}")
                 _write_placeholder(self.out, "subdomains.json",
                                    f"GET /v1/domain/{self.domain}/subdomains",
                                    f"(SecurityTrails subdomains returned HTTP {resp.status_code})")
@@ -3533,7 +3602,7 @@ class SecurityTrailsAPI:
                                    "(SecurityTrails associated domains rate-limited)")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[SecurityTrails] Associated domains HTTP {resp.status_code}")
+                self.log.warning(f"[SecurityTrails] Associated domains HTTP {resp.status_code}")
                 _write_placeholder(self.out, "associated_domains.json",
                                    f"GET /v1/domain/{self.domain}/associated",
                                    f"(SecurityTrails associated domains returned HTTP {resp.status_code})")
@@ -3597,7 +3666,7 @@ class SecurityTrailsAPI:
                                    "(SecurityTrails DNS history rate-limited)")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[SecurityTrails] DNS history HTTP {resp.status_code}")
+                self.log.warning(f"[SecurityTrails] DNS history HTTP {resp.status_code}")
                 _write_placeholder(self.out, "dns_history_a.json",
                                    f"GET /v1/history/{self.domain}/dns/a",
                                    f"(SecurityTrails DNS history returned HTTP {resp.status_code})")
@@ -3658,7 +3727,7 @@ class SecurityTrailsAPI:
                                    "(SecurityTrails WHOIS rate-limited)")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[SecurityTrails] WHOIS HTTP {resp.status_code}")
+                self.log.warning(f"[SecurityTrails] WHOIS HTTP {resp.status_code}")
                 _write_placeholder(self.out, "whois.json",
                                    f"GET /v1/domain/{self.domain}/whois",
                                    f"(SecurityTrails WHOIS returned HTTP {resp.status_code})")
@@ -3798,7 +3867,7 @@ class NetlasAPI:
                 self.log.warning("[Netlas] API key rejected (401)")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[Netlas] Host summary HTTP {resp.status_code}")
+                self.log.warning(f"[Netlas] Host summary HTTP {resp.status_code}")
                 _write_placeholder(self.out, "host_summary.json",
                                    f"GET /api/host/{self.domain}/",
                                    f"(Netlas host summary returned HTTP {resp.status_code})")
@@ -3845,7 +3914,7 @@ class NetlasAPI:
             self.log.success(f"[Netlas] Host summary ingested for {self.domain}")
 
         except Exception as e:
-            self.log.error(f"[Netlas] Host summary error: {e}", exc=e)
+            self.log.warning(f"[Netlas] Host summary error: {e}")
             _write_placeholder(self.out, "host_summary.json",
                                f"GET /api/host/{self.domain}/",
                                f"(Netlas host summary failed: {e})")
@@ -3869,7 +3938,7 @@ class NetlasAPI:
                 self.log.warning("[Netlas] Rate limited (429) on domain DNS search — skipping")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[Netlas] Domain DNS search HTTP {resp.status_code}")
+                self.log.warning(f"[Netlas] Domain DNS search HTTP {resp.status_code}")
                 _write_placeholder(self.out, "domain_dns.json",
                                    f"GET /api/domains/?q=domain:{self.domain}",
                                    f"(Netlas domain DNS search returned HTTP {resp.status_code})")
@@ -3930,7 +3999,7 @@ class NetlasAPI:
                 self.log.warning("[Netlas] Rate limited (429) on certificate search — skipping")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[Netlas] Certificate search HTTP {resp.status_code}")
+                self.log.warning(f"[Netlas] Certificate search HTTP {resp.status_code}")
                 _write_placeholder(self.out, "certificates.json",
                                    f"GET /api/certificates/?q={query}",
                                    f"(Netlas certificate search returned HTTP {resp.status_code})")
@@ -3991,7 +4060,7 @@ class NetlasAPI:
                 self.log.warning("[Netlas] Rate limited (429) on WHOIS domain — skipping")
                 return
             if resp.status_code != 200:
-                self.log.error(f"[Netlas] WHOIS domain HTTP {resp.status_code}")
+                self.log.warning(f"[Netlas] WHOIS domain HTTP {resp.status_code}")
                 _write_placeholder(self.out, "whois_domain.json",
                                    f"GET /api/whois-domain/?q=domain:{self.domain}",
                                    f"(Netlas WHOIS domain returned HTTP {resp.status_code})")
@@ -15116,6 +15185,7 @@ class PDASNmap:
                 result = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True,
                     timeout=self._QUERY_TIMEOUT,
+                    preexec_fn=_mem_limit_preexec if not IS_WINDOWS else None,
                     creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
                 )
                 stdout, stderr, rc = result.stdout, result.stderr, result.returncode
@@ -15228,6 +15298,7 @@ class PDUncover:
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True, timeout=120,
                 env=env,
+                preexec_fn=_mem_limit_preexec if not IS_WINDOWS else None,
                 creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
             )
             self.log.log_command(cmd, result.stdout, result.stderr, result.returncode)
@@ -16377,7 +16448,7 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
     seen: set = set()  # (recommended_tool, target, title) dedup
 
     def _add(item_type, tool, target, ip, port, hostname, title, desc,
-             priority="MEDIUM", metadata=None):
+             priority="MEDIUM", metadata=None, in_scope=True):
         key = (tool.lower(), target.lower(), title.strip().lower())
         if key in seen:
             return
@@ -16396,6 +16467,7 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
             "priority":         priority,
             "scope":            "osint",
             "status":           "pending",
+            "in_scope":         in_scope,
             "datetime":         datetime.datetime.now(_UTC).isoformat(),
             "metadata":         metadata or {},
         }
@@ -16496,7 +16568,8 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
              desc + ". This IP was identified during OSINT but is outside the "
              "current Scattershot3 target scope.",
              priority="MEDIUM",
-             metadata={"fqdns": fqdns[:20], "known_ports": ports[:50]})
+             metadata={"fqdns": fqdns[:20], "known_ports": ports[:50]},
+             in_scope=False)
 
     # ── Live web properties → Fracture ────────────────────────────────────
     for sub, meta in data.subdomains.items():
@@ -16531,7 +16604,8 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
              metadata={"http_status": http_status,
                         "all_ips": ips[:10],
                         "all_ports": ports[:20],
-                        "in_ext_scope": in_scope})
+                        "in_ext_scope": in_scope},
+             in_scope=in_scope)
 
     # ── API indicators in crawled URLs → Siphon ───────────────────────────
     _api_hosts_seen: set = set()
@@ -16555,12 +16629,14 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
         target_url = f"{parsed.scheme}://{host}" if parsed.scheme else f"https://{host}"
         if port not in (80, 443):
             target_url += f":{port}"
+        _api_in_scope = _has_ext_scope and any(_ip_in_ext_scope(a) for a in ips) if ips else True
         _add("api", "Siphon", target_url, ip, port, host,
              f"API testing: {host}",
              f"API indicator detected at {url}. "
              f"API security testing recommended.",
              priority="HIGH",
-             metadata={"indicator_url": url})
+             metadata={"indicator_url": url},
+             in_scope=_api_in_scope)
 
     # ── Known-vulnerable appliances → Manual Testing ────────────────────
     # Scan findings for appliance detections (from tlsx fingerprinting)
@@ -21769,7 +21845,7 @@ class DnsTwistRunner:
 
         except subprocess.TimeoutExpired:
             ended = datetime.datetime.now(_UTC).isoformat()
-            self.log.error(f"[dnstwist] Timeout (300s) scanning {domain}")
+            self.log.warning(f"[dnstwist] Timeout (300s) scanning {domain}")
             self.log.log_command(
                 cmd=" ".join(cmd),
                 stdout="", stderr="(timeout after 300s)",
@@ -22499,6 +22575,7 @@ API key sources (all free tiers available):
 
     # Start adaptive concurrency monitor (adjusts _SCAN_SEM based on CPU/RAM)
     _start_concurrency_monitor(_SCAN_SEM)
+    _start_oom_watchdog()
 
     # ── Initialise checkpoint manager ──────────────────────────────────────
     global _pm

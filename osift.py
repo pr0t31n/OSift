@@ -12054,7 +12054,7 @@ class WaybackURLsRunner:
                         "sensitive_data", CAT_SENSITIVE, _sev,
                         "Sensitive URL Identified",
                         url=_url, affected=_url, host=_wb_host,
-                        output_file=str(out_file),
+                        output_file=str(file_path),
                     )
                 else:
                     add_finding(
@@ -12062,7 +12062,7 @@ class WaybackURLsRunner:
                         "sensitive_data", CAT_SENSITIVE, _sev,
                         f"{_cat}: {_detail}",
                         url=_url, affected=_url,
-                        output_file=str(out_file),
+                        output_file=str(file_path),
                     )
 
         return count
@@ -14616,15 +14616,36 @@ class PDTlsx:
         self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")
 
         _tlsx_timeout = min(60 * len(hosts), 600)  # ~60s/host, cap at 10 min per pass
+        _OOM_SIGNATURES = ("cannot allocate memory", "out of memory", "runtime: out of memory")
+
         stdout1, stderr1, rc1 = _shell(cmd_san, timeout=_tlsx_timeout)
         self.log.log_command(cmd_san, stdout1, stderr1, rc1)
+        _san_oom = rc1 != 0 and any(s in (stderr1 or "") for s in _OOM_SIGNATURES)
         if rc1 != 0:
-            self.log.warning(f"[tlsx] SAN/CN pass exited with code {rc1}" + (f": {_strip_ansi(stderr1)[:200]}" if stderr1 else ""))
+            _lvl = "error" if _san_oom or rc1 == -1 else "warning"
+            getattr(self.log, _lvl)(f"[tlsx] SAN/CN pass exited with code {rc1}" + (f": {_strip_ansi(stderr1)[:200]}" if stderr1 else ""))
 
         stdout2, stderr2, rc2 = _shell(cmd_tls, timeout=_tlsx_timeout)
         self.log.log_command(cmd_tls, stdout2, stderr2, rc2)
+        _tls_oom = rc2 != 0 and any(s in (stderr2 or "") for s in _OOM_SIGNATURES)
         if rc2 != 0:
-            self.log.warning(f"[tlsx] TLS version pass exited with code {rc2}" + (f": {_strip_ansi(stderr2)[:200]}" if stderr2 else ""))
+            _lvl = "error" if _tls_oom or rc2 == -1 else "warning"
+            getattr(self.log, _lvl)(f"[tlsx] TLS version pass exited with code {rc2}" + (f": {_strip_ansi(stderr2)[:200]}" if stderr2 else ""))
+
+        if _san_oom or _tls_oom:
+            _which = "SAN/CN" if _san_oom else "TLS version"
+            if _san_oom and _tls_oom:
+                _which = "both SAN/CN and TLS version"
+            _record_timeout_action_item(
+                "tlsx", self.domain,
+                f"tlsx {_which} pass crashed with out-of-memory error while "
+                f"scanning {len(hosts)} hosts for {self.domain}. "
+                f"Re-run tlsx manually with reduced concurrency (-c 5) or on "
+                f"a host with more available RAM to complete TLS certificate "
+                f"extraction.",
+                hostname=self.domain,
+                priority="HIGH",
+            )
 
         rc = rc1 if rc1 != 0 else rc2
         if rc1 != 0 and rc2 != 0:

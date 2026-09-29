@@ -174,6 +174,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from ip_filter import validate_ip, filter_ips
 
 # ── Adaptive concurrency ──────────────────────────────────────────────────────
 def _hw_detect():
@@ -9014,7 +9015,7 @@ class WhoisCollector:
             self.log.log_command(f"whois {domain}", stdout, stderr, rc)
             result["raw"]    = stdout[:5000]
             result["source"] = "whois_command"
-            for email in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', stdout):
+            for email in filter_ips(re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', stdout)):
                 self._add_email(email, "whois_raw", domain)
 
         self.data.whois_data[domain] = result
@@ -9127,7 +9128,7 @@ class EmailAndPeopleOSINT:
             try:
                 resp = session.get("https://html.duckduckgo.com/html/", params={"q": query}, timeout=15)
                 if resp.status_code == 200:
-                    for email in re.findall(r'[a-zA-Z0-9._%+\-]+@' + re.escape(self.domain), resp.text):
+                    for email in filter_ips(re.findall(r'[a-zA-Z0-9._%+\-]+@' + re.escape(self.domain)), resp.text):
                         email = email.lower()
                         if email not in found:
                             found.add(email)
@@ -10818,7 +10819,7 @@ class WebCrawler:
 
         # ── HTML / JS body patterns ───────────────────────────────────────────
         for pat, ng, vg in _SW_BODY_PATS:
-            for match in re.findall(pat, text, re.IGNORECASE):
+            for match in filter_ips(re.findall(pat, text, re.IGNORECASE)):
                 name_raw = match[ng - 1] if isinstance(match, tuple) else match
                 ver_raw  = match[vg - 1] if isinstance(match, tuple) else ""
                 if name_raw and ver_raw:
@@ -11163,7 +11164,7 @@ class TheHarvesterRunner:
         email_re = re.compile(
             r"[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}", re.I
         )
-        for email in email_re.findall(stdout):
+        for email in email_filter_ips(re.findall(stdout)):
             email = email.lower()
             if self.domain in email and email not in self.data.email_addresses:
                 self.data.email_addresses[email] = {
@@ -11522,7 +11523,7 @@ class EmailHarvesterRunner:
             sources.append(stdout)
 
         for text in sources:
-            for email in email_re.findall(text):
+            for email in email_filter_ips(re.findall(text)):
                 email = email.lower()
                 if email not in self.data.email_addresses:
                     self.data.email_addresses[email] = {
@@ -20955,7 +20956,7 @@ def run_gitdorker(domain: str, company: str, output_dir: "Path", data: "ReconDat
         raw = proc.stdout
         out_file.write_text(raw, encoding="utf-8")
 
-        matches = list(dict.fromkeys(re.findall(r'https://github\.com/\S+', raw)))
+        matches = list(dict.fromkeys(filter_ips(re.findall(r'https://github\.com/\S+', raw))))
         if matches:
             log.warning(
                 f"[GitDorker] HIGH: {len(matches)} repo(s) found for {domain}"
@@ -21437,10 +21438,10 @@ class PeopleDorker:
 
     def _extract_emails(self, text: str) -> List[str]:
         """Extract email addresses from snippet text."""
-        return re.findall(
+        return filter_ips(re.findall(
             r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}',
             text,
-        )
+        ))
 
     # ── Main run ───────────────────────────────────────────────────────────────
 

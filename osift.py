@@ -700,6 +700,43 @@ except ImportError:
     _el = None
 _RUNLOG = None
 
+# Timeout/error action items accumulated during the scan and merged into
+# _generate_action_items() output at the end.
+_timeout_action_items: list = []
+
+
+def _record_timeout_action_item(
+    tool_name: str,
+    target: str,
+    description: str,
+    ip: str = "",
+    port: int = 0,
+    hostname: str = "",
+    priority: str = "HIGH",
+):
+    """Record a timeout/error action item for a tool that failed to complete."""
+    entry = {
+        "id":               str(_uuid.uuid4()),
+        "type":             "scan_incomplete",
+        "recommended_tool": tool_name,
+        "target":           target,
+        "ip":               ip,
+        "port":             port,
+        "hostname":         hostname,
+        "title":            f"{tool_name} Scan Incomplete — Re-Run Required",
+        "description":      description,
+        "source_finding":   "",
+        "priority":         priority,
+        "scope":            "osint",
+        "status":           "pending",
+        "in_scope":         True,
+        "datetime":         _dt_mod.datetime.now(_UTC).isoformat(),
+        "metadata":         {"failure_type": "timeout_or_error"},
+    }
+    _timeout_action_items.append(entry)
+    _vc.action_item(entry)
+
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text().strip()
@@ -8619,6 +8656,13 @@ class AmassEnumerator:
                 _write_placeholder(self.output_dir,
                                    f"{_safe_filename(self.domain)}_amass.txt",
                                    cmd, f"(Amass exited with code {rc})")
+                _record_timeout_action_item(
+                    "amass", self.domain,
+                    f"Amass {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                    f"scanning {self.domain} — no subdomain output produced. "
+                    f"Re-run amass manually to complete subdomain enumeration.",
+                    hostname=self.domain,
+                )
 
         if has_output:
             for line in out_file.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -11018,6 +11062,14 @@ class TheHarvesterRunner:
             self.log.info("[theHarvester] No intelligence items ingested")
             _write_placeholder(self.out, f"theharvester_{safe_domain}.json",
                                cmd, "(theHarvester returned no results)")
+            if rc != 0:
+                _record_timeout_action_item(
+                    "theHarvester", self.domain,
+                    f"theHarvester {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                    f"scanning {self.domain} and produced no results. Re-run "
+                    f"theHarvester manually to complete email/subdomain harvesting.",
+                    hostname=self.domain,
+                )
 
         self.log.success(
             f"[theHarvester] Complete — {ingested} new intelligence items ingested"
@@ -11298,6 +11350,14 @@ class XurlFind3rRunner:
             self.log.info("[xurlfind3r] No URLs discovered")
             _write_placeholder(self.out, "urls.txt",
                                cmd, "(xurlfind3r found no archived/indexed URLs)")
+            if rc != 0:
+                _record_timeout_action_item(
+                    "xurlfind3r", self.domain,
+                    f"xurlfind3r {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                    f"scanning {self.domain} and produced no URL results. Re-run "
+                    f"xurlfind3r manually to complete historical URL discovery.",
+                    hostname=self.domain,
+                )
 
         self.log.success(f"[xurlfind3r] Complete — {count} new URLs ingested")
         return count
@@ -11502,6 +11562,15 @@ class EmailHarvesterRunner:
             self.log.info("[EmailHarvester] No email addresses harvested")
             _write_placeholder(self.out, "emails.txt",
                                cmd, "(EmailHarvester found no email addresses)")
+            if rc != 0:
+                _record_timeout_action_item(
+                    "EmailHarvester", self.domain,
+                    f"EmailHarvester {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                    f"scanning {self.domain} and produced no results. Re-run "
+                    f"EmailHarvester manually to complete email harvesting.",
+                    hostname=self.domain,
+                    priority="MEDIUM",
+                )
 
         self.log.success(f"[EmailHarvester] Complete — {count} new emails ingested")
         return count
@@ -11817,6 +11886,15 @@ class WaybackURLsRunner:
                 self.out, f"wayback_urls_{_safe_dom}.txt", cmd,
                 "(no Wayback Machine entries found for this domain)"
             )
+            if rc != 0:
+                _record_timeout_action_item(
+                    "waybackurls", self.domain,
+                    f"waybackurls {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                    f"scanning {self.domain} and produced no results. Re-run "
+                    f"waybackurls manually to complete Wayback Machine mining.",
+                    hostname=self.domain,
+                    priority="MEDIUM",
+                )
 
         self.log.success(f"[waybackurls] Complete — {count} new historical URLs ingested")
         _vc.status("tool_waybackurls",
@@ -13711,6 +13789,14 @@ class PDSubfinder:
         self.log.log_command(cmd, stdout, stderr, rc)
 
         count = _ingest_subdomain_list(out_file, self.data, "subfinder", self.domain, self.log)
+        if rc != 0 and not count:
+            _record_timeout_action_item(
+                "subfinder", self.domain,
+                f"subfinder {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                f"scanning {self.domain} and produced no results. Re-run "
+                f"subfinder manually to complete subdomain enumeration.",
+                hostname=self.domain,
+            )
         self.log.success(f"[subfinder] Complete — {count} new subdomains")
         return count
 
@@ -13950,6 +14036,14 @@ class PDDnsx:
         # Write plain-text resolved list for downstream tools
         out_txt.write_text("\n".join(resolved_hosts), encoding="utf-8")
 
+        if rc != 0 and not records_parsed:
+            _record_timeout_action_item(
+                "dnsx", self.domain,
+                f"dnsx {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                f"resolving {len(hosts)} subdomains for {self.domain}. "
+                f"Re-run dnsx manually to complete DNS resolution.",
+                hostname=self.domain,
+            )
         self.log.success(
             f"[dnsx] {len(records_parsed)} hosts resolved | "
             f"{resolved_count} IPs mapped | {new_sub_count} CNAME subs added"
@@ -15192,6 +15286,12 @@ class PDASNmap:
                 stdout, stderr, rc = result.stdout, result.stderr, result.returncode
             except subprocess.TimeoutExpired:
                 self.log.warning(f"[asnmap] {label} timed out after {self._QUERY_TIMEOUT}s")
+                _record_timeout_action_item(
+                    "asnmap", label,
+                    f"asnmap timed out after {self._QUERY_TIMEOUT}s on {label}. "
+                    f"Re-run with adjusted timeout.",
+                    hostname=self.domain, priority="MEDIUM",
+                )
                 stdout, stderr, rc = "", "timed out", -1
             except Exception as exc:
                 stdout, stderr, rc = "", str(exc), -1
@@ -15200,6 +15300,7 @@ class PDASNmap:
 
         all_ranges: List[Dict] = []
         cidr_count = 0
+        _timed_out_targets: list = []
 
         # Cap concurrency — the upstream API rate-limits concurrent requests,
         # causing timeouts when all queries fire at once.
@@ -15211,6 +15312,8 @@ class PDASNmap:
             for future in concurrent.futures.as_completed(futures):
                 label, cmd, stdout, rc, records = future.result()
                 self.log.log_command(cmd, stdout, "", rc)
+                if rc != 0 and not records:
+                    _timed_out_targets.append(label)
                 all_ranges.extend(records)
                 # Ingest CIDRs for ASN-keyed targets only
                 asn_key = label if re.match(r"AS\d+", label.upper()) else None
@@ -15229,6 +15332,13 @@ class PDASNmap:
                             cidrs.append(cidr)
                             cidr_count += 1
 
+        if _timed_out_targets:
+            _record_timeout_action_item(
+                "asnmap", ", ".join(_timed_out_targets),
+                f"asnmap failed or timed out on {len(_timed_out_targets)} "
+                f"target(s): {', '.join(_timed_out_targets[:5])}. Re-run "
+                f"asnmap manually to complete ASN-to-CIDR expansion.",
+            )
         out_json = self.out / "asnmap_results.json"
         out_json.write_text(json.dumps(all_ranges, indent=2, default=str), encoding="utf-8")
         self.log.success(f"[asnmap] {cidr_count} CIDR ranges discovered from {len(targets)} target(s)")
@@ -16698,6 +16808,133 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
              f"malicious or suspicious — investigate for compromise.",
              priority=_pri,
              metadata={"source_category": "vt_reputation_sweep"})
+
+    # ── Cloud buckets / cloud-hosted assets → Forge ──────────────────────
+    for f in data.findings.all_findings():
+        ftype = (f.get("type") or "").lower()
+        if ftype != "exposed_cloud_storage":
+            continue
+        _url = f.get("url") or f.get("affected") or ""
+        if not _url:
+            continue
+        _prov = f.get("provider", "Cloud")
+        _sev = f.get("severity", "info").upper()
+        _pri = "CRITICAL" if _sev in ("CRITICAL", "HIGH") else "HIGH"
+        _add("cloud_audit", "Forge", _url, "", 443, "",
+             f"Cloud storage audit: {_prov} bucket",
+             f"cloud_enum discovered {_prov} storage at {_url} "
+             f"(verified: {f.get('verified', 'unknown')}). "
+             f"Forge can perform deep cloud configuration and permission "
+             f"auditing to identify misconfigurations, overly permissive "
+             f"ACLs, and data exposure risks.",
+             priority=_pri,
+             metadata={"source_category": "cloud_enum_bucket",
+                        "provider": _prov, "bucket_url": _url})
+
+    # Cloud-hosted subdomains (cdncheck cloud=true or cloudlist provider) → Forge
+    _forge_cloud_hosts: set = set()
+    for sub, meta in data.subdomains.items():
+        _cdn_type = meta.get("cdn_type", "")
+        _cdn_prov = meta.get("cdn_provider", "")
+        _cloud_prov = meta.get("cloud_provider", "")
+        _cloud_svc = meta.get("cloud_service", "")
+        if _cdn_type == "cloud" or _cloud_prov:
+            prov = _cloud_prov or _cdn_prov or "Unknown"
+            if prov.lower() in _forge_cloud_hosts:
+                continue
+            _forge_cloud_hosts.add(prov.lower())
+            ips = list(meta.get("ips") or [])
+            ip = ips[0] if ips else ""
+            _add("cloud_audit", "Forge", f"{prov} cloud infrastructure", ip, 0, sub,
+                 f"Cloud infrastructure audit: {prov}",
+                 f"OSift discovered cloud-hosted assets on {prov}"
+                 f"{' (' + _cloud_svc + ')' if _cloud_svc else ''}. "
+                 f"Forge can audit cloud provider configuration for "
+                 f"misconfigurations, exposed services, IAM weaknesses, "
+                 f"and compliance gaps.",
+                 priority="MEDIUM",
+                 metadata={"source_category": "cloud_hosting",
+                            "provider": prov, "service": _cloud_svc})
+
+    # Cloud IPs from cloudlist → Forge (per-provider, not per-IP)
+    _forge_cl_provs: set = set()
+    for ip_addr, ip_meta in data.ip_addresses.items():
+        _cl_prov = ip_meta.get("cloud_provider", "")
+        if not _cl_prov or _cl_prov.lower() in _forge_cl_provs:
+            continue
+        if _cl_prov.lower() in _forge_cloud_hosts:
+            continue
+        _forge_cl_provs.add(_cl_prov.lower())
+        _cl_svc = ip_meta.get("cloud_service", "")
+        _add("cloud_audit", "Forge", f"{_cl_prov} cloud assets", ip_addr, 0, "",
+             f"Cloud infrastructure audit: {_cl_prov}",
+             f"cloudlist enumerated assets on {_cl_prov}"
+             f"{' (' + _cl_svc + ')' if _cl_svc else ''}. "
+             f"Forge can audit cloud provider configuration for "
+             f"misconfigurations, exposed services, IAM weaknesses, "
+             f"and compliance gaps.",
+             priority="MEDIUM",
+             metadata={"source_category": "cloudlist_provider",
+                        "provider": _cl_prov, "service": _cl_svc})
+
+    # ── Mobile subdomains / app store links → Quill ──────────────────────
+    _MOBILE_PREFIXES = ("m.", "mobile.", "app.", "mobileapi.", "m-api.",
+                        "appapi.", "mobileapp.", "wap.")
+    _APP_STORE_PATTERNS = ("play.google.com/store/apps",
+                           "apps.apple.com/", "itunes.apple.com/",
+                           "f-droid.org/packages/")
+    _quill_targets_seen: set = set()
+    for sub, meta in data.subdomains.items():
+        if not any(sub.startswith(pfx) or sub.startswith(f"{pfx.rstrip('.')}-")
+                   for pfx in _MOBILE_PREFIXES):
+            continue
+        http_status = meta.get("http_status")
+        if not http_status:
+            continue
+        ips = list(meta.get("ips") or [])
+        ip = ips[0] if ips else ""
+        if sub in _quill_targets_seen:
+            continue
+        _quill_targets_seen.add(sub)
+        _add("mobile_app", "Quill", sub, ip, 443, sub,
+             f"Mobile application testing: {sub}",
+             f"Mobile-oriented subdomain {sub} detected (HTTP {http_status}). "
+             f"This suggests a mobile application may be available. "
+             f"Quill can analyze the associated IPA/APK for hard-coded "
+             f"secrets, insecure configurations, exported components, "
+             f"and cleartext traffic settings.",
+             priority="MEDIUM",
+             metadata={"source_category": "mobile_subdomain",
+                        "http_status": http_status})
+
+    # App store links in crawled URLs → Quill
+    for url, url_meta in data.crawled_urls.items():
+        url_lower = url.lower()
+        if not any(pat in url_lower for pat in _APP_STORE_PATTERNS):
+            continue
+        if url in _quill_targets_seen:
+            continue
+        _quill_targets_seen.add(url)
+        _add("mobile_app", "Quill", url, "", 0, "",
+             f"Mobile app store link discovered",
+             f"App store link detected during web crawling: {url}. "
+             f"Download the application binary and analyze with Quill "
+             f"for hard-coded secrets, insecure ATS/cleartext settings, "
+             f"exported Android components, and embedded API endpoints.",
+             priority="HIGH",
+             metadata={"source_category": "app_store_url",
+                        "store_url": url})
+
+    # ── Merge timeout/error action items accumulated during the scan ─────
+    if _timeout_action_items:
+        _to_seen = set(seen)
+        for tai in _timeout_action_items:
+            _tk = (tai["recommended_tool"].lower(),
+                   tai["target"].lower(),
+                   tai["title"].strip().lower())
+            if _tk not in _to_seen:
+                _to_seen.add(_tk)
+                items.append(tai)
 
     # ── Write action_items.json ───────────────────────────────────────────
     ai_path = output_dir / "action_items.json"
@@ -20891,6 +21128,12 @@ def run_trevorspray(domain: str, emails: list, output_dir: "Path", data: "ReconD
             log.info("[o365spray] No valid credentials found")
     except subprocess.TimeoutExpired:
         log.warning(f"[o365spray] Timed out after {timeout}s")
+        _record_timeout_action_item(
+            "o365spray", domain,
+            f"o365spray timed out after {timeout}s on {domain}. "
+            f"Re-run credential spray with adjusted timeout or reduced email list.",
+            hostname=domain, priority="MEDIUM",
+        )
     except Exception as exc:
         log.warning(f"[o365spray] Error: {exc}")
 
@@ -20980,6 +21223,12 @@ def run_gitdorker(domain: str, company: str, output_dir: "Path", data: "ReconDat
             log.info(f"[GitDorker] No exposed secrets found for {domain}")
     except subprocess.TimeoutExpired:
         log.warning(f"[GitDorker] Timed out after {timeout}s")
+        _record_timeout_action_item(
+            "GitDorker", domain,
+            f"GitDorker timed out after {timeout}s on {domain}. "
+            f"Re-run GitHub secret scan with adjusted timeout.",
+            hostname=domain, priority="MEDIUM",
+        )
     except Exception as exc:
         log.warning(f"[GitDorker] Error: {exc}")
 
@@ -21857,6 +22106,12 @@ class DnsTwistRunner:
             )
             _write_placeholder(out_dir, out_file.name,
                                " ".join(cmd), "(dnstwist timed out after 300s)")
+            _record_timeout_action_item(
+                "dnstwist", domain,
+                f"dnstwist timed out (300s) scanning {domain} for typosquatting "
+                f"domains. Re-run dnstwist manually to complete the scan.",
+                hostname=domain,
+            )
             return []
         except Exception as e:
             self.log.error(f"[dnstwist] Error scanning {domain}: {e}", exc=e)
@@ -22535,6 +22790,7 @@ API key sources (all free tiers available):
 
     # ── Setup directories ──────────────────────────────────────────────────
     global _project_dir
+    _timeout_action_items.clear()
     project_dir  = Path(args.project_dir).resolve() if args.project_dir else None
     _project_dir = project_dir  # expose for write_targets_snapshot()
 

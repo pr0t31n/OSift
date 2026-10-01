@@ -388,43 +388,74 @@ def install_pip_packages(args):
         except RuntimeError as exc:
             warn(f"pip install failed for {pkg}: {exc}")
 
-    # Playwright browser binaries + system deps (required by wappalyzer, maigret)
-    pw = shutil.which("playwright")
-    pw_cmd = [pw] if pw else [sys.executable, "-m", "playwright"]
-    info("Installing Playwright system dependencies …")
+    # Playwright browser + driver (required by python-wappalyzer, maigret).
+    # The Python playwright package bundles its own Node.js driver; we just
+    # need to download the browser binary and system deps.  On Debian/Kali
+    # where playwright is installed via apt, the package depends on
+    # node-playwright for the CLI driver — ensure that is present too.
+    pw_cmd = [sys.executable, "-m", "playwright"]
+    _env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    info("Installing Playwright browser + system deps …")
     try:
-        _env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
         subprocess.run(
-            pw_cmd + ["install-deps"],
-            env=_env, timeout=120, check=False,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            pw_cmd + ["install", "--with-deps", "chromium"],
+            env=_env, timeout=300, check=True,
         )
-    except Exception as exc:
-        warn(f"Playwright install-deps failed (non-fatal): {exc}")
-    info("Installing Playwright browser binaries …")
+        info("  ✓ Playwright chromium installed")
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        warn(f"playwright install --with-deps chromium failed: {exc}")
+        # Fallback: try install-deps then install separately
+        try:
+            subprocess.run(pw_cmd + ["install-deps"],
+                           env=_env, timeout=120, check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(pw_cmd + ["install", "chromium"],
+                           env=_env, timeout=180, check=True)
+            info("  ✓ Playwright chromium installed (fallback)")
+        except Exception as exc2:
+            warn(f"Playwright fallback install also failed: {exc2}")
+
+    # On Debian/Kali apt-installed playwright, the Python package references
+    # the system Node.js driver at /usr/share/nodejs/playwright/cli.js.
+    # Verify it exists; if missing, install the node-playwright apt package.
+    _pw_driver_ok = False
     try:
-        run(pw_cmd + ["install", "chromium"])
-    except RuntimeError as exc:
-        warn(f"Playwright browser install failed: {exc}")
-    # Ensure Node.js playwright CLI is available (needed by python-wappalyzer)
-    if not Path("/usr/share/nodejs/playwright/cli.js").exists():
-        _npm = shutil.which("npm")
-        if _npm:
-            info("Installing Node.js playwright for wappalyzer …")
+        import playwright._impl._driver as _pw_drv
+        _drv_path = _pw_drv.compute_driver_executable()
+        _pw_driver_ok = Path(_drv_path).exists()
+    except Exception:
+        pass
+    if not _pw_driver_ok:
+        warn("Playwright driver not found — attempting to fix …")
+        if sys.platform.startswith("linux") and shutil.which("apt-get"):
             try:
-                run([_npm, "install", "-g", "playwright"], timeout=120)
-            except RuntimeError as exc:
-                warn(f"npm install playwright failed (non-fatal): {exc}")
-        elif sys.platform.startswith("linux") and shutil.which("apt-get"):
-            info("Installing Node.js playwright via apt …")
-            try:
-                _env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
                 subprocess.run(
                     ["apt-get", "install", "-y", "node-playwright"],
-                    env=_env, timeout=120, check=False,
+                    env=_env, timeout=120, check=True,
                 )
+                info("  ✓ node-playwright installed via apt")
             except Exception as exc:
-                warn(f"apt install node-playwright failed (non-fatal): {exc}")
+                warn(f"apt install node-playwright failed: {exc}")
+        _npm = shutil.which("npm")
+        if _npm and not _pw_driver_ok:
+            try:
+                subprocess.run(
+                    [_npm, "install", "-g", "playwright"],
+                    timeout=120, check=True,
+                )
+                info("  ✓ playwright installed via npm")
+            except Exception as exc:
+                warn(f"npm install playwright failed: {exc}")
+        # Re-check after fix attempts
+        try:
+            import importlib
+            importlib.reload(_pw_drv)
+            _drv_path = _pw_drv.compute_driver_executable()
+            _pw_driver_ok = Path(_drv_path).exists()
+        except Exception:
+            pass
+        if not _pw_driver_ok:
+            err("Playwright driver still not available — wappalyzer will be skipped at runtime")
 
 
 # ─── phase 3: go tools ───────────────────────────────────────────────────────

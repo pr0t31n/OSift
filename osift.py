@@ -1887,6 +1887,25 @@ def _ssn_has_context(text: str, pos: int) -> bool:
     return bool(_SSN_KEYWORDS.search(text[window_start:window_end]))
 
 
+
+
+def _luhn_check(number_str: str) -> bool:
+    """Luhn checksum validation for credit card numbers.
+    Returns True if the number passes (structurally valid card number)."""
+    digits = re.sub(r"\D", "", number_str)
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
 # ─── Default webpage detection ───────────────────────────────────────────────
 
 # Signatures: (compiled_regex, label).  Matched against the full response body.
@@ -2039,6 +2058,21 @@ def _is_benign_password_match(text: str, match_start: int, val: str) -> bool:
     # Inline event handlers / JS templates: onsubmit="...password..."
     if re.search(r'on\w+\s*=\s*["\'][^"\']*password', ctx, re.I):
         return True
+
+    # UI label / prompt text: "Remember Password Now?", "Forgot Password?", etc.
+    _UI_LABEL_VERBS = (
+        "remember", "forgot", "change", "reset", "show", "hide",
+        "enter", "create", "confirm", "update", "set", "choose",
+        "new", "old", "current", "your", "type", "retype", "verify",
+        "manage", "save", "keep", "use", "need", "have", "no",
+    )
+    if _rhs:
+        _rhs_lower = _rhs.lower().lstrip("( ")
+        if any(_rhs_lower.startswith(v) for v in _UI_LABEL_VERBS):
+            return True
+        # Question mark at end strongly suggests prompt text, not a credential
+        if _rhs.rstrip().endswith("?"):
+            return True
 
     # UI label / prompt text: "Remember Password Now?", "Forgot Password?", etc.
     _UI_LABEL_VERBS = (
@@ -10738,6 +10772,20 @@ class WebCrawler:
                                         _gen_sw_ver      = _plug_ver_clean
                                         _gen_sw_affected = f"{_plug_name} {_plug_ver}"
 
+                    # ── Credit Cards ──────────────────────────────────────────
+                    elif category == "Credit Cards":
+                        _cc_digits = re.sub(r"\D", "", val)
+                        if not _luhn_check(_cc_digits):
+                            continue
+                        # Reject repeating-digit patterns (e.g. 4444444444444)
+                        if len(set(_cc_digits)) <= 2:
+                            continue
+                        _title    = f"{category} pattern detected: {val[:80]}"
+                        _affected = url
+                        _url_arg  = url
+                        _host_arg = _domain
+                        _source   = "OSift-Crawl"
+
                     # ── All other categories ──────────────────────────────────
                     else:
                         _title    = f"{category} pattern detected: {val[:80]}"
@@ -12193,6 +12241,22 @@ class WappalyzerScanner:
             self.log.warning(
                 "[wappalyzer] Python package not available — skipping.\n"
                 "        Install: pip install wappalyzer"
+            )
+            return 0
+
+        # Pre-check: Playwright Node.js driver must be installed for
+        # python-wappalyzer to function.  Without it, every analyze()
+        # call triggers noisy asyncio "Task exception was never retrieved"
+        # errors and MODULE_NOT_FOUND spam on stderr.
+        try:
+            import playwright._impl._driver as _pw_drv
+            _drv_exec = _pw_drv.compute_driver_executable()
+            if not Path(_drv_exec).exists():
+                raise FileNotFoundError(_drv_exec)
+        except Exception:
+            self.log.warning(
+                "[wappalyzer] Playwright Node.js driver not installed — skipping.\n"
+                "        Fix: playwright install chromium"
             )
             return 0
 

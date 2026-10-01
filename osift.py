@@ -270,6 +270,7 @@ _SCAN_SEM           = _AdaptiveSemaphore(_SCAN_CONCURRENCY)
 
 # ── Per-subprocess memory limit ──────────────────────────────────────────────
 _SUBPROCESS_MEM_LIMIT_BYTES = int(2 * 1024 ** 3)  # 2 GB per child process
+_GO_SUBPROCESS_MEM_LIMIT_BYTES = int(8 * 1024 ** 3)  # 8 GB for Go binaries
 
 def _mem_limit_preexec():
     """preexec_fn: cap each child's virtual address space to prevent OOM."""
@@ -279,6 +280,21 @@ def _mem_limit_preexec():
         import resource as _rlim
         _rlim.setrlimit(_rlim.RLIMIT_AS,
                         (_SUBPROCESS_MEM_LIMIT_BYTES, _SUBPROCESS_MEM_LIMIT_BYTES))
+    except (AttributeError, ValueError, OSError):
+        pass
+
+def _go_mem_limit_preexec():
+    """preexec_fn for Go binaries — higher RLIMIT_AS because Go's runtime
+    reserves large virtual address arenas (2 GB+) even when actual heap
+    usage is low.  A 2 GB RLIMIT_AS kills Go's mmap before real memory
+    pressure exists."""
+    if sys.platform == "win32":
+        return
+    try:
+        import resource as _rlim
+        _rlim.setrlimit(_rlim.RLIMIT_AS,
+                        (_GO_SUBPROCESS_MEM_LIMIT_BYTES,
+                         _GO_SUBPROCESS_MEM_LIMIT_BYTES))
     except (AttributeError, ValueError, OSError):
         pass
 
@@ -1525,6 +1541,24 @@ def _shell(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
             text=True,
             timeout=timeout,
             preexec_fn=_mem_limit_preexec if not IS_WINDOWS else None,
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+        )
+        return result.stdout, result.stderr, result.returncode
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except Exception as exc:
+        return "", str(exc), -1
+
+def _shell_go(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
+    """Like _shell() but with a higher RLIMIT_AS for Go binaries."""
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            preexec_fn=_go_mem_limit_preexec if not IS_WINDOWS else None,
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )
         return result.stdout, result.stderr, result.returncode
@@ -8581,7 +8615,7 @@ class AmassEnumerator:
             except Exception:
                 pass
 
-        _probe_out, _probe_err, _ = _shell("amass enum -h", timeout=10)
+        _probe_out, _probe_err, _ = _shell_go("amass enum -h", timeout=10)
         _h = _probe_out + _probe_err
         # Match flag names from the help text — each flag appears as
         # "  -flagname" at the start of a line in the usage block.
@@ -8628,7 +8662,7 @@ class AmassEnumerator:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             cmd += f" -o {_q}{out_file}{_q}"
         self.log.info(f"[Amass] Running (v{fl['major']} mode): {cmd}")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         # -oA writes <prefix>.txt — copy/rename to our canonical name
@@ -11328,7 +11362,7 @@ class XurlFind3rRunner:
             f"-s"                    # --silent: suppress banner/logging, only results
         )
         self.log.info(f"[xurlfind3r] Passive URL discovery for {self.domain}")
-        stdout, stderr, rc = _shell(cmd, timeout=900)  # 15 min — Wayback/CommonCrawl can be slow
+        stdout, stderr, rc = _shell_go(cmd, timeout=900)  # 15 min — Wayback/CommonCrawl can be slow
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if rc != 0:
@@ -11732,7 +11766,7 @@ class PureDNSRunner:
         self.log.info(
             f"[puredns] Bruteforce: {len(DEFAULT_WORDLIST)} words against {self.domain}"
         )
-        stdout, stderr, rc = _shell(cmd_brute)
+        stdout, stderr, rc = _shell_go(cmd_brute)
         self.log.log_command(cmd_brute, stdout, stderr, rc)
         n = _ingest_subdomain_list(brute_out, self.data, "puredns", self.domain, self.log)
         total += n
@@ -11750,7 +11784,7 @@ class PureDNSRunner:
             self.log.info(
                 f"[puredns] Resolve pass: {len(self.data.subdomains)} known subdomains"
             )
-            stdout2, stderr2, rc2 = _shell(cmd_resolve)
+            stdout2, stderr2, rc2 = _shell_go(cmd_resolve)
             self.log.log_command(cmd_resolve, stdout2, stderr2, rc2)
             # Mark resolved subdomains with puredns source
             if resolve_out.exists():
@@ -11851,7 +11885,7 @@ class WaybackURLsRunner:
         # waybackurls reads the domain from stdin
         cmd = f'echo "{self.domain}" | "{binary}" -no-subs=false'
         self.log.info(f"[waybackurls] Mining Wayback Machine CDX for {self.domain}")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if stdout.strip():
@@ -12613,7 +12647,7 @@ class TruffleHogRunner:
             f'"{binary}" github --org="{org}" '
             f"--json --no-update --only-verified 2>/dev/null"
         )
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if stdout.strip():
@@ -13819,7 +13853,7 @@ class PDSubfinder:
             f"-all -silent -t 10 -timeout 30{pc_flag}"
         )
         self.log.info(f"[subfinder] Running passive subdomain enumeration")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         count = _ingest_subdomain_list(out_file, self.data, "subfinder", self.domain, self.log)
@@ -13881,7 +13915,7 @@ class PDChaos:
             f'-o "{out_file}" -silent'
         )
         self.log.info(f"[chaos] Querying Chaos DB for {self.domain}")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         count = _ingest_subdomain_list(out_file, self.data, "chaos", self.domain, self.log)
@@ -13950,7 +13984,7 @@ class PDShuffleDNS:
             f'-o "{out_file}" -t 500 -mode resolve -silent'
         )
         self.log.info(f"[shuffledns] Mass DNS resolution with {sum(1 for _ in wl.open())} words")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         count = _ingest_subdomain_list(out_file, self.data, "shuffledns", self.domain, self.log)
@@ -14012,7 +14046,7 @@ class PDDnsx:
             f"-t 100 -rl 300 -silent"
         )
         self.log.info(f"[dnsx] Resolving {len(hosts)} subdomains")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         # Parse JSONL output
@@ -14328,7 +14362,7 @@ class DNSEnrichmentRunner:
         )
         self.log.info(f"[dnsx-enrich] Bulk-resolving {len(fqdns)} FQDNs (post-discovery pass)")
         _dnsx_started = datetime.datetime.now().astimezone()
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         _dnsx_ended = datetime.datetime.now().astimezone()
         self.log.log_command(
             cmd, stdout, stderr, rc,
@@ -14652,14 +14686,14 @@ class PDTlsx:
         _tlsx_timeout = min(60 * len(hosts), 600)  # ~60s/host, cap at 10 min per pass
         _OOM_SIGNATURES = ("cannot allocate memory", "out of memory", "runtime: out of memory")
 
-        stdout1, stderr1, rc1 = _shell(cmd_san, timeout=_tlsx_timeout)
+        stdout1, stderr1, rc1 = _shell_go(cmd_san, timeout=_tlsx_timeout)
         self.log.log_command(cmd_san, stdout1, stderr1, rc1)
         _san_oom = rc1 != 0 and any(s in (stderr1 or "") for s in _OOM_SIGNATURES)
         if rc1 != 0:
             _lvl = "error" if _san_oom or rc1 == -1 else "warning"
             getattr(self.log, _lvl)(f"[tlsx] SAN/CN pass exited with code {rc1}" + (f": {_strip_ansi(stderr1)[:200]}" if stderr1 else ""))
 
-        stdout2, stderr2, rc2 = _shell(cmd_tls, timeout=_tlsx_timeout)
+        stdout2, stderr2, rc2 = _shell_go(cmd_tls, timeout=_tlsx_timeout)
         self.log.log_command(cmd_tls, stdout2, stderr2, rc2)
         _tls_oom = rc2 != 0 and any(s in (stderr2 or "") for s in _OOM_SIGNATURES)
         if rc2 != 0:
@@ -15018,7 +15052,7 @@ class PDCdncheck:
             f"-t 100 -silent"
         )
         self.log.info(f"[cdncheck] CDN/cloud classification for {len(targets)} targets")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         records   = _parse_jsonl(out_json)
@@ -15141,7 +15175,7 @@ class PDKatana:
         self.log.info(f"[katana] Crawling {_seed_count} seed URLs (depth={self.max_depth})")
         # katana can take a long time with many seeds; scale the timeout
         _katana_timeout = max(900, _seed_count * 15)  # ~15s per seed, min 15min
-        stdout, stderr, rc = _shell(cmd, timeout=_katana_timeout)
+        stdout, stderr, rc = _shell_go(cmd, timeout=_katana_timeout)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if rc != 0:
@@ -15335,7 +15369,7 @@ class PDASNmap:
                 result = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True,
                     timeout=self._QUERY_TIMEOUT,
-                    preexec_fn=_mem_limit_preexec if not IS_WINDOWS else None,
+                    preexec_fn=_go_mem_limit_preexec if not IS_WINDOWS else None,
                     creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
                 )
                 stdout, stderr, rc = result.stdout, result.stderr, result.returncode
@@ -15464,7 +15498,7 @@ class PDUncover:
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True, timeout=120,
                 env=env,
-                preexec_fn=_mem_limit_preexec if not IS_WINDOWS else None,
+                preexec_fn=_go_mem_limit_preexec if not IS_WINDOWS else None,
                 creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
             )
             self.log.log_command(cmd, result.stdout, result.stderr, result.returncode)
@@ -15629,7 +15663,7 @@ class PDCloudlist:
             f'-json -o "{out_json}" -silent'
         )
         self.log.info(f"[cloudlist] Enumerating cloud assets from {self.cloud_config}")
-        stdout, stderr, rc = _shell(cmd)
+        stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
 
         records    = _parse_jsonl(out_json)

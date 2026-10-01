@@ -388,21 +388,43 @@ def install_pip_packages(args):
         except RuntimeError as exc:
             warn(f"pip install failed for {pkg}: {exc}")
 
-    # Playwright browser binaries (required by maigret and other tools)
+    # Playwright browser binaries + system deps (required by wappalyzer, maigret)
     pw = shutil.which("playwright")
-    if pw:
-        info("Installing Playwright browser binaries …")
-        try:
-            run([pw, "install", "chromium"])
-        except RuntimeError as exc:
-            warn(f"Playwright browser install failed: {exc}")
-    else:
-        # Try via python module
-        info("Installing Playwright browser binaries (via module) …")
-        try:
-            run([sys.executable, "-m", "playwright", "install", "chromium"])
-        except RuntimeError as exc:
-            warn(f"Playwright browser install failed: {exc}")
+    pw_cmd = [pw] if pw else [sys.executable, "-m", "playwright"]
+    info("Installing Playwright system dependencies …")
+    try:
+        _env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+        subprocess.run(
+            pw_cmd + ["install-deps"],
+            env=_env, timeout=120, check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        warn(f"Playwright install-deps failed (non-fatal): {exc}")
+    info("Installing Playwright browser binaries …")
+    try:
+        run(pw_cmd + ["install", "chromium"])
+    except RuntimeError as exc:
+        warn(f"Playwright browser install failed: {exc}")
+    # Ensure Node.js playwright CLI is available (needed by python-wappalyzer)
+    if not Path("/usr/share/nodejs/playwright/cli.js").exists():
+        _npm = shutil.which("npm")
+        if _npm:
+            info("Installing Node.js playwright for wappalyzer …")
+            try:
+                run([_npm, "install", "-g", "playwright"], timeout=120)
+            except RuntimeError as exc:
+                warn(f"npm install playwright failed (non-fatal): {exc}")
+        elif sys.platform.startswith("linux") and shutil.which("apt-get"):
+            info("Installing Node.js playwright via apt …")
+            try:
+                _env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+                subprocess.run(
+                    ["apt-get", "install", "-y", "node-playwright"],
+                    env=_env, timeout=120, check=False,
+                )
+            except Exception as exc:
+                warn(f"apt install node-playwright failed (non-fatal): {exc}")
 
 
 # ─── phase 3: go tools ───────────────────────────────────────────────────────

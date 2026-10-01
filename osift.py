@@ -2040,6 +2040,21 @@ def _is_benign_password_match(text: str, match_start: int, val: str) -> bool:
     if re.search(r'on\w+\s*=\s*["\'][^"\']*password', ctx, re.I):
         return True
 
+    # UI label / prompt text: "Remember Password Now?", "Forgot Password?", etc.
+    _UI_LABEL_VERBS = (
+        "remember", "forgot", "change", "reset", "show", "hide",
+        "enter", "create", "confirm", "update", "set", "choose",
+        "new", "old", "current", "your", "type", "retype", "verify",
+        "manage", "save", "keep", "use", "need", "have", "no",
+    )
+    if _rhs:
+        _rhs_lower = _rhs.lower().lstrip("( ")
+        if any(_rhs_lower.startswith(v) for v in _UI_LABEL_VERBS):
+            return True
+        # Question mark at end strongly suggests prompt text, not a credential
+        if _rhs.rstrip().endswith("?"):
+            return True
+
     return False
 
 
@@ -17505,24 +17520,28 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     summary_path = output_dir / "reports" / "executive_summary.txt"
 
     # ── Build email lists (needed by both email files and summary) ────────────
-    primary_domain = data.domain.lower().strip()
+    _all_scope_domains = set()
+    if data.domains:
+        for _d in data.domains:
+            _all_scope_domains.add(_d.lower().strip())
+    else:
+        _all_scope_domains.add(data.domain.lower().strip())
     emails_primary = sorted(
         e for e in data.email_addresses
-        if e.lower().endswith("@" + primary_domain)
+        if any(e.lower().endswith("@" + _sd) for _sd in _all_scope_domains)
     )
     emails_other = sorted(
         e for e in data.email_addresses
-        if not e.lower().endswith("@" + primary_domain)
+        if not any(e.lower().endswith("@" + _sd) for _sd in _all_scope_domains)
     )
     ep_path = output_dir / "reports" / "emails_primary.txt"
     eo_path = output_dir / "reports" / "emails_other.txt"
 
     # ── Build subdomain list ──────────────────────────────────────────────────
-    primary_suffix = "." + primary_domain
     target_subdomains = sorted(
         fqdn for fqdn in data.subdomains
-        if fqdn.lower().endswith(primary_suffix)
-        or fqdn.lower() == primary_domain
+        if any(fqdn.lower().endswith("." + _sd) or fqdn.lower() == _sd
+               for _sd in _all_scope_domains)
     )
     sub_path = output_dir / "reports" / "subdomains.txt"
 

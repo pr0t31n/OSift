@@ -13764,12 +13764,44 @@ class PDSubfinder:
     No API keys required for basic usage; optional keys in ~/.config/subfinder/provider-config.yaml
     """
 
-    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
-        self.domain = domain
-        self.out    = _domain_path(output_dir, domain) / "dns" / "subdomains"
-        self.log    = log
-        self.data   = data
+    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger",
+                 data: "ReconData", api_keys: Optional[Dict[str, str]] = None):
+        self.domain   = domain
+        self.out      = _domain_path(output_dir, domain) / "dns" / "subdomains"
+        self.log      = log
+        self.data     = data
+        self.api_keys = api_keys or {}
         self.out.mkdir(parents=True, exist_ok=True)
+
+    def _write_provider_config(self) -> Optional[Path]:
+        """Write a subfinder provider-config.yaml from OSift's API keys."""
+        mapping = {
+            "shodan":         [self.api_keys.get("shodan_key", "")],
+            "securitytrails": [self.api_keys.get("securitytrails_key", "")],
+            "virustotal":     [self.api_keys.get("virustotal_key", "")],
+            "fullhunt":       [self.api_keys.get("fullhunt_key", "")],
+            "netlas":         [self.api_keys.get("netlas_key", "")],
+            "urlscan":        [self.api_keys.get("urlscan_key", "")],
+        }
+        censys_id = self.api_keys.get("censys_id", "")
+        censys_secret = self.api_keys.get("censys_secret", "")
+        if censys_id and censys_secret:
+            mapping["censys"] = [f"{censys_id}:{censys_secret}"]
+
+        active = {k: v for k, v in mapping.items() if v and v[0]}
+        if not active:
+            return None
+
+        lines = []
+        for provider, keys in active.items():
+            lines.append(f"{provider}:")
+            for k in keys:
+                lines.append(f"  - {k}")
+        pc_path = self.out / ".subfinder-provider-config.yaml"
+        pc_path.write_text("\n".join(lines) + "\n")
+        key_names = list(active.keys())
+        self.log.info(f"[subfinder] Injected API keys for: {', '.join(key_names)}")
+        return pc_path
 
     def run(self) -> int:
         binary = _pd_binary("subfinder")
@@ -13780,9 +13812,11 @@ class PDSubfinder:
         TOOL_REGISTRY.query_and_register(binary, "subfinder")
         self.log.set_tool_context("subfinder")
         out_file = self.out / "subfinder.txt"
+        pc_path = self._write_provider_config()
+        pc_flag = f' -pc "{pc_path}"' if pc_path else ""
         cmd = (
             f'"{binary}" -d {self.domain} -o "{out_file}" '
-            f"-all -silent -t 10 -timeout 30"
+            f"-all -silent -t 10 -timeout 30{pc_flag}"
         )
         self.log.info(f"[subfinder] Running passive subdomain enumeration")
         stdout, stderr, rc = _shell(cmd)
@@ -15675,14 +15709,19 @@ class ProjectDiscoveryOrchestrator:
         log: "ReconLogger",
         data: "ReconData",
         # ── optional keys/config ─────────────────────────────────────────────
-        chaos_key:       str = "",
-        shodan_key:      str = "",
-        censys_id:       str = "",
-        censys_secret:   str = "",
-        cloud_config:    str = "",
-        max_depth:       int = 3,
-        wordlist:        Optional[Path] = None,
-        skip_pd:         bool = False,
+        chaos_key:           str = "",
+        shodan_key:          str = "",
+        censys_id:           str = "",
+        censys_secret:       str = "",
+        securitytrails_key:  str = "",
+        virustotal_key:      str = "",
+        fullhunt_key:        str = "",
+        netlas_key:          str = "",
+        urlscan_key:         str = "",
+        cloud_config:        str = "",
+        max_depth:           int = 3,
+        wordlist:            Optional[Path] = None,
+        skip_pd:             bool = False,
     ):
         self.domain        = domain
         self.company       = company
@@ -15697,6 +15736,16 @@ class ProjectDiscoveryOrchestrator:
         self.max_depth     = max_depth
         self.wordlist      = wordlist
         self.skip_pd       = skip_pd
+        self._subfinder_keys = {
+            "shodan_key": shodan_key,
+            "censys_id": censys_id,
+            "censys_secret": censys_secret,
+            "securitytrails_key": securitytrails_key,
+            "virustotal_key": virustotal_key,
+            "fullhunt_key": fullhunt_key,
+            "netlas_key": netlas_key,
+            "urlscan_key": urlscan_key,
+        }
 
         # Check / install all tools up-front
         self.log.info("[PD] Checking ProjectDiscovery tool availability …")
@@ -15715,7 +15764,8 @@ class ProjectDiscoveryOrchestrator:
         self.log.info("[PD] Wave A — passive subdomain discovery")
         tasks = []
         if self.avail.get("subfinder"):
-            tasks.append(PDSubfinder(self.domain, self.output_dir, self.log, self.data))
+            tasks.append(PDSubfinder(self.domain, self.output_dir, self.log, self.data,
+                                     api_keys=self._subfinder_keys))
         if self.avail.get("chaos"):
             tasks.append(PDChaos(self.domain, self.output_dir, self.log, self.data, self.chaos_key))
 
@@ -22977,19 +23027,24 @@ API key sources (all free tiers available):
     # (tool check + go install happens here; waves run at the appropriate phases)
     _section(log, "PHASE 11 BOOTSTRAP: ProjectDiscovery Toolkit")
     pd = ProjectDiscoveryOrchestrator(
-        domain       = args.domains[0],
-        company      = args.company,
-        output_dir   = output_dir,
-        log          = log,
-        data         = data,
-        chaos_key    = args.chaos_key,
-        shodan_key   = args.shodan_key,
-        censys_id    = args.censys_id,
-        censys_secret= args.censys_secret,
-        cloud_config = args.cloudlist_config,
-        max_depth    = args.max_depth,
-        wordlist     = Path(args.wordlist) if args.wordlist and Path(args.wordlist).exists() else None,
-        skip_pd      = args.skip_pd,
+        domain              = args.domains[0],
+        company             = args.company,
+        output_dir          = output_dir,
+        log                 = log,
+        data                = data,
+        chaos_key           = args.chaos_key,
+        shodan_key          = args.shodan_key,
+        censys_id           = args.censys_id,
+        censys_secret       = args.censys_secret,
+        securitytrails_key  = getattr(args, "securitytrails_key", ""),
+        virustotal_key      = getattr(args, "virustotal_key", ""),
+        fullhunt_key        = getattr(args, "fullhunt_key", ""),
+        netlas_key          = getattr(args, "netlas_key", ""),
+        urlscan_key         = getattr(args, "urlscan_key", ""),
+        cloud_config        = args.cloudlist_config,
+        max_depth           = args.max_depth,
+        wordlist            = Path(args.wordlist) if args.wordlist and Path(args.wordlist).exists() else None,
+        skip_pd             = args.skip_pd,
     )
 
     # ── Phase 1-level tools: run ALL domains concurrently (max 20 threads) ──
@@ -23045,7 +23100,8 @@ API key sources (all free tiers available):
                 pd.run_wave_a()
             else:
                 if pd.avail.get("subfinder"):
-                    PDSubfinder(domain, output_dir, log, data).run()
+                    PDSubfinder(domain, output_dir, log, data,
+                                api_keys=pd._subfinder_keys).run()
                 if pd.avail.get("chaos"):
                     PDChaos(domain, output_dir, log, data, args.chaos_key).run()
             _pm.set_phase_status(_pda_key, "complete", label=_pda_label)

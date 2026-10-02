@@ -13779,16 +13779,19 @@ class DNSEnrichmentRunner:
                     ip_rec = self.data.ip_addresses.setdefault(
                         ip, {"fqdns": [], "context": "dig", "asn": None, "org": None, "geo": None}
                     )
+                    ip_rec.setdefault("fqdns", [])
                     if fqdn not in ip_rec["fqdns"]:
                         ip_rec["fqdns"].append(fqdn)
                     sub_rec = self.data.subdomains.setdefault(
                         fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
                     )
+                    sub_rec.setdefault("ips", [])
                     if ip not in sub_rec["ips"]:
                         sub_rec["ips"].append(ip)
                 sub_entry = self.data.subdomains.setdefault(
                     fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
                 )
+                sub_entry.setdefault("sources", [])
                 if "dig" not in sub_entry["sources"]:
                     sub_entry["sources"].append("dig")
                 # CNAME records — add in-domain targets as new subdomains

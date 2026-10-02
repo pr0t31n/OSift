@@ -11326,14 +11326,12 @@ class EmailHarvesterRunner:
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if rc != 0:
-            # EmailHarvester crashes on Python 3.14+ with a traceback — downgrade to warning
-            # and strip the traceback noise, keeping only the first meaningful error line.
             _eh_err = ""
             if stderr:
                 _eh_lines = [l for l in _strip_ansi(stderr).splitlines()
                              if l.strip() and not l.strip().startswith(("Traceback", "File ", "  File", "    "))]
                 _eh_err = ": " + _eh_lines[0][:200] if _eh_lines else ""
-            self.log.warning(f"[EmailHarvester] Command exited with code {rc}{_eh_err}")
+            self.log.error(f"[EmailHarvester] Command exited with code {rc}{_eh_err}")
             _write_placeholder(self.out, "emails.txt",
                                cmd, f"(EmailHarvester exited with code {rc})")
 

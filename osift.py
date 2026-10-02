@@ -385,7 +385,7 @@ except ImportError:
 
 try:
     # dnspython — Bob Halley / dnspython contributors (https://github.com/rthalley/dnspython)
-    # Used for DNS resolution, zone transfers, record type parsing across all DNS phases.
+    # Used for DNS resolution, record type parsing across all DNS phases.
     import dns.resolver
     import dns.zone
     import dns.query
@@ -2299,7 +2299,6 @@ _TOOL_TYPES: Dict[str, str] = {
     "waybackurls":       "Go Package",
     "amass":             "Go Package",
     # Python packages (pip)
-    "wappalyzer":        "Python Package",
     "edgartools":        "Python Package",
     # GitHub repos (cloned / pip install from git)
     "theHarvester":      "GitHub Repo",
@@ -2544,7 +2543,6 @@ class ReconData:
 
     subdomains: Dict[str, Dict] = field(default_factory=dict)
     dns_records: Dict[str, List] = field(default_factory=dict)
-    zone_transfers: List[Dict] = field(default_factory=list)
 
     ip_addresses: Dict[str, Dict] = field(default_factory=dict)
     asn_info: Dict[str, Dict] = field(default_factory=dict)
@@ -2693,6 +2691,7 @@ class ShodanAPI:
         self.data       = data
         self.key        = api_key.strip()
         self.session    = make_session() if REQUESTS_AVAILABLE else None
+        self._shodan_dns_records: List[Dict] = []
 
     # ── public entry point ────────────────────────────────────────────────────
 
@@ -2711,6 +2710,7 @@ class ShodanAPI:
         self._ssl_cert_search()
         _rate_sleep(1.5)
         self._enrich_known_ips()
+        self._analyze_dns_intelligence()
         self.log.success(f"[Shodan] Intelligence phase complete")
 
     # ── DNS domain lookup ─────────────────────────────────────────────────────
@@ -2763,12 +2763,17 @@ class ShodanAPI:
                     if "shodan" not in rec["sources"]:
                         rec["sources"].append("shodan")
 
-                # Ingest DNS records with IP resolution
+                # Ingest DNS records with IP resolution + full record storage
                 for entry in payload.get("data", []):
                     rtype   = entry.get("type", "")
                     subdomain = entry.get("subdomain", "")
                     value   = entry.get("value", "")
                     fqdn    = f"{subdomain}.{self.domain}".lower() if subdomain else self.domain
+
+                    self._shodan_dns_records.append({
+                        "type": rtype, "subdomain": subdomain,
+                        "value": value, "fqdn": fqdn,
+                    })
 
                     if rtype == "A" and value:
                         ip_rec = self.data.ip_addresses.setdefault(
@@ -2987,6 +2992,472 @@ class ShodanAPI:
         else:
             _save_api_result(self.out, "host_enrichment.json", enriched)
         self.log.success(f"[Shodan] Host enrichment done for {len(enriched)} IPs")
+
+    # ── DNS intelligence analysis ─────────────────────────────────────────────
+
+    # CNAME targets that identify platforms/software
+    _CNAME_PLATFORMS: List[tuple] = [
+        (r"blackboard\.com",              "Blackboard LMS"),
+        (r"acquia-sites\.com",            "Acquia / Drupal"),
+        (r"technolutions\.net",           "Technolutions Slate (Admissions CRM)"),
+        (r"sipdir\.online\.lync\.com",    "Microsoft Skype for Business / Lync"),
+        (r"teams\.microsoft\.com",        "Microsoft Teams"),
+        (r"outlook\.office365\.com",      "Microsoft 365"),
+        (r"cdn\.webflow\.com",            "Webflow"),
+        (r"cdn\.shopify\.com",            "Shopify"),
+        (r"squarespace\.com",             "Squarespace"),
+        (r"wordpress\.com",               "WordPress.com Hosting"),
+        (r"wpengine\.com",                "WP Engine (WordPress Hosting)"),
+        (r"pantheon\.io",                 "Pantheon (CMS Hosting)"),
+        (r"cloudfront\.net",              "Amazon CloudFront CDN"),
+        (r"elb\.amazonaws\.com",          "AWS Elastic Load Balancer"),
+        (r"azurewebsites\.net",           "Microsoft Azure Web Apps"),
+        (r"cloudflare\.com",              "Cloudflare"),
+        (r"edgekey\.net",                 "Akamai CDN"),
+        (r"fastly\.net",                  "Fastly CDN"),
+        (r"heroku(app)?\.com",            "Heroku"),
+        (r"netlify\.(app|com)",           "Netlify"),
+        (r"vercel\.app",                  "Vercel"),
+        (r"github\.io",                   "GitHub Pages"),
+        (r"zendesk\.com",                 "Zendesk"),
+        (r"salesforce\.com",              "Salesforce"),
+        (r"hubspot\.(com|net)",           "HubSpot"),
+        (r"marketo\.(com|net)",           "Marketo"),
+        (r"pardot\.com",                  "Pardot (Salesforce Marketing)"),
+        (r"canvas(lms)?\.com",            "Canvas LMS"),
+        (r"instructure\.com",             "Instructure (Canvas LMS)"),
+        (r"libanswers\.com",              "Springshare LibAnswers"),
+        (r"libguides\.com",               "Springshare LibGuides"),
+        (r"libcal\.com",                  "Springshare LibCal"),
+        (r"acalog\.com",                  "Acalog (Academic Catalog)"),
+        (r"ellucian",                     "Ellucian (Higher Ed ERP)"),
+        (r"voicestorm\.com",              "VoiceStorm"),
+        (r"lwcal\.com",                   "LiveWhale Calendar"),
+    ]
+
+    # Subdomain patterns that suggest sensitive/admin services
+    _SENSITIVE_SUBDOMAINS: List[tuple] = [
+        (r"^(cpanel|whm|webmail|webdisk|cpcalendars|cpcontacts)$",
+         "cPanel/WHM Admin Panel Exposed", "HIGH",
+         "cPanel/WHM web hosting control panel has a public DNS entry. "
+         "WHM provides root-level server management. If externally reachable, "
+         "attackers can attempt authentication brute-force or exploit known cPanel vulnerabilities."),
+        (r"^ldap\d*$",
+         "LDAP Service Publicly Resolvable", "MEDIUM",
+         "An LDAP directory service has a public DNS entry. "
+         "If ports 389/636 are externally reachable, the directory may be enumerable "
+         "or susceptible to anonymous bind, exposing user accounts and organizational structure."),
+        (r"^(vpn\d*|sslvpn|remote|ras|gateway)$",
+         "VPN/Remote Access Gateway Identified", "INFO",
+         "A VPN or remote access gateway endpoint was identified via DNS. "
+         "This reveals the organization's remote access infrastructure location."),
+        (r"^(staging|stage|uat|preprod|pre-prod|dev|development|sandbox|test|testing|qa|beta)$",
+         "Non-Production Environment Publicly Resolvable", "MEDIUM",
+         "A staging, development, or test environment has a public DNS entry. "
+         "Non-production environments often have weaker authentication, debug features enabled, "
+         "and may expose sensitive data or unpatched vulnerabilities."),
+        (r"^(admin|administrator|manage|management|console|dashboard|portal-admin)$",
+         "Administrative Interface Publicly Resolvable", "MEDIUM",
+         "An administrative interface has a public DNS entry. "
+         "Admin panels are high-value targets for brute-force and credential-stuffing attacks."),
+        (r"^(phpmyadmin|pma|adminer|dbadmin|pgadmin|mysqladmin)$",
+         "Database Administration Panel Publicly Resolvable", "HIGH",
+         "A database administration interface has a public DNS entry. "
+         "Direct access to database management tools can lead to full data compromise."),
+        (r"^(jenkins|ci|cd|gitlab|gitea|gogs|bamboo|drone|buildbot)$",
+         "CI/CD System Publicly Resolvable", "MEDIUM",
+         "A CI/CD build system has a public DNS entry. "
+         "Build systems often contain source code, secrets, and deployment credentials."),
+        (r"^(grafana|kibana|prometheus|nagios|zabbix|cacti|observium|librenms|netbox|prtg)$",
+         "Monitoring/Observability Platform Publicly Resolvable", "LOW",
+         "A monitoring or observability platform has a public DNS entry. "
+         "These platforms can reveal internal network topology, host inventory, and performance metrics."),
+        (r"^(sip|pbx|voip|asterisk|freeswitch|evoice|softclient)$",
+         "VoIP/Telephony Service Publicly Resolvable", "INFO",
+         "A VoIP or telephony service endpoint was identified via DNS. "
+         "SIP and VoIP services may be susceptible to toll fraud, eavesdropping, or enumeration attacks."),
+        (r"^(ftp\d*|sftp|ftps)$",
+         "FTP Service Publicly Resolvable", "LOW",
+         "An FTP service has a public DNS entry. "
+         "FTP transmits credentials in cleartext and may allow anonymous access."),
+    ]
+
+    # Hostname patterns that suggest known appliance/product types
+    _HOSTNAME_APPLIANCE_PATTERNS: List[tuple] = [
+        (r"(?:^|[\-_\.])csa(?:[\-_\.]|\d|$)",
+         "Possible Ivanti Cloud Services Appliance (CSA)", "HIGH",
+         "Hostname contains 'CSA' which may indicate an Ivanti Cloud Services Appliance. "
+         "Ivanti CSA has been targeted by multiple critical actively-exploited vulnerabilities "
+         "(CVE-2024-8963, CVE-2024-9379, CVE-2024-8190, CVE-2024-9380). "
+         "Verify the service and ensure it is patched to the latest version.",
+         "CVE-2024-8963,CVE-2024-9379,CVE-2024-8190,CVE-2024-9380"),
+        (r"(?:^|[\-_\.])ics(?:[\-_\.]|\d|$)",
+         "Possible Ivanti Connect Secure (ICS)", "HIGH",
+         "Hostname contains 'ICS' which may indicate an Ivanti Connect Secure VPN appliance. "
+         "Ivanti Connect Secure has had critical zero-day exploitation "
+         "(CVE-2024-21887, CVE-2023-46805). Verify and ensure current patch level.",
+         "CVE-2024-21887,CVE-2023-46805"),
+        (r"(?:^|[\-_\.])f5|bigip|big-ip",
+         "Possible F5 BIG-IP Appliance", "MEDIUM",
+         "Hostname suggests an F5 BIG-IP appliance. "
+         "F5 BIG-IP has had critical RCE vulnerabilities (CVE-2023-46747, CVE-2022-1388). "
+         "Verify the device type and ensure current patch level.",
+         "CVE-2023-46747,CVE-2022-1388"),
+        (r"(?:^|[\-_\.])asa(?:[\-_\.]|\d|$)",
+         "Possible Cisco ASA Appliance", "MEDIUM",
+         "Hostname contains 'ASA' which may indicate a Cisco Adaptive Security Appliance. "
+         "Cisco ASA has had multiple critical vulnerabilities. Verify and ensure current patch level.",
+         ""),
+        (r"(?:^|[\-_\.])palo(?:alto)?|(?:^|[\-_\.])pa[\-_]",
+         "Possible Palo Alto Networks Appliance", "MEDIUM",
+         "Hostname suggests a Palo Alto Networks firewall/VPN appliance. "
+         "PAN-OS has had critical exploitation (CVE-2024-3400). Verify and ensure current patch level.",
+         "CVE-2024-3400"),
+        (r"(?:^|[\-_\.])fortinet|fortigate|forti[\-_]",
+         "Possible Fortinet FortiGate Appliance", "MEDIUM",
+         "Hostname suggests a Fortinet FortiGate appliance. "
+         "FortiOS has had critical zero-day exploitation (CVE-2024-21762, CVE-2023-27997). "
+         "Verify and ensure current patch level.",
+         "CVE-2024-21762,CVE-2023-27997"),
+        (r"(?:^|[\-_\.])(citrix|netscaler|ns[\-_]gw)",
+         "Possible Citrix NetScaler / ADC", "HIGH",
+         "Hostname suggests a Citrix NetScaler or ADC appliance. "
+         "Citrix ADC has had critical zero-day exploitation (CVE-2023-4966 'Citrix Bleed', CVE-2023-3519). "
+         "Verify and ensure current patch level.",
+         "CVE-2023-4966,CVE-2023-3519"),
+        (r"(?:^|[\-_\.])esx|vcenter|vsphere|vmware",
+         "Possible VMware vSphere/ESXi Host", "MEDIUM",
+         "Hostname suggests a VMware vSphere or ESXi host. "
+         "VMware ESXi and vCenter have had critical vulnerabilities. Verify and ensure current patch level.",
+         ""),
+    ]
+
+    # TXT verification tokens that reveal SaaS platforms in use
+    _TXT_PLATFORM_SIGNATURES: List[tuple] = [
+        (r"google-site-verification=",   "Google Workspace / Search Console"),
+        (r"ms=ms\d+",                    "Microsoft 365"),
+        (r"adobe-idp-site-verification=", "Adobe Identity Provider"),
+        (r"apple-domain-verification=",  "Apple Business / MDM"),
+        (r"sophos-domain-verification=", "Sophos Email Security"),
+        (r"atlassian-domain-verification=", "Atlassian (Jira/Confluence)"),
+        (r"facebook-domain-verification=",  "Meta / Facebook"),
+        (r"docusign=",                   "DocuSign"),
+        (r"stripe-verification=",        "Stripe Payments"),
+        (r"salesforce-",                 "Salesforce"),
+        (r"hubspot-",                    "HubSpot"),
+        (r"miro-verification=",          "Miro"),
+        (r"zoom-domain-verification=",   "Zoom"),
+        (r"slack-domain-verification=",  "Slack"),
+        (r"postman-domain-verification=", "Postman"),
+    ]
+
+    # SPF include: patterns that reveal mail infrastructure
+    _SPF_INCLUDES: List[tuple] = [
+        (r"amazonses\.com",     "Amazon SES"),
+        (r"spf\.protection\.outlook\.com", "Microsoft 365 (Exchange Online)"),
+        (r"google\.com|_spf\.google", "Google Workspace"),
+        (r"servers\.mcsv\.net", "Mailchimp"),
+        (r"sendgrid\.net",      "SendGrid"),
+        (r"spf\.mandrillapp\.com", "Mandrill (Mailchimp Transactional)"),
+        (r"mailgun\.org",       "Mailgun"),
+        (r"postmarkapp\.com",   "Postmark"),
+        (r"sparkpostmail\.com", "SparkPost"),
+        (r"zendesk\.com",       "Zendesk"),
+        (r"freshdesk\.com",     "Freshdesk"),
+        (r"hubspot",            "HubSpot"),
+        (r"salesforce\.com",    "Salesforce"),
+        (r"blackbaud\.net",     "Blackbaud"),
+        (r"ellucian",           "Ellucian"),
+        (r"cashnet\.com",       "CashNet / TouchNet Payments"),
+        (r"oracleemaildelivery\.com", "Oracle Email Delivery"),
+    ]
+
+    # Subdomain naming patterns that suggest Banner ERP / higher-ed infrastructure
+    _HIGHER_ED_PATTERNS: List[tuple] = [
+        (r"^ban(app|web|prod|ssb|links)\d*$",
+         "Ellucian Banner ERP", "INFO",
+         "Subdomain naming convention indicates Ellucian Banner ERP (Student Information System). "
+         "Banner has had historically critical vulnerabilities. Verify version and patch status."),
+        (r"^lp\d*(prod|tst|dev)[\-_]?(app|beis|cas|web)?\d*$",
+         "Ellucian Luminis Portal", "INFO",
+         "Subdomain naming convention indicates Ellucian Luminis Portal with CAS SSO. "
+         "Luminis Portal manages student authentication and self-service."),
+        (r"^(library|libraryproxy|ezproxy|login\.library)\d*$",
+         "EZProxy / Library Proxy Service", "LOW",
+         "A library proxy service (likely OCLC EZProxy) was identified. "
+         "EZProxy has had authentication bypass vulnerabilities (CVE-2023-45767). "
+         "Verify version and ensure current patch level."),
+    ]
+
+    def _analyze_dns_intelligence(self):
+        if not self._shodan_dns_records:
+            return
+
+        self.log.info(f"[Shodan] Analyzing {len(self._shodan_dns_records)} DNS records for intelligence")
+        _out_file = str(self.out / "dns_domain.json")
+        _findings_count = 0
+
+        # Collect records by type for analysis
+        cnames:     Dict[str, str] = {}   # fqdn → cname_target
+        a_records:  Dict[str, str] = {}   # fqdn → ip
+        txt_records: List[Dict]    = []
+        all_subdomains: List[str]  = []
+
+        for rec in self._shodan_dns_records:
+            rtype = rec["type"]
+            sub   = rec["subdomain"]
+            val   = rec["value"]
+            fqdn  = rec["fqdn"]
+
+            if rtype == "CNAME" and val:
+                cnames[sub.lower() if sub else "@"] = val.lower()
+            elif rtype == "A" and val:
+                a_records[fqdn] = val
+            elif rtype == "TXT" and val:
+                txt_records.append({"subdomain": sub, "value": val, "fqdn": fqdn})
+
+            if sub and sub.lower() not in all_subdomains:
+                all_subdomains.append(sub.lower())
+
+        # ── 1. Platform identification from CNAMEs ────────────────────────────
+        platforms_found: List[str] = []
+        for sub, target in cnames.items():
+            for pattern, platform_name in self._CNAME_PLATFORMS:
+                if re.search(pattern, target, re.IGNORECASE):
+                    if platform_name not in platforms_found:
+                        platforms_found.append(platform_name)
+                        self.data.technologies.setdefault("platform", [])
+                        if platform_name not in self.data.technologies["platform"]:
+                            self.data.technologies["platform"].append(platform_name)
+
+        if platforms_found:
+            add_finding(
+                self.data, "shodan", "dns_platform_enumeration",
+                CAT_RECON, "INFO",
+                "DNS CNAME Platform Enumeration",
+                domain=self.domain, affected=self.domain,
+                description=(
+                    f"DNS CNAME records reveal {len(platforms_found)} third-party platforms/services "
+                    f"in use: {', '.join(platforms_found)}. "
+                    "This information aids in mapping the attack surface and identifying "
+                    "technology-specific vulnerabilities."
+                ),
+                output_file=_out_file,
+            )
+            _findings_count += 1
+
+        # ── 2. Sensitive/admin services via subdomain naming ──────────────────
+        for sub in all_subdomains:
+            for pattern, title, severity, description in self._SENSITIVE_SUBDOMAINS:
+                if re.match(pattern, sub, re.IGNORECASE):
+                    fqdn = f"{sub}.{self.domain}"
+                    ip   = a_records.get(fqdn, "")
+                    add_finding(
+                        self.data, "shodan", "sensitive_service_exposed",
+                        CAT_INFRA, severity,
+                        title,
+                        domain=self.domain, host=fqdn, ip=ip,
+                        affected=fqdn + (f" ({ip})" if ip else ""),
+                        description=description,
+                        output_file=_out_file,
+                    )
+                    _findings_count += 1
+                    break
+
+        # ── 3. Appliance identification from hostname patterns ────────────────
+        for sub in all_subdomains:
+            for pattern, title, severity, description, cves in self._HOSTNAME_APPLIANCE_PATTERNS:
+                if re.search(pattern, sub, re.IGNORECASE):
+                    fqdn = f"{sub}.{self.domain}"
+                    ip   = a_records.get(fqdn, "")
+                    add_finding(
+                        self.data, "shodan", "hostname_appliance_detected",
+                        CAT_APPLIANCE, severity,
+                        title,
+                        domain=self.domain, host=fqdn, ip=ip,
+                        affected=fqdn + (f" ({ip})" if ip else ""),
+                        description=description,
+                        cve=cves,
+                        output_file=_out_file,
+                    )
+                    _findings_count += 1
+                    break
+
+        # ── 4. Higher-ed / industry-specific infrastructure ───────────────────
+        for sub in all_subdomains:
+            for pattern, product_name, severity, description in self._HIGHER_ED_PATTERNS:
+                if re.match(pattern, sub, re.IGNORECASE):
+                    fqdn = f"{sub}.{self.domain}"
+                    ip   = a_records.get(fqdn, "")
+                    add_finding(
+                        self.data, "shodan", "infrastructure_identified",
+                        CAT_INFRA, severity,
+                        f"{product_name} Identified",
+                        domain=self.domain, host=fqdn, ip=ip,
+                        affected=fqdn + (f" ({ip})" if ip else ""),
+                        description=description,
+                        output_file=_out_file,
+                    )
+                    _findings_count += 1
+                    self.data.technologies.setdefault("product", [])
+                    if product_name not in self.data.technologies["product"]:
+                        self.data.technologies["product"].append(product_name)
+                    break
+
+        # ── 5. SPF infrastructure enumeration ─────────────────────────────────
+        spf_records = [t for t in txt_records
+                       if t["value"].strip('"').lower().startswith("v=spf1")
+                       and (not t["subdomain"] or t["subdomain"] == "@")]
+        if spf_records:
+            spf_raw = spf_records[0]["value"].strip('"')
+            # Extract explicit IPs
+            spf_ips = re.findall(r'ip4:([\d\.]+(?:/\d+)?)', spf_raw)
+            # Extract include: domains
+            spf_includes = re.findall(r'include:(\S+)', spf_raw)
+
+            mail_providers: List[str] = []
+            for inc in spf_includes:
+                for pattern, provider_name in self._SPF_INCLUDES:
+                    if re.search(pattern, inc, re.IGNORECASE):
+                        if provider_name not in mail_providers:
+                            mail_providers.append(provider_name)
+                        break
+
+            if spf_ips or mail_providers:
+                parts = []
+                if spf_ips:
+                    parts.append(f"{len(spf_ips)} explicit IP addresses/ranges")
+                if mail_providers:
+                    parts.append(f"mail infrastructure: {', '.join(mail_providers)}")
+
+                add_finding(
+                    self.data, "shodan", "spf_infrastructure_enumeration",
+                    CAT_RECON, "INFO",
+                    "SPF Record Infrastructure Enumeration",
+                    domain=self.domain, affected=self.domain,
+                    description=(
+                        f"The SPF record exposes {' and '.join(parts)}. "
+                        "SPF records are public by design but reveal the organization's "
+                        "complete mail-sending infrastructure, aiding in network mapping "
+                        "and identifying additional attack surface."
+                    ),
+                    output_file=_out_file,
+                )
+                _findings_count += 1
+
+                for prov in mail_providers:
+                    self.data.technologies.setdefault("mail_provider", [])
+                    if prov not in self.data.technologies["mail_provider"]:
+                        self.data.technologies["mail_provider"].append(prov)
+
+        # ── 6. Verification token platform mapping ────────────────────────────
+        root_txt = [t for t in txt_records if not t["subdomain"] or t["subdomain"] == "@"]
+        saas_platforms: List[str] = []
+        for t in root_txt:
+            val = t["value"].strip('"').lower()
+            for pattern, platform_name in self._TXT_PLATFORM_SIGNATURES:
+                if re.search(pattern, val, re.IGNORECASE):
+                    if platform_name not in saas_platforms:
+                        saas_platforms.append(platform_name)
+
+        if saas_platforms:
+            add_finding(
+                self.data, "shodan", "txt_saas_enumeration",
+                CAT_RECON, "INFO",
+                "DNS TXT SaaS Platform Enumeration",
+                domain=self.domain, affected=self.domain,
+                description=(
+                    f"DNS TXT verification tokens reveal {len(saas_platforms)} SaaS platforms "
+                    f"in use: {', '.join(saas_platforms)}. "
+                    "Domain verification records confirm active service relationships, "
+                    "useful for social engineering reconnaissance and supply-chain risk assessment."
+                ),
+                output_file=_out_file,
+            )
+            _findings_count += 1
+
+            for p in saas_platforms:
+                self.data.technologies.setdefault("saas", [])
+                if p not in self.data.technologies["saas"]:
+                    self.data.technologies["saas"].append(p)
+
+        # ── 7. Non-production environments with test/staging in CNAME ─────────
+        for sub, target in cnames.items():
+            if re.search(r'(staging|stage|uat|preprod|test|sandbox|dev)\.',
+                         target, re.IGNORECASE):
+                fqdn = f"{sub}.{self.domain}" if sub != "@" else self.domain
+                if not re.match(r'^(staging|stage|uat|preprod|dev|test)', sub, re.IGNORECASE):
+                    add_finding(
+                        self.data, "shodan", "cname_non_production",
+                        CAT_INFRA, "LOW",
+                        "CNAME Points to Non-Production Infrastructure",
+                        domain=self.domain, host=fqdn,
+                        affected=f"{fqdn} → {target}",
+                        description=(
+                            f"The subdomain {fqdn} has a CNAME pointing to what appears "
+                            f"to be non-production infrastructure ({target}). "
+                            "This may indicate a misconfiguration or a forgotten test deployment."
+                        ),
+                        output_file=_out_file,
+                    )
+                    _findings_count += 1
+
+        # ── 8. IP concentration analysis ──────────────────────────────────────
+        ip_counts: Dict[str, int] = {}
+        for rec in self._shodan_dns_records:
+            if rec["type"] == "A" and rec["value"]:
+                ip_counts[rec["value"]] = ip_counts.get(rec["value"], 0) + 1
+
+        # Find /24 networks with significant presence
+        net_hosts: Dict[str, List[str]] = {}
+        for ip in ip_counts:
+            parts = ip.rsplit(".", 1)
+            if len(parts) == 2:
+                net = f"{parts[0]}.0/24"
+                net_hosts.setdefault(net, []).append(ip)
+
+        significant_nets = {n: ips for n, ips in net_hosts.items() if len(ips) >= 5}
+        if significant_nets:
+            net_summary = "; ".join(
+                f"{net}: {len(ips)} hosts" for net, ips in
+                sorted(significant_nets.items(), key=lambda x: -len(x[1]))
+            )
+            add_finding(
+                self.data, "shodan", "network_concentration",
+                CAT_RECON, "INFO",
+                "Network Infrastructure Concentration Identified",
+                domain=self.domain, affected=self.domain,
+                description=(
+                    f"DNS records reveal significant infrastructure concentration: {net_summary}. "
+                    "High-density networks are priority targets for network-layer scanning "
+                    "and may host shared services or internal infrastructure."
+                ),
+                output_file=_out_file,
+            )
+            _findings_count += 1
+
+        # ── 9. DMARC analysis from Shodan DNS data ───────────────────────────
+        dmarc_records = [t for t in txt_records
+                         if t["subdomain"] == "_dmarc"
+                         and t["value"].strip('"').lower().startswith("v=dmarc1")]
+        for dm in dmarc_records:
+            raw = dm["value"].strip('"')
+            # Extract reporting addresses (info leakage)
+            rua_addrs = re.findall(r'rua=mailto:([^,;\s]+)', raw, re.IGNORECASE)
+            ruf_addrs = re.findall(r'ruf=mailto:([^,;\s]+)', raw, re.IGNORECASE)
+            all_addrs = rua_addrs + ruf_addrs
+            if all_addrs:
+                for addr in all_addrs:
+                    self.data.email_addresses.setdefault(
+                        addr.lower(), {"sources": [], "context": "DMARC reporting"}
+                    )
+                    src = self.data.email_addresses[addr.lower()]["sources"]
+                    if "shodan_dmarc" not in src:
+                        src.append("shodan_dmarc")
+
+        self.log.success(
+            f"[Shodan] DNS intelligence analysis: {_findings_count} findings generated"
+        )
 
 
 # ─── Censys ───────────────────────────────────────────────────────────────────
@@ -6545,10 +7016,8 @@ _SOURCE_TO_TOOL: Dict[str, str] = {
     "hibp_domain":       "hibp",
     "hibp":              "hibp",
     "dehashed":          "dehashed",
-    "tlsx":              "tlsx",
     "cdncheck":          "cdncheck",
     "katana":            "katana",
-    "web_crawl":         "web_crawl",
     "hackertarget":      "hackertarget",
     "OSift-DNS":         "OSift-DNS",
     "edgartools":        "edgartools",
@@ -6588,7 +7057,6 @@ _SOURCE_TO_TOOL: Dict[str, str] = {
     "NS record":         "OSift-DNS",
     "CNAME record":      "OSift-DNS",
     "SRV record":        "OSift-DNS",
-    "zone transfer":     "OSift-DNS",
     "brute force":       "OSift-DNS",
     "nslookup":          "OSift-DNS",
     "nslookup-ns":       "OSift-DNS",
@@ -6875,7 +7343,7 @@ def _check_appliance_fingerprints(
         if matched:
             _seen.add(dedup_key)
             add_finding(
-                data, "tlsx",
+                data, "shodan",
                 f"appliance_{fp_id.lower()}", CAT_APPLIANCE, fp["severity"],
                 fp["description"],
                 host=host, affected=host,
@@ -7012,7 +7480,6 @@ def check_python_deps(log: ReconLogger):
         ("OpenSSL",      "pyOpenSSL",      "python3-openssl"),
         ("whois",        "python-whois",   "python3-whois"),
         ("edgar",        "edgartools",     None),   # pip-only; no apt package
-        ("wappalyzer",   "wappalyzer",     None),   # s0md3v python-wappalyzer, 3000+ signatures
         ("maigret",      "maigret",        None),   # social media username OSINT
     ]
 
@@ -7563,7 +8030,6 @@ class DNSEnumerator:
         self.log.info("[DNS] Starting DNS enumeration")
         self._get_dns_records()
         self._detect_and_record_wildcard()
-        self._attempt_zone_transfer()
         self._run_nslookup()
         self._brute_force_subdomains()
         self._enumerate_from_search_engines()
@@ -8114,41 +8580,6 @@ class DNSEnumerator:
                 output_file=_rec_file,
             )
 
-    def _attempt_zone_transfer(self):
-        if not DNS_AVAILABLE:
-            return
-        for ns in self._query(self.domain, "NS"):
-            ns = ns.rstrip(".")
-            self.log.info(f"[DNS] Attempting zone transfer from {ns}")
-            try:
-                z = dns.zone.from_xfr(dns.query.xfr(ns, self.domain, timeout=5))
-                entries = []
-                _zt_file = str(self.output_dir / "zone_transfers" / f"{_safe_filename(ns)}_zone.json")
-                for name, node in z.nodes.items():
-                    fqdn = f"{name}.{self.domain}".strip(".")
-                    for rdataset in node.rdatasets:
-                        for rdata in rdataset:
-                            entries.append({
-                                "name": fqdn,
-                                "type": dns.rdatatype.to_text(rdataset.rdtype),
-                                "value": str(rdata),
-                            })
-                            self._add_subdomain(fqdn, "zone transfer", _zt_file)
-                if entries:
-                    self.log.success(f"[DNS] Zone transfer SUCCESS from {ns}: {len(entries)} entries")
-                    out = Path(_zt_file)
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    add_finding(self.data, "OSift-DNS", "zone_transfer", CAT_DNS, "HIGH",
-                                f"The DNS server responded to an unauthenticated AXFR zone transfer request, exposing {len(entries)} DNS entries including internal hostnames, IP addresses, and mail infrastructure.",
-                                host=ns, domain=self.domain, affected=ns,
-                                output_file=str(out),
-                                title="DNS Zone Transfer Permitted (AXFR)",
-                                remediation="Restrict zone transfer permissions to authorised secondary name server IP addresses using ACLs in the DNS server configuration.")
-                    self.data.zone_transfers.append({"ns": ns, "entries": entries})
-                    out.write_text(json.dumps(entries, indent=2), encoding="utf-8")
-            except Exception as e:
-                self.log.debug(f"[DNS] Zone transfer from {ns} failed: {e}")
-
     def _brute_force_subdomains(self):
         self.log.info(f"[DNS] Brute forcing {len(DEFAULT_WORDLIST)} subdomains")
         found: List[str] = []
@@ -8698,7 +9129,7 @@ class AmassEnumerator:
         _oA_prefix = self.output_dir / f"{_safe_filename(self.domain)}_amass"
         _q = '"' if IS_WINDOWS else "'"
 
-        cmd = f"amass enum -d {self.domain}"
+        cmd = f"amass enum -passive -d {self.domain}"
         if fl["timeout"]:
             cmd += " -timeout 10"
 
@@ -8767,222 +9198,6 @@ class AmassEnumerator:
                 _write_placeholder(self.output_dir,
                                    f"{_safe_filename(self.domain)}_amass.txt",
                                    cmd, "(Amass produced no subdomain output)")
-
-
-# ─── Certificate Collector ────────────────────────────────────────────────────
-
-class CertificateCollector:
-    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData):
-        self.output_dir = output_dir / "certificates"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        # Subdirectories for raw DER and parsed JSON output
-        (self.output_dir / "raw").mkdir(exist_ok=True)
-        (self.output_dir / "parsed").mkdir(exist_ok=True)
-        self.log        = log
-        self.data       = data
-
-    # Per-host TCP connect + TLS handshake timeout (seconds)
-    _CERT_TIMEOUT = 8
-
-    def run(self):
-        self.log.set_tool_context("OSift-Certs")
-        self.log.info("[CERT] Collecting TLS certificates")
-        hosts = set(self.data.subdomains.keys()) | {self.data.domain}
-
-        # Pre-resolve all hostnames using the timeout-bounded dnspython resolver
-        # before spawning TLS workers.  socket.create_connection() calls
-        # socket.getaddrinfo() internally with NO timeout — on slow or dead DNS
-        # each call can block for 30-60 s, exhausting all worker threads and
-        # stalling the entire phase.  Connecting by IP + SNI avoids that.
-        host_ips: "dict[str, str]" = {}
-        if DNS_AVAILABLE:
-            _res = dns.resolver.Resolver()
-            _res.timeout     = 2
-            _res.lifetime    = 3
-            _res.nameservers = ["8.8.8.8", "1.1.1.1"]
-
-            def _pre_resolve(h: str):
-                try:
-                    return h, str(_res.resolve(h.rstrip("."), "A")[0])
-                except Exception:
-                    return h, ""
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=_SCAN_SEM.limit) as rx:
-                for f in concurrent.futures.as_completed(
-                        {rx.submit(_pre_resolve, h): h for h in hosts}):
-                    h, ip = f.result()
-                    if ip:
-                        host_ips[h] = ip
-        else:
-            host_ips = {h: h for h in hosts}
-
-        if not host_ips:
-            self.log.info("[CERT] No resolvable hosts — skipping cert collection")
-            return
-
-        self.log.info(f"[CERT] Resolved {len(host_ips)}/{len(hosts)} hosts — fetching certs")
-        phase_timeout = max(30, min(120, len(host_ips) * 2 + 15))
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_SCAN_SEM.limit) as ex:
-            futures = {ex.submit(self._get_cert, h, ip): h
-                       for h, ip in host_ips.items()}
-            done, not_done = concurrent.futures.wait(futures, timeout=phase_timeout)
-            for fut in done:
-                try:
-                    fut.result()
-                except Exception:
-                    pass
-            if not_done:
-                self.log.warning(
-                    f"[CERT] {len(not_done)} host(s) did not complete within "
-                    f"{phase_timeout}s — skipping remainder"
-                )
-                for fut in not_done:
-                    fut.cancel()
-
-        self.log.success(f"[CERT] Collected {len(self.data.certificates)} certificates")
-        self._extract_alt_names()
-
-        # Run appliance fingerprinting on collected certs
-        # CertificateCollector uses different field names from tlsx, so
-        # translate before passing to the fingerprint checker.
-        _appl_seen: set = set()
-        _appl_count = 0
-        for _crec in self.data.certificates:
-            if _crec.get("source") != "direct_tls":
-                continue
-            _translated = {
-                "subject_cn":  _crec.get("common_name", ""),
-                "issuer_cn":   _crec.get("issuer", ""),
-                "subject_org": _crec.get("subject_org", []),
-                "issuer_org":  _crec.get("issuer_org", []),
-                "subject_an":  _crec.get("alt_names", []),
-            }
-            _appl_count += _check_appliance_fingerprints(
-                _translated, _crec.get("hostname", ""), self.data,
-                _seen=_appl_seen,
-                output_file=str(self.output_dir / "ssl_cert_search.json"),
-            )
-        if _appl_count:
-            self.log.success(
-                f"[CERT] Appliance fingerprinting: {_appl_count} "
-                f"known-vulnerable appliance(s) detected from certificate data"
-            )
-
-    def _get_cert(self, hostname: str, ip: str):
-        hostname = hostname.rstrip(".")
-        # Connect by pre-resolved IP to skip getaddrinfo; pass hostname as SNI
-        # so the server presents the correct certificate for that vhost.
-        connect_to = ip if (ip and ip != hostname) else hostname
-        der_cert = None
-        try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode    = ssl.CERT_NONE
-            with socket.create_connection((connect_to, 443),
-                                          timeout=self._CERT_TIMEOUT) as sock:
-                sock.settimeout(self._CERT_TIMEOUT)
-                with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-                    ssock.settimeout(self._CERT_TIMEOUT)
-                    der_cert = ssock.getpeercert(binary_form=True)
-        except (socket.timeout, ConnectionRefusedError, OSError):
-            pass
-        except Exception as e:
-            self.log.debug(f"[CERT] {hostname}: {e}")
-        if not der_cert:
-            return
-
-        raw_path = self.output_dir / "raw" / f"{_safe_filename(hostname)}.der"
-        raw_path.write_bytes(der_cert)
-
-        cert_info: Dict[str, Any] = {"hostname": hostname, "source": "direct_tls", "alt_names": []}
-
-        if CRYPTO_AVAILABLE:
-            cert = x509.load_der_x509_certificate(der_cert, default_backend())
-            try:
-                cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-                cert_info["common_name"] = cn[0].value if cn else ""
-            except Exception:
-                pass
-            try:
-                ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
-                _alt_names = []
-                for _n in ext.value:
-                    try:
-                        _v = _n.value
-                        _alt_names.append(str(_v) if not isinstance(_v, str) else _v)
-                    except Exception:
-                        pass
-                cert_info["alt_names"] = _alt_names
-            except Exception:
-                pass
-            nbf = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before
-            nat = getattr(cert, "not_valid_after_utc",  None) or cert.not_valid_after
-            cert_info["not_before"] = str(nbf)
-            cert_info["not_after"]  = str(nat)
-            cert_info["serial"]     = str(cert.serial_number)
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    issuer_cn = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
-                cert_info["issuer"] = issuer_cn[0].value if issuer_cn else ""
-            except Exception:
-                cert_info["issuer"] = ""
-            try:
-                _subj_org = cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
-                cert_info["subject_org"] = [o.value for o in _subj_org] if _subj_org else []
-            except Exception:
-                cert_info["subject_org"] = []
-            try:
-                _iss_org = cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
-                cert_info["issuer_org"] = [o.value for o in _iss_org] if _iss_org else []
-            except Exception:
-                cert_info["issuer_org"] = []
-            # Self-signed detection: issuer DN == subject DN
-            try:
-                cert_info["self_signed"] = (cert.issuer == cert.subject)
-            except Exception:
-                cert_info["self_signed"] = False
-            # Wildcard detection
-            _cn = cert_info.get("common_name", "")
-            cert_info["wildcard"] = (
-                _cn.startswith("*.") or
-                any(str(a).startswith("*.") for a in cert_info.get("alt_names", []))
-            )
-            # SHA-256 fingerprint
-            try:
-                import hashlib as _hl
-                cert_info["fingerprint"] = _hl.sha256(der_cert).hexdigest()
-            except Exception:
-                cert_info["fingerprint"] = ""
-
-        self.data.certificates.append(cert_info)
-        out = self.output_dir / "parsed" / f"{_safe_filename(hostname)}.json"
-        out.write_text(json.dumps(cert_info, indent=2, default=str), encoding="utf-8")
-
-    def _extract_alt_names(self):
-        domain    = self.data.domain
-        new_count = 0
-        for cert in self.data.certificates:
-            _cert_host = cert.get("hostname", "")
-            _cert_file = str(
-                self.output_dir / "parsed" / f"{_safe_filename(_cert_host)}.json"
-            ) if _cert_host else ""
-            for alt in cert.get("alt_names", []):
-                if not isinstance(alt, str):
-                    continue
-                alt = alt.lstrip("*.").lower()
-                if alt.endswith(domain) and alt not in self.data.subdomains:
-                    self.data.subdomains[alt] = {"sources": ["certificate_san"], "ips": [], "ports": [], "http_status": None}
-                    self.data.cert_subjects.add(alt)
-                    add_finding(
-                        self.data, "certificate_san", "subdomain_identified", "DNS", "INFO",
-                        "Subdomain Identified", host=domain, affected=alt,
-                        output_file=_cert_file,
-                    )
-                    new_count += 1
-        if new_count:
-            self.log.success(f"[CERT] {new_count} new subdomains from certificate SANs")
 
 
 # ─── IP Intelligence ──────────────────────────────────────────────────────────
@@ -10436,560 +10651,6 @@ class CompanyIntelligence:
         out.write_text(json.dumps(self.data.associated_companies, indent=2), encoding="utf-8")
 
 
-# ─── Web Crawler ──────────────────────────────────────────────────────────────
-
-class WebCrawler:
-    def __init__(self, output_dir: Path, log: ReconLogger, data: ReconData,
-                 max_pages: int = 200, max_depth: int = 3, domain: str = ""):
-        self.output_dir = _domain_path(output_dir, domain) / "web_crawl" if domain else output_dir / "web_crawl"
-        self.log        = log
-        self.data       = data
-        self.max_pages  = max_pages
-        self.max_depth  = max_depth
-        self._visited: Set[str] = set()
-        self._queue:   queue.Queue = queue.Queue()
-        self._lock     = threading.Lock()
-        self._sw_seen:  Set[Tuple[str, str, str]] = set()   # (software_lower, version, host)
-
-    def run(self):
-        self.log.set_tool_context("OSift-Crawl")
-        seeds = set()
-        for fqdn in list(self.data.subdomains.keys()) + [self.data.domain]:
-            for scheme in ["https", "http"]:
-                seeds.add(f"{scheme}://{fqdn}")
-        for url in list(seeds)[:50]:
-            self._queue.put((url, 0))
-        self.log.info(f"[CRAWL] Starting crawl with {self._queue.qsize()} seed URLs")
-        self._crawl()
-        self.log.success(f"[CRAWL] Crawled {len(self.data.crawled_urls)} URLs, {len(self.data.sensitive_findings)} sensitive items")
-
-    def _crawl(self):
-        session = make_session()
-        count   = 0
-        while not self._queue.empty() and count < self.max_pages:
-            try:
-                url, depth = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            if url in self._visited or depth > self.max_depth:
-                continue
-            with self._lock:
-                if url in self._visited:
-                    continue
-                self._visited.add(url)
-            try:
-                resp = session.get(url, timeout=10, allow_redirects=True,
-                                   headers={"Accept": "text/html,application/xhtml+xml"})
-                count += 1
-                if count % 20 == 0:
-                    self.log.info(f"[CRAWL] Progress: {count}/{self.max_pages}")
-
-                page_data: Dict[str, Any] = {
-                    "url": url, "status_code": resp.status_code,
-                    "content_type": resp.headers.get("content-type", ""),
-                    "server":       resp.headers.get("server", ""),
-                    "x_powered_by": resp.headers.get("x-powered-by", ""),
-                    "headers":      dict(resp.headers),
-                    "size":         len(resp.content), "depth": depth,
-                    "links": [], "forms": [],
-                }
-
-                hostname = urllib.parse.urlparse(url).netloc
-                if hostname in self.data.subdomains:
-                    self.data.subdomains[hostname]["http_status"] = resp.status_code
-                self._detect_technologies(url, resp.headers)
-
-                # Save raw response body so Evidence can show the actual file
-                safe_fn = re.sub(r'[^\w\-]', '_', url)[:100]
-                _ct = resp.headers.get("content-type", "").lower()
-                if "javascript" in _ct or url.endswith((".js", ".mjs")):
-                    _ext = "js"
-                elif "css" in _ct or url.endswith(".css"):
-                    _ext = "css"
-                elif "xml" in _ct:
-                    _ext = "xml"
-                elif "json" in _ct:
-                    _ext = "json"
-                else:
-                    _ext = "html"
-                _content_dir = self.output_dir / "pages" / "content"
-                _content_dir.mkdir(parents=True, exist_ok=True)
-                _content_file = _content_dir / f"{safe_fn}.{_ext}"
-                try:
-                    _content_file.write_text(resp.text, encoding="utf-8", errors="replace")
-                except OSError:
-                    _content_file = None
-                _content_file_str = str(_content_file) if _content_file else ""
-
-                self._scan_software_versions(url, resp.headers, resp.text, _content_file_str)
-
-                if "text/html" in resp.headers.get("content-type", "") and BS4_AVAILABLE:
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    page_data["links"]  = self._extract_links(soup, url, depth)[:100]
-                    page_data["forms"]  = self._extract_forms(soup)
-                    page_data["title"]  = soup.title.string if soup.title else ""
-                    page_data["meta"]   = self._extract_meta(soup)
-
-                findings = self._scan_sensitive(resp.text, url, _content_file_str)
-                page_data["sensitive_count"] = len(findings)
-
-                out = self.output_dir / "pages" / f"{safe_fn}.json"
-                out.write_text(json.dumps(page_data, indent=2, default=str), encoding="utf-8")
-
-                self.data.crawled_urls[url] = {
-                    "status":        resp.status_code,
-                    "content_type":  page_data["content_type"],
-                    "server":        page_data["server"],
-                    "size":          page_data["size"],
-                    "sensitive_count": len(findings),
-                }
-            except Exception as e:
-                self.log.debug(f"[CRAWL] {url}: {type(e).__name__}")
-
-    def _extract_links(self, soup, base_url: str, depth: int) -> List[str]:
-        links: List[str] = []
-        for tag in soup.find_all(["a", "link", "script", "img", "iframe", "form"]):
-            href = tag.get("href") or tag.get("src") or tag.get("action") or ""
-            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
-                continue
-            try:
-                full = urllib.parse.urljoin(base_url, href)
-                if urllib.parse.urlparse(full).netloc in (list(self.data.subdomains.keys()) + [self.data.domain]):
-                    if full not in self._visited:
-                        self._queue.put((full, depth + 1))
-                    links.append(full)
-            except Exception:
-                pass
-        return links
-
-    def _extract_forms(self, soup) -> List[Dict]:
-        forms = []
-        for form in soup.find_all("form"):
-            forms.append({
-                "action": form.get("action", ""),
-                "method": form.get("method", "GET").upper(),
-                "inputs": [{"name": i.get("name"), "type": i.get("type", "text"), "id": i.get("id")}
-                           for i in form.find_all(["input", "textarea", "select"])],
-            })
-        return forms
-
-    def _extract_meta(self, soup) -> Dict:
-        meta: Dict[str, str] = {}
-        for tag in soup.find_all("meta"):
-            name    = tag.get("name") or tag.get("property") or ""
-            content = tag.get("content") or ""
-            if name and content:
-                meta[name] = content
-        return meta
-
-    def _scan_sensitive(self, text: str, url: str, content_file: str = "") -> List[Dict]:
-        findings: List[Dict] = []
-        _url_host = urllib.parse.urlparse(url).hostname or ""
-        _domain   = self.data.domain
-
-        # Per-page evidence file: each URL's data is saved here by the caller.
-        # Using this as output_file means Evidence for a finding only links to
-        # files that actually contain the matched value (not a shared category JSONL).
-        _safe_fn  = re.sub(r'[^\w\-]', '_', url)[:100]
-        page_file = self.output_dir / "pages" / f"{_safe_fn}.json"
-
-        # ── Default webpage detection ─────────────────────────────────────
-        _default_page_label = _detect_default_page(text)
-        if _default_page_label:
-            _dp_ts = datetime.datetime.now(_UTC).isoformat()
-            add_finding(
-                self.data, "OSift-Crawl",
-                "default_page", CAT_WEB, "info",
-                "Default Webpage Detected",
-                url=url, affected=f"{_default_page_label} — {url}",
-                host=_url_host,
-                timestamp=_dp_ts,
-                output_file=content_file or str(page_file),
-            )
-
-        for category, patterns in SENSITIVE_PATTERNS.items():
-            for pattern in patterns:
-                for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
-                    val = match.group() if isinstance(match.group(), str) else str(match.group())
-                    _match_start = match.start()
-
-                    # Per-category validation and field assignment.
-                    _email_arg: str = ""           # unique fingerprint for email findings
-                    _phone_arg: str = ""           # unique fingerprint for phone findings
-                    # Generator-comment secondary finding fields (Comments branch only)
-                    _gen_sw_affected: str = ""
-                    _gen_sw_name:     str = ""
-                    _gen_sw_ver:      str = ""
-
-                    # ── AWS Keys / Google API — skip base64-encoded content (fonts, images)
-                    if category in ("AWS Keys", "Google API"):
-                        if _is_base64_context(text, _match_start):
-                            continue
-
-                    # ── Google API — enforce case-sensitive prefix AIza
-                    if category == "Google API":
-                        if not val.startswith("AIza"):
-                            continue
-
-                    # ── Passwords / API Keys — skip minified JS property access
-                    if category in ("Passwords", "API Keys"):
-                        if _is_minified_js(text, _match_start):
-                            continue
-
-                    # ── Passwords — skip benign URL params, DOM refs, form markup
-                    if category == "Passwords":
-                        if _is_benign_password_match(text, _match_start, val):
-                            continue
-
-                    # ── Social Security — skip minified JS bundles
-                    if category == "Social Security":
-                        if _is_minified_js(text, _match_start):
-                            continue
-
-                    # ── IP Addresses ──────────────────────────────────────────
-                    if category == "IP Addresses":
-                        if val in ("127.0.0.1", "0.0.0.0", "255.255.255.255"):
-                            continue
-                        _title    = "IP Address Identified"
-                        _affected = val
-                        _url_arg  = ""
-                        _host_arg = _url_host
-                        _source   = "OSift-Crawl"
-
-                    # ── Email Addresses ───────────────────────────────────────
-                    elif category == "Email Addresses":
-                        self._add_email_crawl(val, url)
-                        _ea_dom_c = val.split("@", 1)[1].lower() if "@" in val else ""
-                        _scope_c  = set(self.data.domains if self.data.domains else [_domain])
-                        _inscope_c = any(
-                            _ea_dom_c == _sd or _ea_dom_c.endswith("." + _sd)
-                            for _sd in _scope_c
-                        )
-                        _title    = "Email Address Identified" if _inscope_c else "Email Address Identified (Unknown)"
-                        _affected = val
-                        _email_arg = val          # unique fingerprint per email address
-                        _url_arg  = ""
-                        _host_arg = _domain       # originating domain, not crawled hostname
-                        _source   = "OSift-Crawl"
-
-                    # ── Phone Numbers ─────────────────────────────────────────
-                    elif category == "Phone Numbers":
-                        _ph_digits = re.sub(r"\D", "", val)
-                        # Hard pre-filter: 10-digit NANP numbers cannot start with 1
-                        if len(_ph_digits) == 10 and _ph_digits[0] == "1":
-                            continue
-                        # Heuristic pre-filter: UTC offsets, timestamps, etc.
-                        _ph_valid, _ph_reason = _validate_phone_number(val)
-                        if not _ph_valid:
-                            continue
-                        # Structural validation + E.164/geo enrichment via PhoneValidator
-                        _ph_full = PhoneValidator.validate(val)
-                        if not _ph_full.get("valid"):
-                            continue
-                        _ph_e164 = _ph_full.get("e164") or val
-                        if val not in self.data.phone_numbers:
-                            self.data.phone_numbers.append(val)
-                        _ph_affected      = _build_phone_affected(_ph_full)
-                        # PhoneValidator already confirmed the number — emit a
-                        # single "Confirmed" finding instead of duplicating as
-                        # both Unconfirmed + Confirmed with identical data.
-                        _title            = "Phone Number Pattern Spotted - Confirmed"
-                        _affected         = _ph_affected
-                        _phone_arg        = _ph_e164
-                        _url_arg          = ""
-                        _host_arg         = _domain   # originating domain, not crawled hostname
-                        _source           = "phone-validator"
-
-                    # ── Social Security Numbers ───────────────────────────────
-                    elif category == "Social Security":
-                        _ssn_valid, _ssn_reason = _validate_ssn(val)
-                        if not _ssn_valid:
-                            continue
-                        # Extended digit boundary: reject if adjacent to more
-                        # digits (match is part of a larger number — phone,
-                        # account, credit card fragment, etc.)
-                        _ms = _match_start
-                        _me = match.end()
-                        if _ms > 0 and text[_ms - 1].isdigit():
-                            continue
-                        if _me < len(text) and text[_me].isdigit():
-                            continue
-                        # Require SSN-related keywords within ±300 chars;
-                        # without context the pattern is almost always noise.
-                        if not _ssn_has_context(text, _ms):
-                            continue
-                        _title    = "Social Security pattern detected:"
-                        _affected = val
-                        _url_arg  = ""
-                        _host_arg = _domain   # originating domain
-                        _source   = "ssn-validator"
-
-                    # ── Internal Paths ───────────────────────────────────────
-                    elif category == "Internal Paths":
-                        _title    = "Internal Server Directory Structure Revealed"
-                        _affected = f"{url} - {val}"
-                        _url_arg  = url
-                        _host_arg = _domain   # originating domain, not crawled hostname
-                        _source   = "OSift-Crawl"
-                        # Downgrade risk when found on a known default page
-                        if _default_page_label:
-                            _affected = f"{url} - {val} (on {_default_page_label})"
-
-                    # ── HTML/JS Comments ─────────────────────────────────────
-                    elif category == "Comments":
-                        # Skip trivial section-label HTML comments such as
-                        # <!-- Fonts -->, <!-- Scripts -->, <!-- Styles -->, etc.
-                        # These are purely structural markers with no intel value.
-                        _inner = re.sub(r'^<!--\s*|\s*-->$', '', val).strip()
-                        if re.fullmatch(r'[\w\s/.\-]+', _inner) and len(_inner) <= 40:
-                            continue
-                        # Skip XHTML CSS-hiding comments: <!-- body { color:#000 -->
-                        # Standard XHTML practice for wrapping <style> content; not a disclosure.
-                        if _is_css_hiding_comment(val):
-                            continue
-                        _title    = f"{category} pattern detected: {val[:80]}"
-                        _affected = url
-                        _url_arg  = url
-                        _host_arg = ""
-                        _source   = "OSift-Crawl"
-
-                        # ── Generator: comment → Software Version Identified ──
-                        # "<!-- Generator: Adobe Illustrator 25.4.1, SVG ..." →
-                        # extract "Adobe Illustrator 25.4.1" into a secondary finding.
-                        _gen_re = re.match(
-                            r'^<!--\s*[Gg]enerator:\s*([^,;\(]+?)(?:\s*,.*)?(?:\s*-->)?$',
-                            val.strip(), re.DOTALL,
-                        )
-                        if _gen_re:
-                            _gen_content = _gen_re.group(1).strip()
-                            _gm = _META_GEN_VER_RE.match(_gen_content)
-                            if _gm:
-                                _gsw  = _gm.group(1).strip()
-                                _gver = _gm.group(2).strip()
-                                _gsw_key = (_gsw.lower(), _gver, _url_host.lower())
-                                if (len(_gver) <= 20 and len(_gsw) <= 60
-                                        and _gsw_key not in self._sw_seen):
-                                    self._sw_seen.add(_gsw_key)
-                                    _gen_sw_name     = _gsw
-                                    _gen_sw_ver      = _gver
-                                    _gen_sw_affected = f"{_gsw} {_gver}"
-
-                        # ── Plugin comment → Software Version Identified ──────
-                        # "<!-- This site is optimized with the Yoast SEO plugin v27.2 ... -->"
-                        # Extract "Yoast SEO plugin v27.2" into a secondary finding.
-                        elif "plugin" in _inner.lower():
-                            _pm = _PLUGIN_VER_RE.search(_inner)
-                            if _pm:
-                                _plug_words = _pm.group(1).strip().split()
-                                # Strip leading noise words (articles, prepositions, etc.)
-                                while _plug_words and _plug_words[0].lower() in _PLUGIN_STOP:
-                                    _plug_words.pop(0)
-                                if _plug_words:
-                                    _plug_name = " ".join(_plug_words)   # "Yoast SEO plugin"
-                                    _plug_ver  = _pm.group(2)            # "v27.2" (preserved)
-                                    _plug_ver_clean = _plug_ver.lstrip("vV")  # "27.2" for dedup
-                                    _sw_key = (_plug_name.lower(), _plug_ver_clean, _url_host.lower())
-                                    if _sw_key not in self._sw_seen:
-                                        self._sw_seen.add(_sw_key)
-                                        _gen_sw_name     = _plug_name
-                                        _gen_sw_ver      = _plug_ver_clean
-                                        _gen_sw_affected = f"{_plug_name} {_plug_ver}"
-
-                    # ── Credit Cards ──────────────────────────────────────────
-                    elif category == "Credit Cards":
-                        _cc_digits = re.sub(r"\D", "", val)
-                        if not _luhn_check(_cc_digits):
-                            continue
-                        # Reject repeating-digit patterns (e.g. 4444444444444)
-                        if len(set(_cc_digits)) <= 2:
-                            continue
-                        _title    = f"{category} pattern detected: {val[:80]}"
-                        _affected = url
-                        _url_arg  = url
-                        _host_arg = _domain
-                        _source   = "OSift-Crawl"
-
-                    # ── All other categories ──────────────────────────────────
-                    else:
-                        _title    = f"{category} pattern detected: {val[:80]}"
-                        _affected = url
-                        _url_arg  = url
-                        _host_arg = ""
-                        _source   = "OSift-Crawl"
-
-                    ts       = datetime.datetime.now(_UTC).isoformat()
-                    safe_cat = re.sub(r'[^\w]', '_', category).lower()
-                    cat_file = self.output_dir.parent / "sensitive_data" / f"{safe_cat}.jsonl"
-
-                    # Per-category risk levels.  Only secrets / credentials
-                    # warrant HIGH; recon intel (emails, phones, IPs, comments)
-                    # is informational.
-                    _CATEGORY_RISK = {
-                        "Email Addresses": "info",
-                        "Phone Numbers":   "info",
-                        "IP Addresses":    "info",
-                        "Comments":        "info",
-                        "Internal Paths":  "low",
-                        "Credit Cards":    "critical",
-                        "Social Security": "high",
-                    }
-                    _risk = _CATEGORY_RISK.get(category, "high")
-
-                    # Context-aware downgrade: findings on a known default page
-                    # are public knowledge, not real disclosure.
-                    if _default_page_label:
-                        if category == "Internal Paths":
-                            _risk = "low"
-                        elif category == "Comments":
-                            _risk = "info"
-
-                    fid = add_finding(
-                        self.data, _source,
-                        "sensitive_data", category, _risk,
-                        _title,
-                        url=_url_arg, affected=_affected,
-                        host=_host_arg,
-                        email=_email_arg,
-                        phone=_phone_arg,
-                        timestamp=ts,
-                        matched_value=val[:200],
-                        pattern=pattern,
-                        output_file=content_file or str(page_file),
-                    )
-
-                    # (Phone-validator confirmation is now folded into the
-                    # primary finding — no separate Confirmed finding emitted.)
-
-                    # Generator/plugin-comment secondary: "Software Version Identified"
-                    # Emitted when a <!-- Generator: Name Ver --> or plugin ver comment parsed.
-                    if _gen_sw_affected:
-                        add_finding(
-                            self.data, "OSift-Crawl",
-                            "software_version", CAT_WEB, "info",
-                            "Software Version Identified",
-                            domain=_domain,
-                            affected=f"{_gen_sw_name} {_gen_sw_ver} — {url}",
-                            timestamp=ts,
-                            software=_gen_sw_name,
-                            version=_gen_sw_ver,
-                            output_file=content_file or str(page_file),
-                        )
-
-                    finding = {
-                        "finding_id":   fid,
-                        "url":          url,
-                        "category":     category,
-                        "value":        val[:200],
-                        "pattern":      pattern,
-                        "tool":         _source,
-                        "tool_version": VERSION,
-                        "timestamp":    ts,
-                        "validated":    _source in ("phone-validator", "ssn-validator"),
-                    }
-                    findings.append(finding)
-                    with open(cat_file, "a", encoding="utf-8") as f:
-                        f.write(json.dumps(finding) + "\n")
-        return findings
-
-    def _add_email_crawl(self, email: str, url: str):
-        email = email.lower().strip()
-        if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
-            return
-        _, _dom = email.rsplit("@", 1)
-        if _dom in ("example.com", "exemple.com", "example.org", "exemple.org",
-                    "example.net", "exemple.net", "localhost", "sentry.io",
-                    "openssh.com"):
-            return
-        rec = self.data.email_addresses.setdefault(email, {"sources": [], "context": url, "breach": False})
-        if "web_crawl" not in rec["sources"]:
-            rec["sources"].append("web_crawl")
-
-    def _detect_technologies(self, url: str, headers):
-        server  = headers.get("server", "").lower()
-        powered = headers.get("x-powered-by", "").lower()
-        via     = headers.get("via", "").lower()
-        tech_map = {
-            "nginx": "Nginx", "apache": "Apache", "iis": "IIS", "cloudflare": "Cloudflare",
-            "php": "PHP", "asp.net": "ASP.NET", "express": "Express.js", "tomcat": "Apache Tomcat",
-            "wordpress": "WordPress", "drupal": "Drupal", "joomla": "Joomla",
-        }
-        domain = urllib.parse.urlparse(url).netloc
-        techs  = self.data.technologies.setdefault(domain, [])
-        for key, name in tech_map.items():
-            if (key in server or key in powered or key in via) and name not in techs:
-                techs.append(name)
-
-    def _scan_software_versions(self, url: str, headers, text: str,
-                               content_file: str = "") -> None:
-        """
-        Detect (software, version) pairs from HTTP response headers and page body.
-        Creates one deduplicated "Software Version Identified" finding per unique
-        (software, version, host) tuple — one finding per subdomain per package.
-        """
-        _parsed   = urllib.parse.urlparse(url)
-        _host     = (_parsed.hostname or self.data.domain).lower().rstrip(".")
-        _ts       = datetime.datetime.now(_UTC).isoformat()
-        _safe_url = re.sub(r'[^\w-]', '_', url)[:100]
-        _ev_file  = content_file or str(
-            self.output_dir / "pages" / f"{_safe_url}.json"
-        )
-
-        def _emit(software: str, version: str) -> None:
-            software = software.strip()
-            version  = version.strip()
-            if not software or not version:
-                return
-            # Reject implausible version strings (e.g. pure dates, very long strings)
-            if len(version) > 20 or len(software) > 60:
-                return
-            key = (software.lower(), version, _host)
-            if key in self._sw_seen:
-                return
-            self._sw_seen.add(key)
-            add_finding(
-                self.data, "OSift-Crawl",
-                "software_version", CAT_WEB, "info",
-                "Software Version Identified",
-                domain=self.data.domain,
-                affected=f"{software} {version} — {url}",
-                timestamp=_ts,
-                software=software,
-                version=version,
-                output_file=_ev_file,
-            )
-
-        # ── HTTP response headers ─────────────────────────────────────────────
-        for hdr in ("server", "x-powered-by", "x-generator", "x-cms", "x-aspnet-version",
-                    "x-aspnetmvc-version", "x-drupal-cache", "x-wp-total"):
-            val = headers.get(hdr, "").strip()
-            if not val:
-                continue
-            # x-aspnet-version and x-aspnetmvc-version carry the version directly
-            if hdr in ("x-aspnet-version", "x-aspnetmvc-version"):
-                sw_name = "ASP.NET" if "mvc" not in hdr else "ASP.NET MVC"
-                _emit(sw_name, val.split(";")[0].strip())
-                continue
-            m = _SW_HDR_RE.match(val)
-            if m:
-                _emit(m.group(1).strip(), m.group(2))
-
-        # ── HTML meta generator tag ───────────────────────────────────────────
-        for m in _META_GEN_RE.finditer(text):
-            content = (m.group(1) or m.group(2) or "").strip()
-            if content:
-                gm = _META_GEN_VER_RE.match(content)
-                if gm:
-                    _emit(gm.group(1).strip(), gm.group(2))
-
-        # ── HTML / JS body patterns ───────────────────────────────────────────
-        for pat, ng, vg in _SW_BODY_PATS:
-            for match in re.findall(pat, text, re.IGNORECASE):
-                name_raw = match[ng - 1] if isinstance(match, tuple) else match
-                ver_raw  = match[vg - 1] if isinstance(match, tuple) else ""
-                if name_raw and ver_raw:
-                    _emit(name_raw, ver_raw)
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 1.5 — PASSIVE OSINT TOOL SUITE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -12213,201 +11874,6 @@ class WaybackURLsRunner:
         ep_file  = self.out / f"wayback_endpoints{_suffix}.txt"
         ep_file.write_text("\n".join(sorted(patterns)[:5000]), encoding="utf-8")
 
-
-# ─── WappalyzerScanner ────────────────────────────────────────────────────────
-
-class WappalyzerScanner:
-    """
-    Wappalyzer (s0md3v / python-native) — technology fingerprinting.
-
-    Identifies 3,000+ technologies (frameworks, CMSes, analytics, CDNs, server
-    software, SaaS, security products) from HTTP response headers, HTML meta
-    tags, cookies, script paths, and JS variable names — without a headless
-    browser.
-
-    Runs against all live web hosts discovered during previous phases:
-      • data.subdomains where http_status is not None
-      • Additional hosts derived from data.crawled_urls
-
-    Results are merged into data.technologies and produce per-host findings.
-
-    Output:
-      web/wappalyzer/
-        wappalyzer_results.json  — per-host technology breakdown
-
-    Placement: Phase 1.5 Wave C — after Phase 8 web crawl so the full set of
-    live hosts is known.
-    """
-
-    _REQUEST_TIMEOUT = 10
-    _MAX_HOSTS       = 100   # cap to avoid runaway requests on large scopes
-
-    def __init__(
-        self,
-        domain: str,
-        company: str,
-        output_dir: Path,
-        log: "ReconLogger",
-        data: "ReconData",
-    ):
-        self.domain  = domain
-        self.company = company
-        self.out     = _domain_path(output_dir, domain) / "tools" / "wappalyzer"
-        self.log     = log
-        self.data    = data
-        self.out.mkdir(parents=True, exist_ok=True)
-
-    def run(self) -> int:
-        try:
-            from wappalyzer import Wappalyzer  # type: ignore
-        except ImportError:
-            self.log.warning(
-                "[wappalyzer] Python package not available — skipping.\n"
-                "        Install: pip install wappalyzer"
-            )
-            return 0
-
-        # Pre-check: Playwright Node.js driver must be installed for
-        # python-wappalyzer to function.  Without it, every analyze()
-        # call triggers noisy asyncio "Task exception was never retrieved"
-        # errors and MODULE_NOT_FOUND spam on stderr.
-        try:
-            import playwright._impl._driver as _pw_drv
-            _drv_exec = _pw_drv.compute_driver_executable()
-            if not Path(_drv_exec).exists():
-                raise FileNotFoundError(_drv_exec)
-        except Exception:
-            self.log.warning(
-                "[wappalyzer] Playwright Node.js driver not installed — skipping.\n"
-                "        Fix: playwright install chromium"
-            )
-            return 0
-
-        # Collect live web hosts
-        targets: List[str] = self._collect_targets()
-        if not targets:
-            self.log.info("[wappalyzer] No live web hosts found to fingerprint")
-            return 0
-
-        try:
-            import importlib.metadata as _imm
-            _wap_ver = _imm.version("wappalyzer")
-        except Exception:
-            _wap_ver = "unknown"
-        TOOL_REGISTRY.register("wappalyzer", _wap_ver)
-        self.log.set_tool_context("wappalyzer")
-        self.log.info(f"[wappalyzer] Fingerprinting {len(targets)} web targets")
-
-        wap = Wappalyzer()
-        results: Dict[str, Any] = {}
-        found_count = 0
-
-        for url in targets[:self._MAX_HOSTS]:
-            try:
-                detected = wap.analyze(url)
-                techs = detected.get("technologies", [])
-                if not techs:
-                    continue
-                host = urllib.parse.urlparse(url).hostname or url
-                results[url] = techs
-                found_count += len(techs)
-
-                # Merge into data.technologies
-                for tech in techs:
-                    name = tech.get("name", "")
-                    cats = tech.get("categories", [])
-                    if not name:
-                        continue
-                    cat_key = cats[0] if cats else "Other"
-                    tech_list = self.data.technologies.setdefault(cat_key, [])
-                    entry = {"name": name, "host": host, "source": "wappalyzer"}
-                    if entry not in tech_list:
-                        tech_list.append(entry)
-
-                    # Create finding for notable technologies
-                    if any(c in str(cats) for c in
-                           ["CMS", "E-commerce", "Security", "Authentication",
-                            "Web frameworks", "JavaScript frameworks", "Database"]):
-                        add_finding(
-                            self.data,
-                            tool="wappalyzer",
-                            type_="technology_fingerprint",
-                            category=CAT_WEB,
-                            severity="info",
-                            detail=(
-                                f"Wappalyzer identified {name} "
-                                f"({', '.join(str(c) for c in cats)})"
-                            ),
-                            host=host, url=url, affected=host,
-                            technology=name,
-                            categories=cats,
-                            output_file=str(self.out / "wappalyzer_results.json"),
-                        )
-
-                self.log.info(f"[wappalyzer] {host}: {', '.join(t['name'] for t in techs[:5])}")
-
-            except Exception as exc:
-                self.log.debug(f"[wappalyzer] {url}: {exc}")
-                continue
-
-        # Write results
-        out_json = self.out / "wappalyzer_results.json"
-        out_json.write_text(
-            json.dumps(results, indent=2, default=str), encoding="utf-8"
-        )
-
-        if found_count:
-            add_finding(
-                self.data,
-                tool="wappalyzer",
-                type_="technology_fingerprint_summary",
-                category=CAT_WEB,
-                severity="info",
-                detail=(
-                    f"Wappalyzer identified {found_count} technologies across {len(results)} web targets"
-                ),
-                domain=self.domain, affected=self.domain,
-                output_file=str(self.out / "wappalyzer_results.json"),
-            )
-
-        self.log.success(
-            f"[wappalyzer] Complete — {found_count} tech detections across {len(results)} hosts"
-        )
-        return found_count
-
-    def _collect_targets(self) -> List[str]:
-        """Build a list of HTTP URLs for fingerprinting from ReconData."""
-        urls: List[str] = []
-        seen_hosts: set = set()
-
-        # Primary domain
-        for scheme in ("https", "http"):
-            urls.append(f"{scheme}://{self.domain}")
-        seen_hosts.add(self.domain)
-
-        # Subdomains with confirmed HTTP response
-        for host, meta in self.data.subdomains.items():
-            if host in seen_hosts:
-                continue
-            status = meta.get("http_status")
-            if status and str(status).startswith(("1", "2", "3", "4")):
-                urls.append(f"https://{host}")
-                seen_hosts.add(host)
-
-        # Extract unique hosts from crawled URLs
-        for url in list(self.data.crawled_urls.keys())[:500]:
-            try:
-                host = urllib.parse.urlparse(url).hostname or ""
-                host = host.lower().rstrip(".")
-                if host and host.endswith(self.domain) and host not in seen_hosts:
-                    urls.append(f"https://{host}")
-                    seen_hosts.add(host)
-            except Exception:
-                continue
-
-        return urls
-
-
 # ─── MaigretRunner ────────────────────────────────────────────────────────────
 
 class MaigretRunner:
@@ -12847,8 +12313,7 @@ class CloudEnumRunner:
         cloud_enum_output.txt    — raw tool output
         cloud_enum_findings.json — parsed bucket URLs
 
-    Placement: Phase 1.5 Wave C — after Phase 6 company intel, alongside
-    WappalyzerScanner.
+    Placement: Phase 1.5 Wave C — after Phase 6 company intel.
     """
 
     def __init__(
@@ -13314,8 +12779,8 @@ class PassiveOSINTOrchestrator:
     Phase 7 tools (concurrent) — EmailHarvester + maigret + TruffleHog
       Runs alongside Phase 7 EmailAndPeopleOSINT for social and secret intelligence.
 
-    Wave C (concurrent) — WappalyzerScanner + CloudEnumRunner
-      Run after Phase 8 web crawl so the full set of live hosts is known.
+    Wave C (concurrent) — CloudEnumRunner
+      Run after web crawl so the full set of live hosts is known.
 
     Results flow into ReconData and are available to all subsequent phases.
     """
@@ -13332,7 +12797,6 @@ class PassiveOSINTOrchestrator:
         skip_passive: bool = False,
         github_org: str = "",
         skip_wayback: bool = False,
-        skip_wappalyzer: bool = False,
         skip_cloud_enum: bool = False,
     ):
         self.domain             = domain
@@ -13345,7 +12809,6 @@ class PassiveOSINTOrchestrator:
         self.skip_passive       = skip_passive
         self.github_org         = github_org
         self.skip_wayback       = skip_wayback
-        self.skip_wappalyzer    = skip_wappalyzer
         self.skip_cloud_enum    = skip_cloud_enum
 
     def run_wave_a(self) -> None:
@@ -13424,20 +12887,13 @@ class PassiveOSINTOrchestrator:
 
     def run_wave_c(self) -> None:
         """
-        WappalyzerScanner + CloudEnumRunner — concurrent, after Phase 8 crawl.
+        CloudEnumRunner — concurrent, after Phase 8 crawl.
         Requires: data.subdomains with http_status populated by prior phases.
         """
         if self.skip_passive:
             return
 
         tasks: List[Any] = []
-
-        if not self.skip_wappalyzer:
-            tasks.append(
-                WappalyzerScanner(
-                    self.domain, self.company, self.output_dir, self.log, self.data,
-                )
-            )
 
         if not self.skip_cloud_enum:
             tasks.append(
@@ -13529,9 +12985,6 @@ class PassiveOSINTOrchestrator:
 #   DNS & Host Validation
 #     dnsx        — multi-threaded DNS resolver / validator
 #
-#   TLS / Certificate Intelligence
-#     tlsx        — fast TLS handshake + cert extraction at scale
-#
 #   CDN & Cloud Detection
 #     cdncheck    — classify IPs/hosts as CDN / cloud / WAF
 #
@@ -13550,8 +13003,8 @@ class PassiveOSINTOrchestrator:
 # Execution ordering (based on data availability):
 #   Wave A (domain only needed) — subfinder, chaos               ← runs during Phase 1
 #   Wave B (after Wave A)       — shuffledns, dnsx               ← consolidates subdomains
-#   Wave C (after IPs known)    — tlsx, cdncheck, asnmap, uncover← after Phase 4
-#   Wave D (after live hosts)   — katana                         ← after Phase 3 certs
+#   Wave C (after IPs known)    — cdncheck, asnmap, uncover      ← after Phase 4
+#   Wave D (after live hosts)   — katana (passive)               ← after Phase 4
 #   Wave E (standalone)         — cloudlist                      ← alongside Phase 6
 #
 # Each tool is checked → if missing: go install (auto) → fail nicely if no Go
@@ -13565,7 +13018,6 @@ _PD_TOOLS: Dict[str, str] = {
     "chaos":      "github.com/projectdiscovery/chaos-client/cmd/chaos@latest",
     "shuffledns": "github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest",
     "dnsx":       "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
-    "tlsx":       "github.com/projectdiscovery/tlsx/cmd/tlsx@latest",
     "cdncheck":   "github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest",
     "katana":     "github.com/projectdiscovery/katana/cmd/katana@latest",
     "asnmap":     "github.com/projectdiscovery/asnmap/cmd/asnmap@latest",
@@ -14705,407 +14157,6 @@ class ShodanCLIRunner:
                     break
         return sorted(ports, key=lambda s: int(s.split("/")[0]))
 
-
-class PDTlsx:
-    """
-    tlsx — fast TLS handshake and certificate data extraction.
-
-    CLI flags used:
-      -l FILE       input list of hosts
-      -san          extract Subject Alternative Names
-      -cn           extract Common Name
-      -so           subject organisation
-      -tv           TLS version
-      -cipher       cipher suite
-      -expired      flag expired certs
-      -self-signed  flag self-signed certs
-      -mismatched   flag hostname mismatches
-      -json         JSON output per host
-      -o FILE       output file
-      -t 100        threads
-      -timeout 5    seconds per handshake
-      -silent       suppress banner
-
-    Runs in Wave C (after IPs/hosts known).
-    New subdomains discovered from SANs are merged back.
-    """
-
-    def __init__(self, domain: str, output_dir: Path, log: "ReconLogger", data: "ReconData"):
-        self.domain = domain
-        self.out    = _domain_path(output_dir, domain) / "certificates" / "tlsx"
-        self._root_tlsx = output_dir / "certificates" / "tlsx"
-        self.log    = log
-        self.data   = data
-        self.out.mkdir(parents=True, exist_ok=True)
-        self._root_tlsx.mkdir(parents=True, exist_ok=True)
-
-    def run(self) -> int:
-        binary = _pd_binary("tlsx")
-        if not shutil.which(binary) and not os.path.isfile(binary):
-            self.log.warning("[tlsx] Binary not found — skipping")
-            return 0
-        _vc.status("tool_tlsx", label="tlsx (TLS cert extraction at scale)",
-                   status="running", active_tool="certificates/tlsx")
-
-        hosts = list(self.data.subdomains.keys())
-        if not hosts:
-            self.log.info("[tlsx] No hosts to scan — skipping")
-            return 0
-
-        TOOL_REGISTRY.query_and_register(binary, "tlsx")
-        self.log.set_tool_context("tlsx")
-
-        input_file = _write_hosts_file(hosts, self.out.parent.parent, "tlsx_input.txt")
-        out_json   = self.out / "tlsx_results.json"
-
-        # tlsx forbids -san/-cn combined with other probes (-tv/-cipher).
-        # Run two passes: (1) SAN/CN extraction, (2) TLS version + cipher.
-        out_san  = self.out / "tlsx_san.json"
-        out_tls  = self.out / "tlsx_tls.json"
-
-        # Cap concurrency — tlsx buffers full cert chains per goroutine;
-        # at -c 100 it consumed 2.7 GB and triggered the OOM killer on a
-        # 6 GB box running SS3 concurrently.  Tie to the adaptive limit
-        # (hardware-aware) with an upper bound of 25.
-        _tlsx_c = min(25, _SCAN_CONCURRENCY)
-
-        cmd_san = (
-            f'"{binary}" -l "{input_file}" '
-            f"-san -cn "
-            f'-json -o "{out_san}" '
-            f"-c {_tlsx_c} -timeout 5 -silent"
-        )
-        cmd_tls = (
-            f'"{binary}" -l "{input_file}" '
-            f"-tv -cipher "
-            f"-expired -self-signed -mismatched "
-            f'-json -o "{out_tls}" '
-            f"-c {_tlsx_c} -timeout 5 -silent"
-        )
-
-        self.log.info(f"[tlsx] TLS fingerprinting {len(hosts)} hosts")
-
-        _tlsx_timeout = min(60 * len(hosts), 600)  # ~60s/host, cap at 10 min per pass
-        _OOM_SIGNATURES = ("cannot allocate memory", "out of memory", "runtime: out of memory")
-
-        stdout1, stderr1, rc1 = _shell_go(cmd_san, timeout=_tlsx_timeout)
-        self.log.log_command(cmd_san, stdout1, stderr1, rc1)
-        _san_oom = rc1 != 0 and any(s in (stderr1 or "") for s in _OOM_SIGNATURES)
-        if rc1 != 0:
-            _lvl = "error" if _san_oom or rc1 == -1 else "warning"
-            getattr(self.log, _lvl)(f"[tlsx] SAN/CN pass exited with code {rc1}" + (f": {_strip_ansi(stderr1)[:200]}" if stderr1 else ""))
-
-        stdout2, stderr2, rc2 = _shell_go(cmd_tls, timeout=_tlsx_timeout)
-        self.log.log_command(cmd_tls, stdout2, stderr2, rc2)
-        _tls_oom = rc2 != 0 and any(s in (stderr2 or "") for s in _OOM_SIGNATURES)
-        if rc2 != 0:
-            _lvl = "error" if _tls_oom or rc2 == -1 else "warning"
-            getattr(self.log, _lvl)(f"[tlsx] TLS version pass exited with code {rc2}" + (f": {_strip_ansi(stderr2)[:200]}" if stderr2 else ""))
-
-        if _san_oom or _tls_oom:
-            _which = "SAN/CN" if _san_oom else "TLS version"
-            if _san_oom and _tls_oom:
-                _which = "both SAN/CN and TLS version"
-            _record_timeout_action_item(
-                "tlsx", self.domain,
-                f"tlsx {_which} pass crashed with out-of-memory error while "
-                f"scanning {len(hosts)} hosts for {self.domain}. "
-                f"Re-run tlsx manually with reduced concurrency (-c 5) or on "
-                f"a host with more available RAM to complete TLS certificate "
-                f"extraction.",
-                hostname=self.domain,
-                priority="HIGH",
-            )
-
-        rc = rc1 if rc1 != 0 else rc2
-        if rc1 != 0 and rc2 != 0:
-            _write_placeholder(self.out, "tlsx_results.json",
-                               cmd_san, f"(tlsx exited with code {rc1})")
-
-        # Merge results: SAN/CN pass is primary, overlay TLS version/cipher
-        # AND security flags (self_signed, expired, mismatched, untrusted)
-        # which may only appear in the TLS pass that uses the detection flags.
-        san_records = _parse_jsonl(out_san)
-        tls_records = _parse_jsonl(out_tls)
-        tls_by_host = {}
-        for t in tls_records:
-            tls_by_host[t.get("host", "")] = t
-        _MERGE_FIELDS = ("tls_version", "cipher", "self_signed", "expired",
-                         "mismatched", "untrusted", "wildcard_certificate",
-                         "client_cert_required")
-        for s in san_records:
-            overlay = tls_by_host.get(s.get("host", ""), {})
-            for _mf in _MERGE_FIELDS:
-                _mv = overlay.get(_mf)
-                if _mv is not None and not s.get(_mf):
-                    s[_mf] = _mv
-
-        # Write merged output for downstream consumers
-        try:
-            with open(out_json, "w", encoding="utf-8") as fh:
-                for rec in san_records:
-                    fh.write(json.dumps(rec) + "\n")
-        except Exception:
-            pass
-
-        records     = san_records
-        san_new     = 0
-        cert_count  = 0
-        flagged     = 0
-        _appliance_seen: set = set()
-
-        # Accumulators for grouped findings (emitted after the per-entry loop)
-        _wc_certs:    Dict[str, List[str]] = {}   # wildcard CN → [hosts]
-        _tls12_hosts: List[str]            = []   # hosts with TLS 1.2 only
-        _mismatch_entries: "List[tuple]"   = []   # (host, cert_cn) pairs
-
-        # Build scope set: primary domain + all configured domains
-        _scope_set = set(self.data.domains if self.data.domains else [])
-        _scope_set.add(self.domain)
-        _scope_set = {d.lower().rstrip(".") for d in _scope_set if d}
-
-        def _host_in_scope(h: str) -> bool:
-            h = h.lower().rstrip(".")
-            return any(h == sd or h.endswith("." + sd) for sd in _scope_set)
-
-        # RFC 1918 / link-local patterns for internal IP detection in SANs
-        _INTERNAL_RE = re.compile(
-            r'^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.)'
-        )
-
-        for entry in records:
-            host = entry.get("host", "").split(":")[0].lower()
-            cert_count += 1
-
-            # Build cert record (always — even for out-of-scope hosts)
-            cert_rec: Dict[str, Any] = {
-                "hostname":      host,
-                "source":        "tlsx",
-                "common_name":   entry.get("subject_cn", ""),
-                "issuer":        entry.get("issuer_cn", ""),
-                "not_before":    entry.get("not_before", ""),
-                "not_after":     entry.get("not_after", ""),
-                "tls_version":   entry.get("tls_version", ""),
-                "cipher":        entry.get("cipher", ""),
-                "alt_names":     entry.get("subject_an", []),
-                "self_signed":   entry.get("self_signed", False),
-                "expired":       entry.get("expired", False),
-                "mismatched":    entry.get("mismatched", False),
-                "untrusted":     entry.get("untrusted", False),
-            }
-            self.data.certificates.append(cert_rec)
-
-            # Gate all findings on host being in scope
-            if not _host_in_scope(host):
-                # Still harvest SANs even for out-of-scope hosts
-                for san in entry.get("subject_an", []):
-                    san = san.lstrip("*.").lower().rstrip(".")
-                    if any(san.endswith(sd) or san == sd for sd in _scope_set) and san not in self.data.subdomains:
-                        self.data.subdomains[san] = {
-                            "sources": ["tlsx_san"], "ips": [], "ports": [], "http_status": None
-                        }
-                        san_new += 1
-                continue
-
-            _tv  = entry.get("tls_version", "")
-            _cip = entry.get("cipher", "")
-            _cn  = entry.get("subject_cn", "")
-
-            # ── Known-vulnerable appliance detection ──────────────────
-            flagged += _check_appliance_fingerprints(
-                entry, host, self.data, _seen=_appliance_seen,
-                output_file=str(self.out / "tlsx_results.json"),
-            )
-
-            # ── Expired certificate ───────────────────────────────────────
-            if entry.get("expired"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_expired", CAT_TLS, "HIGH",
-                    "The server's TLS certificate has passed its expiry date, causing browser trust errors and indicating a breakdown in certificate lifecycle management.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS Certificate: Expired",
-                    remediation="Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
-                    output_file=str(self.out / "tlsx_results.json"),
-                )
-                flagged += 1
-
-            # ── Self-signed certificate ───────────────────────────────────
-            if entry.get("self_signed"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_self_signed", CAT_TLS, "MEDIUM",
-                    "The server presented a self-signed TLS certificate that is not anchored to a publicly trusted CA, preventing clients from verifying the server's identity and enabling trivial MITM attacks.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS Certificate: Self-Signed",
-                    remediation="Replace self-signed certificates with certificates issued by a trusted CA; use ACME/Let's Encrypt for cost-free automation.",
-                    output_file=str(self.out / "tlsx_results.json"),
-                )
-                flagged += 1
-
-            # ── Hostname mismatch (accumulated, emitted as grouped finding) ──
-            if entry.get("mismatched"):
-                _served_cn = _cn or "(unknown)"
-                _mismatch_entries.append((host, _served_cn))
-
-            # ── Untrusted certificate chain ───────────────────────────────
-            if entry.get("untrusted"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_untrusted", CAT_TLS, "MEDIUM",
-                    f"The TLS certificate chain presented by {host} is not trusted — the issuing CA is not in standard trust stores. "
-                    f"Issuer: {entry.get('issuer_cn', 'unknown')}. "
-                    f"Clients connecting to this host will receive certificate warnings, and MITM attacks become trivial to execute.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="SSL/TLS Certificate: Untrusted Chain",
-                    remediation="Replace the certificate with one issued by a publicly trusted CA. If internal-only, deploy the private CA root to all clients via group policy or MDM.",
-                    output_file=str(self.out / "tlsx_results.json"),
-                )
-                flagged += 1
-
-            # ── Collect grouped findings (emitted after the loop) ─────────
-            # Wildcard: group by certificate CN so we get one finding per
-            # unique wildcard cert, not one per host.
-            if entry.get("wildcard_certificate") and _cn:
-                _wc_certs.setdefault(_cn, []).append(host)
-
-            # TLS version: per-host for deprecated (1.0/1.1 = HIGH),
-            # grouped for TLS-1.2-only (INFO — many hosts share this).
-            _tv_low = _tv.lower().replace(" ", "")
-            if _tv_low in ("tls10", "tls1.0", "tls1"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_deprecated_version", CAT_TLS, "HIGH",
-                    f"{host} supports TLS 1.0, which has known cryptographic weaknesses (BEAST, POODLE) and is prohibited by PCI DSS 3.2+ and NIST SP 800-52r2.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="Deprecated Protocol Enabled: TLSv1.0",
-                    remediation="Disable TLS 1.0 on the server and require TLS 1.2 or higher. Update client compatibility requirements if necessary.",
-                    output_file=str(self.out / "tlsx_results.json"),
-                )
-                flagged += 1
-            elif _tv_low in ("tls11", "tls1.1"):
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_deprecated_version", CAT_TLS, "HIGH",
-                    f"{host} supports TLS 1.1, which is deprecated by all major browsers and prohibited by PCI DSS 3.2+ and NIST SP 800-52r2.",
-                    host=host, affected=host,
-                    tls_version=_tv, cipher=_cip,
-                    title="Deprecated Protocol Enabled: TLSv1.1",
-                    remediation="Disable TLS 1.1 on the server and require TLS 1.2 or higher.",
-                    output_file=str(self.out / "tlsx_results.json"),
-                )
-                flagged += 1
-            elif _tv_low in ("tls12", "tls1.2"):
-                _tls12_hosts.append(host)
-
-            # ── Internal IP address leaked in SAN ─────────────────────────
-            _leaked_ips = [s for s in entry.get("subject_an", []) if _INTERNAL_RE.match(s)]
-            if _leaked_ips:
-                add_finding(
-                    self.data, "tlsx",
-                    "tls_internal_ip_leak", CAT_INFRA, "LOW",
-                    f"The TLS certificate for {host} (CN: {_cn}) contains internal/private IP address(es) ({', '.join(_leaked_ips)}) in its Subject Alternative Name list. "
-                    f"This leaks internal network topology to external observers.",
-                    host=host, affected=f"{host} (SAN: {', '.join(_leaked_ips)})",
-                    tls_version=_tv, cipher=_cip,
-                    title="TLS Certificate: Internal IP Address in SAN",
-                    remediation="Re-issue the certificate without internal IP addresses in the SAN list. Use split-horizon DNS or separate internal certificates for private services.",
-                    output_file=str(self.out / "tlsx_results.json"),
-                )
-                flagged += 1
-
-            # Harvest SANs for new subdomains
-            for san in entry.get("subject_an", []):
-                san = san.lstrip("*.").lower().rstrip(".")
-                if any(san.endswith(sd) or san == sd for sd in _scope_set) and san not in self.data.subdomains:
-                    self.data.subdomains[san] = {
-                        "sources": ["tlsx_san"], "ips": [], "ports": [], "http_status": None
-                    }
-                    san_new += 1
-
-        # ── Emit grouped findings ────────────────────────────────────────
-
-        # Hostname mismatches — one merged finding, all hosts in affected
-        if _mismatch_entries:
-            _mm_lines = [f"{h}|--|{cn}" for h, cn in _mismatch_entries]
-            _mm_affected = "\n".join(_mm_lines)
-            _mm_hostnames = ", ".join(sorted(set(h for h, _ in _mismatch_entries)))
-            add_finding(
-                self.data, "tlsx",
-                "tls_mismatched", CAT_TLS, "MEDIUM",
-                f"{len(_mismatch_entries)} hostname(s) present TLS certificates whose Common Name / SAN "
-                f"does not match the requested hostname. This causes browser trust warnings and may indicate "
-                f"misconfigured virtual hosts, shared hosting, or decommissioned services still accepting connections.",
-                host=_mm_hostnames, affected=_mm_affected,
-                title="SSL/TLS Certificate: Hostname Mismatch",
-                remediation="Ensure each externally-facing hostname is served by a certificate whose CN or SAN list includes that hostname. Remove DNS records for decommissioned services.",
-                output_file=str(self.out / "tlsx_results.json"),
-            )
-            flagged += 1
-
-        for _wc_cn, _wc_hosts in _wc_certs.items():
-            _affected = "\n".join(sorted(set(_wc_hosts)))
-            add_finding(
-                self.data, "tlsx",
-                "tls_wildcard", CAT_TLS, "INFO",
-                f"A wildcard TLS certificate (CN: {_wc_cn}) is in use on {len(_wc_hosts)} host(s). "
-                f"Wildcard certificates simplify management but increase blast radius if the private key is compromised — "
-                f"any subdomain under the wildcard scope can be impersonated.",
-                host=self.domain, affected=_affected,
-                title="SSL/TLS Certificate: Wildcard in Use",
-                remediation="Evaluate whether single-host certificates or shorter-lived automated certificates (ACME) would reduce risk. Ensure wildcard private keys are stored securely and rotated regularly.",
-                output_file=str(self.out / "tlsx_results.json"),
-            )
-            flagged += 1
-
-        if _tls12_hosts:
-            _affected = "\n".join(sorted(set(_tls12_hosts)))
-            add_finding(
-                self.data, "tlsx",
-                "tls_legacy_version", CAT_TLS, "INFO",
-                f"{len(_tls12_hosts)} host(s) negotiated TLS 1.2 as the highest supported version. "
-                f"While TLS 1.2 remains acceptable, TLS 1.3 offers improved security "
-                f"(removal of legacy ciphers, faster handshakes, forward secrecy by default).",
-                host=self.domain, affected=_affected,
-                title="SSL/TLS: TLS 1.3 Not Supported",
-                remediation="Enable TLS 1.3 on the server alongside TLS 1.2 to benefit from stronger cipher suites and reduced handshake latency.",
-                output_file=str(self.out / "tlsx_results.json"),
-            )
-            flagged += 1
-
-        # Persist parsed output
-        (self.out / "tlsx_parsed.json").write_text(
-            json.dumps(records, indent=2, default=str), encoding="utf-8"
-        )
-        # Root-level summary so Vantage file-presence check detects completion
-        # (per-domain output lives under domains/<domain>/certificates/tlsx/)
-        try:
-            _summary = {
-                "domain": self.domain, "certs": cert_count,
-                "san_new": san_new, "flagged": flagged,
-                "records": len(records),
-            }
-            (self._root_tlsx / "tlsx_summary.json").write_text(
-                json.dumps(_summary, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            pass
-        if not records:
-            self.log.info("[tlsx] No TLS certificate records returned")
-            _write_placeholder(self.out, "tlsx_results.json",
-                               cmd_san, "(tlsx returned no TLS certificate data)")
-        self.log.success(
-            f"[tlsx] {cert_count} certs | {san_new} new SAN subdomains | {flagged} TLS issues flagged"
-        )
-        _vc.status("tool_tlsx", label="tlsx (TLS cert extraction at scale)",
-                   status="complete", active_tool="certificates/tlsx")
-        return cert_count
-
-
 class PDCdncheck:
     """
     cdncheck — classify IPs and hostnames as CDN / cloud / WAF / monitoring.
@@ -15268,6 +14319,7 @@ class PDKatana:
 
         cmd = (
             f'"{binary}" -list "{seed_file}" '
+            f"-passive "
             f"-d {self.max_depth} "
             f"-ef {excludes} "
             f"-ct 30 -c 10 -rl 50 "
@@ -15337,7 +14389,7 @@ class PDKatana:
                     for _kt_m in re.finditer(pattern, body, re.IGNORECASE | re.DOTALL):
                         val = _kt_m.group() if isinstance(_kt_m.group(), str) else str(_kt_m.group())
                         _kt_pos = _kt_m.start()
-                        # Context-aware false-positive filters (same as WebCrawler)
+                        # Context-aware false-positive filters
                         if category in ("AWS Keys", "Google API") and _is_base64_context(body, _kt_pos):
                             continue
                         if category == "Google API" and not val.startswith("AIza"):
@@ -15830,8 +14882,8 @@ class ProjectDiscoveryOrchestrator:
 
     Wave A — Domain only (concurrent): subfinder, chaos
     Wave B — After Wave A (concurrent): shuffledns, dnsx
-    Wave C — After IPs known (concurrent): tlsx, cdncheck, asnmap, uncover
-    Wave D — After live hosts: katana
+    Wave C — After IPs known (concurrent): cdncheck, asnmap, uncover
+    Wave D — After live hosts: katana (passive)
     Wave E — Standalone (concurrent with C): cloudlist
 
     Each wave waits for its dependencies before launching.
@@ -15939,12 +14991,10 @@ class ProjectDiscoveryOrchestrator:
 
     # ── Wave C + E (concurrent) ───────────────────────────────────────────────
     def run_wave_c_and_e(self):
-        """tlsx + cdncheck + asnmap + uncover + cloudlist — all concurrent."""
-        self.log.info("[PD] Wave C+E — TLS, CDN, ASN, internet search, cloud assets")
+        """cdncheck + asnmap + uncover + cloudlist — all concurrent."""
+        self.log.info("[PD] Wave C+E — CDN, ASN, internet search, cloud assets")
         tasks = []
 
-        if self.avail.get("tlsx"):
-            tasks.append(PDTlsx(self.domain, self.output_dir, self.log, self.data))
         if self.avail.get("cdncheck"):
             tasks.append(PDCdncheck(self.domain, self.output_dir, self.log, self.data))
         if self.avail.get("asnmap"):
@@ -16872,6 +15922,8 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
             continue
         if _ip_in_ss_scope(ip_addr):
             continue  # already in SS3 target scope — no action item needed
+        if _ip_in_ext_scope(ip_addr):
+            continue  # within project's external scope CIDRs — not out of scope
         fqdns = ip_meta.get("fqdns") or []
         hostname = fqdns[0] if fqdns else ""
         ports = sorted(set(data.open_ports.get(ip_addr, [])))
@@ -17307,7 +16359,6 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         },
         "dns": {
             "records":        data.dns_records,
-            "zone_transfers": data.zone_transfers,
             "subdomains":     data.subdomains,
         },
         "network": {
@@ -17748,7 +16799,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     # Exclude sensitive_data findings from findings.csv — they are voluminous
     # pattern-match hits (API keys, passwords, connection strings, etc.) that
     # belong in the per-category JSONL files produced by aggregate_sensitive_data,
-    # not in the high-level findings table.  Both WebCrawler and katana use
+    # not in the high-level findings table.  Katana uses
     # type="sensitive_data" regardless of the specific pattern category name.
     _csv_findings = [
         f for f in all_findings
@@ -19699,21 +18750,6 @@ class IntelAggregator:
                     records.append({"domain": domain, "type": rtype,
                                     "value": str(values)})
 
-        # Zone transfer entries
-        for zt in self.data.zone_transfers:
-            ns      = zt.get("ns", "")
-            for entry in zt.get("entries", []):
-                if isinstance(entry, dict):
-                    # Spread entry fields but keep type="AXFR" (entry["type"] is
-                    # the individual record type within the zone, stored as "rtype")
-                    row = {"domain": self.data.domain, "type": "AXFR", "ns": ns}
-                    for k, v in entry.items():
-                        row["rtype" if k == "type" else k] = v
-                else:
-                    row = {"domain": self.data.domain, "type": "AXFR",
-                           "ns": ns, "value": str(entry)}
-                records.append(row)
-
         return records
 
     # ── WHOIS ──────────────────────────────────────────────────────────────────
@@ -20640,7 +19676,7 @@ class IntelAggregator:
             rows.append(_row(
                 f"Technology: {tech}", desc,
                 hostname=seen_on[0] if seen_on else "",
-                command="osift/wappalyzer",
+                command="osift/technology_detection",
             ))
 
         # ── ASN Networks ─────────────────────────────────────────────────────
@@ -22670,7 +21706,6 @@ Phase 1.5 — Passive OSINT Tool Suite (auto-detected on PATH):
                   (go install github.com/hueristiq/xurlfind3r/cmd/xurlfind3r@latest)
     puredns       DNS brute-force + mass resolver (go install github.com/d3mondev/puredns/v2@latest)
     waybackurls   Wayback Machine CDX URL mining (go install github.com/tomnomnom/waybackurls@latest)
-    wappalyzer    Technology fingerprinting — 3000+ signatures (pip install wappalyzer)
     cloud_enum    Cloud bucket/blob enumeration (pip install cloud-enum)
     EmailHarvester multi-engine email search (pip install EmailHarvester)
     maigret       Social media username enumeration (pip install maigret)
@@ -22679,7 +21714,6 @@ Phase 1.5 — Passive OSINT Tool Suite (auto-detected on PATH):
     --harvester-limit N    results per source for theHarvester (default: 500)
     --github-org ORG       GitHub org for TruffleHog secret scanning
     --skip-wayback         skip waybackurls
-    --skip-wappalyzer      skip Wappalyzer fingerprinting
     --skip-cloud-enum      skip cloud_enum bucket enumeration
     --skip-xurlfind3r      skip xurlfind3r but still run theHarvester
 
@@ -22874,7 +21908,7 @@ API key sources (all free tiers available):
     passive_grp.add_argument(
         "--skip-passive",
         action="store_true",
-        help="Skip all Phase 1.5 passive OSINT tools (theHarvester, xurlfind3r, EmailHarvester, puredns, waybackurls, wappalyzer, cloud_enum, maigret, TruffleHog, Maltego)",
+        help="Skip all Phase 1.5 passive OSINT tools (theHarvester, xurlfind3r, EmailHarvester, puredns, waybackurls, cloud_enum, maigret, TruffleHog, Maltego)",
     )
     passive_grp.add_argument(
         "--skip-xurlfind3r",
@@ -22885,11 +21919,6 @@ API key sources (all free tiers available):
         "--skip-wayback",
         action="store_true",
         help="Skip waybackurls Wayback Machine CDX mining (Wave B)",
-    )
-    passive_grp.add_argument(
-        "--skip-wappalyzer",
-        action="store_true",
-        help="Skip Wappalyzer technology fingerprinting (Wave C)",
     )
     passive_grp.add_argument(
         "--skip-cloud-enum",
@@ -23100,7 +22129,7 @@ API key sources (all free tiers available):
         _pd_path = shutil.which(_pd_name)
         _os_tool_ui[_pd_name] = {"installed": bool(_pd_path), "path": _pd_path or ""}
     # Python-native tools (pip packages)
-    for _py_tool, _py_mod in (("wappalyzer", "wappalyzer"), ("maigret", "maigret")):
+    for _py_tool, _py_mod in (("maigret", "maigret"),):
         try:
             import importlib.util as _ilu
             _py_installed = _ilu.find_spec(_py_mod) is not None
@@ -23159,7 +22188,6 @@ API key sources (all free tiers available):
         skip_passive        = args.skip_passive,
         github_org          = getattr(args, "github_org", ""),
         skip_wayback        = getattr(args, "skip_wayback", False),
-        skip_wappalyzer     = getattr(args, "skip_wappalyzer", False),
         skip_cloud_enum     = getattr(args, "skip_cloud_enum", False),
     )
 
@@ -23219,7 +22247,6 @@ API key sources (all free tiers available):
             _dns_enum = DNSEnumerator(domain, output_dir, log, data)
             if is_primary and args.skip_brute:
                 _dns_enum._get_dns_records()
-                _dns_enum._attempt_zone_transfer()
                 _dns_enum._enumerate_from_search_engines()
                 _dns_enum._dnsdumpster_lookup()
             else:
@@ -23336,19 +22363,6 @@ API key sources (all free tiers available):
         _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    # ── Phase 3: Certificates ──────────────────────────────────────────────
-    if _pm.is_phase_complete("phase3_certs"):
-        _vc.log("Phase 3 Certificates already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase3_certs", label="Phase 3: Certificates", status="complete")
-    else:
-        _pm.set_phase_status("phase3_certs", "running", label="Phase 3: Certificates")
-        _vc.status("phase3_certs", label="Phase 3: Certificates", status="running",
-                   active_tool="certificates")
-        _section(log, "PHASE 3: Certificate Collection & Analysis")
-        CertificateCollector(output_dir, log, data).run()
-        _pm.set_phase_status("phase3_certs", "complete", label="Phase 3: Certificates")
-        _vc.status("phase3_certs", label="Phase 3: Certificates", status="complete")
-
     # ── Phase 4: IP Intelligence ───────────────────────────────────────────
     if _pm.is_phase_complete("phase4_ip"):
         _vc.log("Phase 4 IP Intelligence already complete — resuming from checkpoint.", "INFO")
@@ -23363,16 +22377,16 @@ API key sources (all free tiers available):
         _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    # ── PD Wave C+E — TLS, CDN, ASN, internet search, cloud (IPs now known)
+    # ── PD Wave C+E — CDN, ASN, internet search, cloud (IPs now known)
     if not _pm.is_phase_complete("pd_wave_ce"):
-        _pm.set_phase_status("pd_wave_ce", "running", label="PD Wave C+E: TLS/CDN/Cloud")
-        _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="running",
-                   active_tools=["certificates/tlsx", "ip_addresses", "api_intel/uncover", "company/info/cloudlist"])
+        _pm.set_phase_status("pd_wave_ce", "running", label="PD Wave C+E: CDN/ASN/Cloud")
+        _vc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="running",
+                   active_tools=["ip_addresses", "api_intel/uncover", "company/info/cloudlist"])
         pd.run_wave_c_and_e()
-        _pm.set_phase_status("pd_wave_ce", "complete", label="PD Wave C+E: TLS/CDN/Cloud")
-        _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="complete")
+        _pm.set_phase_status("pd_wave_ce", "complete", label="PD Wave C+E: CDN/ASN/Cloud")
+        _vc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="complete")
     else:
-        _vc.status("pd_wave_ce", label="PD Wave C+E: TLS/CDN/Cloud", status="complete")
+        _vc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="complete")
 
     # ── PD Wave D — deep katana crawl (live hosts + certs available) ────────
     if not _pm.is_phase_complete("pd_wave_d"):
@@ -23444,35 +22458,18 @@ API key sources (all free tiers available):
         _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    # ── Phase 8: Web Crawling ──────────────────────────────────────────────
-    if args.skip_crawl:
-        log.info("[CRAWL] Skipped (--skip-crawl)")
-        _pm.set_phase_status("phase8_crawl", "skipped", label="Phase 8: Web Crawling")
-        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="skipped")
-    elif _pm.is_phase_complete("phase8_crawl"):
-        _vc.log("Phase 8 Web Crawling already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="complete")
-    else:
-        _pm.set_phase_status("phase8_crawl", "running", label="Phase 8: Web Crawling")
-        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="running",
-                   active_tool="web_crawl")
-        _section(log, "PHASE 8: Web Crawling & Sensitive Data Discovery")
-        WebCrawler(output_dir, log, data, args.max_pages, args.max_depth, args.domains[0]).run()
-        _pm.set_phase_status("phase8_crawl", "complete", label="Phase 8: Web Crawling")
-        _vc.status("phase8_crawl", label="Phase 8: Web Crawling", status="complete")
-
-    # ── Phase 1.5 Wave C — Wappalyzer + cloud_enum (live hosts now known) ───
+    # ── Phase 1.5 Wave C — cloud_enum (live hosts now known) ────────────────
     if _pm.is_phase_complete("phase1_5_wave_c"):
         _vc.log("Phase 1.5 Wave C already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="complete")
+        _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
     else:
-        _pm.set_phase_status("phase1_5_wave_c", "running", label="Phase 1.5: Wappalyzer/cloud_enum")
-        _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="running",
-                   active_tools=["tools/wappalyzer", "company/tools/cloud_enum"])
-        _section(log, "PHASE 1.5 Wave C: Wappalyzer tech fingerprinting + cloud_enum bucket scan")
+        _pm.set_phase_status("phase1_5_wave_c", "running", label="Phase 1.5: cloud_enum")
+        _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="running",
+                   active_tools=["company/tools/cloud_enum"])
+        _section(log, "PHASE 1.5 Wave C: cloud_enum bucket scan")
         passive.run_wave_c()
-        _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: Wappalyzer/cloud_enum")
-        _vc.status("phase1_5_wave_c", label="Phase 1.5: Wappalyzer/cloud_enum", status="complete")
+        _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: cloud_enum")
+        _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
 
     # ── Phase 10: OSINT API Intelligence Engine ────────────────────────────
     if args.skip_api:

@@ -435,6 +435,17 @@ except ImportError:
     _edgar_set_identity = None  # type: ignore[assignment]
 
 try:
+    # phonenumbers — David Drysdale / Google (https://github.com/daviddrysdale/python-phonenumbers)
+    # Offline phone validation, carrier lookup, geocoding. No network calls.
+    import phonenumbers as _pn
+    from phonenumbers import carrier as _pn_carrier
+    from phonenumbers import geocoder as _pn_geocoder
+    from phonenumbers import PhoneNumberType as _PNType
+    _PN_AVAILABLE = True
+except ImportError:
+    _PN_AVAILABLE = False
+
+try:
     # openpyxl — Eric Gazoni / Charlie Clark (https://github.com/theorchard/openpyxl)
     # Used for Excel-format report generation.
     import openpyxl as _openpyxl
@@ -2101,7 +2112,7 @@ def _build_phone_affected(rec: Dict[str, Any]) -> str:
     Format: "{e164_or_raw} — {location} ({country}) [{carrier, line_type}]"
 
     Works with both PhoneValidator.validate() results and OSINT_Classifier
-    phone records (which add external_validation from numverify/abstractapi).
+    phone records (which add external_validation from phonenumbers/abstractapi).
     """
     display = (rec.get("e164") or rec.get("raw") or "").strip()
     if not display:
@@ -18125,15 +18136,15 @@ class IntelAggregator:
         output_dir: Path,
         log: ReconLogger,
         data: ReconData,
-        numverify_key: str = "",
         abstractapi_phone_key: str = "",
+        **_kw,
     ) -> None:
         self.output_dir             = output_dir
         self.log                    = log
         self.data                   = data
         self.classifier             = DomainClassifier(data.domain, data)
-        self._numverify_key         = numverify_key
         self._abstractapi_phone_key = abstractapi_phone_key
+        self._ext_fail_count        = 0
 
     # ─── Public entry point ───────────────────────────────────────────────────
 
@@ -18443,13 +18454,10 @@ class IntelAggregator:
         Validation pipeline
         -------------------
         1. PhoneValidator (local NANP/E.164 structural check) -- primary gate.
-        2. numverify API  (external carrier-level validation)  -- secondary check.
-           numverify is called only for numbers that pass local validation.
-           If numverify is unreachable or returns an error, the local result is
-           used as-is (fail-open: external validation is advisory).
-           An optional API key is accepted via --numverify-key; without a key
-           the unauthenticated free endpoint is used.
-        3. Abstract API   (fallback external service, requires --abstractapi-phone-key).
+        2. phonenumbers library (offline carrier/geo/type enrichment) -- secondary.
+           Also cross-validates structure; demotes numbers it rejects.
+        3. Abstract API (optional external, requires --abstractapi-phone-key).
+           Circuit breaker: skips after 3 consecutive failures.
         """
         seen: Set[str] = set()
         raw_numbers: List[Tuple[str, str]] = []  # (raw, source)
@@ -18476,31 +18484,33 @@ class IntelAggregator:
 
         valid: List[Dict] = []
         invalid: List[Dict] = []
+        _EXT_CIRCUIT_BREAKER = 3
 
         for raw, source in raw_numbers:
-            # Step 1 -- local structural validation (PhoneValidator)
             result = PhoneValidator.validate(raw)
             result["source"] = source
 
-            # Step 2 -- external validation via numverify / Abstract API
-            # Only cross-validate numbers that pass local structural checks.
-            # External services are never used for self-validation -- they are
-            # independent third-party carrier lookup services.
             if result["valid"]:
-                ext = self._numverify_validate(result.get("e164") or raw)
-                result["external_validation"] = ext
-                # Demote only when the external service was reachable AND
-                # explicitly returned valid=False (fail-open for network errors).
-                if ext.get("queried") and not ext.get("valid"):
-                    result["valid"]  = False
-                    result["reason"] = (
-                        f"{ext.get('service', 'external')}: "
-                        f"{ext.get('reason', 'marked invalid by external service')}"
-                    )
+                self._enrich_with_phonenumbers(result)
+
+                if self._ext_fail_count < _EXT_CIRCUIT_BREAKER:
+                    ext = self._external_validate(result.get("e164") or raw)
+                    result["external_validation"] = ext
+                    if ext.get("queried") and not ext.get("valid"):
+                        result["valid"]  = False
+                        result["reason"] = (
+                            f"{ext.get('service', 'external')}: "
+                            f"{ext.get('reason', 'marked invalid by external service')}"
+                        )
 
             (valid if result["valid"] else invalid).append(result)
 
-        # Sort valid by country -> region -> e164
+        if self._ext_fail_count >= _EXT_CIRCUIT_BREAKER:
+            self.log.info(
+                f"[AGGREGATE] External phone validation skipped after "
+                f"{self._ext_fail_count} consecutive failures (circuit breaker)"
+            )
+
         valid.sort(key=lambda x: (
             x.get("country", "ZZ"),
             x.get("region",  ""),
@@ -18509,32 +18519,54 @@ class IntelAggregator:
         return {"valid": valid, "invalid": invalid,
                 "valid_count": len(valid), "invalid_count": len(invalid)}
 
-    def _numverify_validate(self, number: str) -> Dict[str, Any]:
+    _PN_TYPE_MAP = {
+        0: "fixed_line", 1: "mobile", 2: "fixed_line_or_mobile",
+        3: "toll_free", 4: "premium_rate", 5: "shared_cost",
+        6: "voip", 7: "personal_number", 8: "pager",
+        9: "uan", 10: "voicemail",
+    } if _PN_AVAILABLE else {}
+
+    def _enrich_with_phonenumbers(self, result: Dict[str, Any]) -> None:
+        """Enrich a validated phone result using the phonenumbers library (offline)."""
+        if not _PN_AVAILABLE:
+            return
+        raw = result.get("e164") or result.get("raw", "")
+        if not raw:
+            return
+        try:
+            pn = _pn.parse(raw, "US")
+            if not _pn.is_valid_number(pn):
+                result["valid"]  = False
+                result["reason"] = "phonenumbers: number structurally invalid"
+                return
+            carrier_name = _pn_carrier.name_for_number(pn, "en")
+            if carrier_name:
+                result["carrier"] = carrier_name
+            geo = _pn_geocoder.description_for_number(pn, "en")
+            if geo:
+                result["location"] = geo
+            nt = _pn.number_type(pn)
+            result["line_type"] = self._PN_TYPE_MAP.get(nt, "")
+            result["e164"] = _pn.format_number(pn, _pn.PhoneNumberFormat.E164)
+            result["phonenumbers_validated"] = True
+        except Exception:
+            pass
+
+    def _external_validate(self, number: str) -> Dict[str, Any]:
         """
-        Cross-validate a phone number with an external carrier lookup service.
-
-        Services attempted in order:
-          1. numverify  (http://apilayer.net/api/validate)
-             Free tier available without API key; --numverify-key unlocks higher
-             rate limits.  No self-validation -- this is a third-party GSMA/ITU
-             carrier database lookup.
-          2. Abstract API (https://phonevalidation.abstractapi.com/v1/)
-             Free-tier key required (--abstractapi-phone-key).
-
-        Returns:
-          queried   -- True if an external service was successfully reached
-          valid     -- bool: external verdict (only meaningful when queried=True)
-          reason    -- explanation when invalid
-          carrier   -- carrier name (if returned)
-          line_type -- "mobile" | "landline" | "voip" | ""
-          service   -- which external service responded
+        Cross-validate a phone number with Abstract API (optional external service).
+        Tracks consecutive failures and stops after 3 (circuit breaker in caller).
         """
         result: Dict[str, Any] = {
             "queried": False, "valid": False, "reason": "",
             "carrier": "", "line_type": "", "service": "",
         }
 
-        # Normalise: keep digits only, no leading +
+        abstractapi_key = getattr(self, "_abstractapi_phone_key", "") or ""
+        if not abstractapi_key:
+            result["reason"] = "no external validation API key configured"
+            return result
+
         e164_digits = re.sub(r"\D", "", number)
         if not e164_digits:
             result["reason"] = "empty number after normalisation"
@@ -18543,64 +18575,34 @@ class IntelAggregator:
         try:
             import requests as _req
         except ImportError:
-            result["reason"] = "requests library not available for external validation"
+            result["reason"] = "requests library not available"
             return result
 
-        # -- numverify (primary) -----------------------------------------------
-        numverify_key = getattr(self, "_numverify_key", "") or ""
         try:
-            params: Dict[str, str] = {"number": e164_digits}
-            if numverify_key:
-                params["access_key"] = numverify_key
             resp = _req.get(
-                "http://apilayer.net/api/validate",
-                params=params,
-                timeout=8,
+                "https://phonevalidation.abstractapi.com/v1/",
+                params={"api_key": abstractapi_key, "phone": e164_digits},
+                timeout=5,
             )
             if resp.status_code == 200:
                 data = resp.json()
-                # numverify returns {"valid": true/false, "carrier": "...", ...}
                 if isinstance(data.get("valid"), bool):
+                    self._ext_fail_count = 0
                     result.update({
                         "queried":   True,
                         "valid":     data["valid"],
-                        "carrier":   data.get("carrier", ""),
-                        "line_type": data.get("line_type", ""),
-                        "service":   "numverify",
+                        "carrier":   (data.get("carrier") or {}).get("name", ""),
+                        "line_type": data.get("type", ""),
+                        "service":   "abstractapi",
                     })
                     if not result["valid"]:
-                        result["reason"] = "numverify: number not in service or unallocated"
+                        result["reason"] = "abstractapi: number not valid"
                     return result
         except Exception:
-            pass  # network error -- try fallback
+            pass
 
-        # -- Abstract API (fallback) -------------------------------------------
-        abstractapi_key = getattr(self, "_abstractapi_phone_key", "") or ""
-        if abstractapi_key:
-            try:
-                resp = _req.get(
-                    "https://phonevalidation.abstractapi.com/v1/",
-                    params={"api_key": abstractapi_key, "phone": e164_digits},
-                    timeout=8,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data.get("valid"), bool):
-                        result.update({
-                            "queried":   True,
-                            "valid":     data["valid"],
-                            "carrier":   (data.get("carrier") or {}).get("name", ""),
-                            "line_type": data.get("type", ""),
-                            "service":   "abstractapi",
-                        })
-                        if not result["valid"]:
-                            result["reason"] = "abstractapi: number not valid"
-                        return result
-            except Exception:
-                pass
-
-        # Both services unreachable -- fail-open (do not invalidate on network error)
-        result["reason"] = "external validation unavailable (network error or no API key)"
+        self._ext_fail_count += 1
+        result["reason"] = "external validation unavailable (network error)"
         return result
 
     # ── IPs ───────────────────────────────────────────────────────────────────
@@ -21992,25 +21994,15 @@ API key sources (all free tiers available):
     # ── Phone validation API keys ─────────────────────────────────────────────
     phone_grp = parser.add_argument_group(
         "Phone validation",
-        "Optional API keys for external phone number validation services. "
-        "Without a key, numverify's unauthenticated free endpoint is used. "
-        "If both services are unreachable, local structural validation is kept.",
-    )
-    phone_grp.add_argument(
-        "--numverify-key",
-        default="", metavar="KEY",
-        help=(
-            "numverify API access key (https://numverify.com). "
-            "Free tier works without a key at lower rate limits. "
-            "Stored in settings file as 'numverify_key'."
-        ),
+        "Phone validation uses the phonenumbers library (offline) by default. "
+        "Optional Abstract API key enables external carrier-level enrichment.",
     )
     phone_grp.add_argument(
         "--abstractapi-phone-key",
         default="", metavar="KEY",
         help=(
             "Abstract API phone validation key (https://app.abstractapi.com/api/phone-validation). "
-            "Used as fallback when numverify is unavailable. "
+            "Optional external enrichment. Primary validation uses phonenumbers library (offline). "
             "Stored in settings file as 'abstractapi_phone_key'."
         ),
     )
@@ -22786,7 +22778,6 @@ API key sources (all free tiers available):
                status="running", step="Intel aggregation")
     aggregator   = IntelAggregator(
         output_dir, log, data,
-        numverify_key         = getattr(args, 'numverify_key', ''),
         abstractapi_phone_key = getattr(args, 'abstractapi_phone_key', ''),
     )
     findings_path = aggregator.run()

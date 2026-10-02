@@ -85,7 +85,6 @@ GO_INSTALL_TOOLS = [
     "github.com/projectdiscovery/httpx/cmd/httpx@latest",
     "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
     "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
-    "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
     "github.com/projectdiscovery/tlsx/cmd/tlsx@latest",
     "github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest",
     "github.com/projectdiscovery/katana/cmd/katana@latest",
@@ -167,7 +166,7 @@ GIT_TOOLS = [
 # Verify tools ----------------------------------------------------------------
 VERIFY_BINS = [
     "amass", "nmap", "subfinder", "httpx", "dnsx",
-    "nuclei", "naabu", "waybackurls", "ffuf",
+    "nuclei", "waybackurls", "ffuf",
     "maigret", "trufflehog", "cloud_enum", "puredns",
     "gitleaks", "o365spray",
 ]
@@ -275,6 +274,84 @@ def _go_env():
         "PATH":   go_bin_dir + ":" + os.environ.get("PATH", ""),
         "HOME":   str(Path.home()),
     }
+
+
+MIN_GO_VERSION = (1, 22)
+
+
+def _go_version_tuple(go_binary):
+    """Return (major, minor) for the installed Go, or (0, 0) on failure."""
+    try:
+        r = subprocess.run([go_binary, "version"], capture_output=True, text=True, timeout=10)
+        # output: "go version go1.22.5 linux/amd64"
+        import re as _re
+        m = _re.search(r'go(\d+)\.(\d+)', r.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    except Exception:
+        pass
+    return (0, 0)
+
+
+def _ensure_modern_go():
+    """If the installed Go is too old for projectdiscovery tools, install
+    the latest stable Go from golang.org to /usr/local/go/."""
+    gb = _go_bin()
+    ver = _go_version_tuple(gb)
+    if ver >= MIN_GO_VERSION:
+        info(f"Go {ver[0]}.{ver[1]} meets minimum {MIN_GO_VERSION[0]}.{MIN_GO_VERSION[1]}.")
+        return True
+
+    if ver == (0, 0):
+        warn("No working Go compiler found.")
+    else:
+        warn(f"Go {ver[0]}.{ver[1]} is below minimum {MIN_GO_VERSION[0]}.{MIN_GO_VERSION[1]}.")
+
+    info("Installing latest Go from golang.org …")
+    machine = platform.machine().lower()
+    arch_map = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+    arch = arch_map.get(machine, "amd64")
+    system = platform.system().lower()
+
+    try:
+        import json, tempfile
+        r = subprocess.run(
+            ["curl", "-fsSL", "https://go.dev/dl/?mode=json&include=all"],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        releases = json.loads(r.stdout)
+        stable = [rel for rel in releases if rel.get("stable")]
+        if not stable:
+            warn("Could not determine latest stable Go version.")
+            return False
+        latest = stable[0]
+        go_ver = latest["version"]  # e.g. "go1.23.1"
+
+        tarball_name = f"{go_ver}.{system}-{arch}.tar.gz"
+        dl_url = f"https://go.dev/dl/{tarball_name}"
+        info(f"Downloading {tarball_name} …")
+
+        with tempfile.TemporaryDirectory() as td:
+            tarball = os.path.join(td, tarball_name)
+            subprocess.run(["curl", "-fsSL", "-o", tarball, dl_url],
+                           check=True, timeout=300)
+            # Remove old installation if present
+            go_dir = Path("/usr/local/go")
+            if go_dir.exists():
+                import shutil as _sh
+                _sh.rmtree(str(go_dir))
+            subprocess.run(["tar", "-C", "/usr/local", "-xzf", tarball], check=True)
+
+        new_ver = _go_version_tuple("/usr/local/go/bin/go")
+        if new_ver >= MIN_GO_VERSION:
+            info(f"Go {new_ver[0]}.{new_ver[1]} installed to /usr/local/go/")
+            return True
+        else:
+            warn(f"Installed Go {new_ver[0]}.{new_ver[1]} still below minimum.")
+            return False
+    except Exception as exc:
+        warn(f"Go auto-install failed: {exc}")
+        return False
 
 
 def _pip_installed(pkg_spec):
@@ -388,6 +465,57 @@ def install_pip_packages(args):
         except RuntimeError as exc:
             warn(f"pip install failed for {pkg}: {exc}")
 
+    # maigret has complex deps that commonly conflict with other OSINT
+    # packages in the same environment.  If pip install left it missing
+    # from PATH, force-reinstall it (resolves partially-installed state),
+    # then try pipx as an isolated fallback.
+    if not shutil.which("maigret"):
+        info("maigret not on PATH — attempting force reinstall …")
+        try:
+            subprocess.run(
+                pip + ["install", "--break-system-packages",
+                       "--force-reinstall", "--no-deps", "maigret"],
+                check=True, timeout=120,
+            )
+            # Now install maigret's own deps without --no-deps so its
+            # entry point is in place
+            subprocess.run(
+                pip + ["install", "--break-system-packages", "maigret"],
+                check=True, timeout=120,
+            )
+            if shutil.which("maigret"):
+                info("  ✓ maigret installed via pip force-reinstall")
+        except Exception:
+            pass
+    if not shutil.which("maigret"):
+        # Try pipx — provides an isolated venv so dep conflicts vanish
+        pipx = shutil.which("pipx")
+        if not pipx:
+            info("Installing pipx for isolated tool installs …")
+            try:
+                subprocess.run(
+                    pip + ["install", "--break-system-packages", "pipx"],
+                    check=True, timeout=60,
+                )
+                pipx = shutil.which("pipx")
+            except Exception:
+                pass
+        if pipx:
+            info("Installing maigret via pipx (isolated) …")
+            try:
+                subprocess.run([pipx, "install", "maigret"],
+                               check=True, timeout=180,
+                               env={**os.environ, "PIPX_HOME": "/opt/pipx",
+                                    "PIPX_BIN_DIR": "/usr/local/bin"})
+                if shutil.which("maigret"):
+                    info("  ✓ maigret installed via pipx")
+                else:
+                    warn("pipx installed maigret but binary not on PATH")
+            except Exception as exc:
+                warn(f"pipx install maigret failed: {exc}")
+        else:
+            err("maigret install failed — neither pip nor pipx succeeded")
+
     # Playwright browser + driver (required by python-wappalyzer, maigret).
     # The Python playwright package bundles its own Node.js driver; we just
     # need to download the browser binary and system deps.  On Debian/Kali
@@ -466,6 +594,8 @@ def install_go_tools(args):
         warn("--skip-go set; skipping.")
         return
 
+    _ensure_modern_go()
+
     gb = _go_bin()
     if not shutil.which(gb) and not Path(gb).exists():
         warn(f"go binary not found ({gb}); skipping Go tool installs.")
@@ -484,6 +614,16 @@ def install_go_tools(args):
             run([gb, "install", tool], env=env)
         except RuntimeError as exc:
             warn(f"go install failed for {tool}: {exc}")
+            # Retry once after clearing module cache for this tool
+            info(f"  Retrying {name} with clean module cache …")
+            try:
+                gopath = env.get("GOPATH", str(Path.home() / "go"))
+                cache_dir = Path(gopath) / "pkg" / "mod" / "cache"
+                run([gb, "clean", "-modcache"], env=env)
+                run([gb, "install", tool], env=env)
+                info(f"  ✓ {name} installed on retry")
+            except RuntimeError:
+                err(f"  {name} failed on retry — check Go version and network")
 
     # trufflehog v3 has go.mod replace directives, so `go install` fails.
     # Download the pre-built binary from GitHub releases instead.

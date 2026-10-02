@@ -20912,10 +20912,37 @@ class PeopleDorker:
 
     # ── PII extraction ─────────────────────────────────────────────────────────
 
+    _NON_PERSON_WORDS = {
+        "firm", "corporation", "corp", "company", "companies",
+        "inc", "incorporated", "llc", "llp", "ltd", "limited",
+        "investment", "investments", "adviser", "advisor", "advisors",
+        "advisory", "holdings", "holding", "group", "partners", "partnership",
+        "associates", "association", "assoc", "foundation",
+        "enterprises", "enterprise", "solutions", "services", "service",
+        "technologies", "technology", "systems", "software",
+        "consulting", "consultants", "capital", "ventures",
+        "management", "industries", "industrial", "international",
+        "global", "worldwide", "national", "federal", "municipal",
+        "institute", "institution", "university", "college", "school",
+        "hospital", "clinic", "medical", "healthcare", "health",
+        "bank", "banking", "financial", "finance", "insurance",
+        "realty", "properties", "property",
+        "agency", "bureau", "department", "division", "board",
+        "commission", "committee", "council", "authority",
+        "trust", "trustee", "fund", "funds", "portfolio",
+        "exchange", "market", "securities", "compliance",
+        "network", "networks", "communications", "telecom",
+        "logistics", "supply", "distribution", "wholesale", "retail",
+        "construction", "builders", "development", "developers",
+        "manufacturing", "products", "brands",
+        "church", "ministry", "temple", "mosque",
+        "plc", "gmbh",
+    }
+
     def _extract_names(self, text: str) -> List[str]:
         """
         Extract probable personal names (Title Case 2-3 word patterns).
-        Filters common non-name title-case phrases.
+        Filters common non-name title-case phrases and business entity words.
         """
         _STOPWORDS = {
             "United States", "New York", "Los Angeles", "San Francisco",
@@ -20929,8 +20956,12 @@ class PeopleDorker:
         found: List[str] = []
         for m in re.finditer(pattern, text):
             name = m.group(0).strip()
-            if name not in _STOPWORDS and len(name) >= 5:
-                found.append(name)
+            if name in _STOPWORDS or len(name) < 5:
+                continue
+            words_lower = {w.lower() for w in name.split()}
+            if words_lower & self._NON_PERSON_WORDS:
+                continue
+            found.append(name)
         return found
 
     def _extract_phones(self, text: str) -> List[str]:

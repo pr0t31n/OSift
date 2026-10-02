@@ -9325,15 +9325,28 @@ class EmailAndPeopleOSINT:
         self.log.info("[DEHASHED] Querying Dehashed API")
         session = make_session()
         session.auth = (self.dehashed_user, self.dehashed_key)
+        total_ingested = 0
         for field_name, value in [("domain", self.domain), ("email", f"@{self.domain}")]:
-            try:
-                resp = session.get(
-                    "https://api.dehashed.com/search",
-                    params={"query": f"{field_name}:{value}", "size": 100},
-                    timeout=20,
-                )
-                if resp.status_code == 200:
-                    for entry in (resp.json().get("entries") or []):
+            page = 1
+            while True:
+                try:
+                    resp = session.get(
+                        "https://api.dehashed.com/search",
+                        params={"query": f"{field_name}:{value}",
+                                "size": 10000, "page": page},
+                        timeout=60,
+                    )
+                    if resp.status_code != 200:
+                        body = resp.text[:300] if resp.text else ""
+                        self.log.error(
+                            f"[DEHASHED] {field_name}:{value} page {page} "
+                            f"returned HTTP {resp.status_code}: {body}")
+                        break
+                    data = resp.json()
+                    entries = data.get("entries") or []
+                    if not entries:
+                        break
+                    for entry in entries:
                         email = entry.get("email", "")
                         if email:
                             self._add_email(email, "dehashed")
@@ -9345,8 +9358,18 @@ class EmailAndPeopleOSINT:
                             "timestamp":    datetime.datetime.now(_UTC).isoformat(),
                             "output_file":  str(self.output_dir / "company" / "breach_data" / "dehashed_results.json"),
                         })
-            except Exception as e:
-                self.log.error(f"[DEHASHED] Query failed", exc=e)
+                    total_ingested += len(entries)
+                    total_avail = data.get("total", 0)
+                    self.log.info(
+                        f"[DEHASHED] {field_name}:{value} page {page} — "
+                        f"{len(entries)} entries (total available: {total_avail})")
+                    if len(entries) < 10000 or page * 10000 >= total_avail:
+                        break
+                    page += 1
+                except Exception as e:
+                    self.log.error(f"[DEHASHED] Query failed ({field_name}:{value} page {page})", exc=e)
+                    break
+        self.log.info(f"[DEHASHED] Ingested {total_ingested} breach entries")
         out = self.output_dir / "company" / "breach_data" / "dehashed_results.json"
         dh  = [b for b in self.data.breach_data if b.get("source") == "dehashed"]
         out.write_text(json.dumps(dh, indent=2), encoding="utf-8")

@@ -12141,13 +12141,15 @@ class TruffleHogRunner:
         log: "ReconLogger",
         data: "ReconData",
         github_org: str = "",
+        github_token: str = "",
     ):
-        self.domain     = domain
-        self.company    = company
-        self.out        = output_dir / "company" / "tools" / "trufflehog"
-        self.log        = log
-        self.data       = data
-        self.github_org = github_org.strip()
+        self.domain       = domain
+        self.company      = company
+        self.out          = output_dir / "company" / "tools" / "trufflehog"
+        self.log          = log
+        self.data         = data
+        self.github_org   = github_org.strip()
+        self.github_token = github_token.strip()
         self.out.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -12209,11 +12211,28 @@ class TruffleHogRunner:
         self.log.info(f"[trufflehog] Scanning GitHub org: {org}")
 
         out_file = self.out / "trufflehog_github.jsonl"
-        cmd = (
-            f'"{binary}" github --org="{org}" '
-            f"--json --no-update --only-verified 2>/dev/null"
-        )
-        stdout, stderr, rc = _shell_go(cmd)
+        _tf_args = [binary, "github", f"--org={org}",
+                    "--json", "--no-update", "--only-verified"]
+        if self.github_token:
+            _tf_args.append(f"--token={self.github_token}")
+
+        _tf_env = {k: v for k, v in os.environ.items()
+                   if k not in ("GITHUB_TOKEN", "GH_TOKEN")}
+        if self.github_token:
+            _tf_env["GITHUB_TOKEN"] = self.github_token
+
+        cmd = " ".join(_tf_args)
+        try:
+            _tf_proc = subprocess.run(
+                _tf_args, capture_output=True, text=True, timeout=700,
+                env=_tf_env,
+                preexec_fn=_go_mem_limit_preexec if not IS_WINDOWS else None,
+            )
+            stdout, stderr, rc = _tf_proc.stdout, _tf_proc.stderr, _tf_proc.returncode
+        except subprocess.TimeoutExpired:
+            stdout, stderr, rc = "", "Command timed out", -1
+        except Exception as exc:
+            stdout, stderr, rc = "", str(exc), -1
         self.log.log_command(cmd, stdout, stderr, rc)
 
         if stdout.strip():
@@ -12794,6 +12813,7 @@ class PassiveOSINTOrchestrator:
         xurlfind3r_enabled: bool = True,
         skip_passive: bool = False,
         github_org: str = "",
+        github_token: str = "",
         skip_wayback: bool = False,
         skip_cloud_enum: bool = False,
     ):
@@ -12806,6 +12826,7 @@ class PassiveOSINTOrchestrator:
         self.xurlfind3r_enabled = xurlfind3r_enabled
         self.skip_passive       = skip_passive
         self.github_org         = github_org
+        self.github_token       = github_token
         self.skip_wayback       = skip_wayback
         self.skip_cloud_enum    = skip_cloud_enum
 
@@ -12938,6 +12959,7 @@ class PassiveOSINTOrchestrator:
             TruffleHogRunner(
                 self.domain, self.company, self.output_dir, self.log, self.data,
                 github_org=self.github_org,
+                github_token=self.github_token,
             ),
         ]
 
@@ -22188,6 +22210,7 @@ API key sources (all free tiers available):
         xurlfind3r_enabled  = not args.skip_xurlfind3r,
         skip_passive        = args.skip_passive,
         github_org          = getattr(args, "github_org", ""),
+        github_token        = getattr(args, "github_token", ""),
         skip_wayback        = getattr(args, "skip_wayback", False),
         skip_cloud_enum     = getattr(args, "skip_cloud_enum", False),
     )

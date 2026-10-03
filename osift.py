@@ -19565,8 +19565,8 @@ class IntelAggregator:
                 "exploit_details": [],
             }
 
-        # ── Subdomains ────────────────────────────────────────────────────────
-        for cls_key in ("primary", "secondary"):
+        # ── Subdomains (primary only — secondary are out-of-scope) ──────────
+        for cls_key in ("primary",):
             for rec in intel["subdomains"].get(cls_key, []):
                 fqdn    = rec.get("fqdn", "")
                 ips     = rec.get("ips", [])
@@ -19584,8 +19584,8 @@ class IntelAggregator:
                     command="osift/amass",
                 ))
 
-        # ── Domains ───────────────────────────────────────────────────────────
-        for cls_key in ("primary", "secondary"):
+        # ── Domains (primary only — secondary are out-of-scope) ────────────
+        for cls_key in ("primary",):
             for rec in intel["domains"].get(cls_key, []):
                 dom  = rec.get("domain", rec.get("fqdn", ""))
                 rel  = rec.get("relationship", "")
@@ -19599,8 +19599,8 @@ class IntelAggregator:
                     command="osift",
                 ))
 
-        # ── Email Addresses ───────────────────────────────────────────────────
-        for cls_key in ("primary", "secondary"):
+        # ── Email Addresses (primary only — secondary are out-of-scope) ─────
+        for cls_key in ("primary",):
             for rec in intel["email_addresses"].get(cls_key, []):
                 email   = rec.get("email", "")
                 name    = f"{rec.get('first_name','')} {rec.get('last_name','')}".strip()
@@ -19619,23 +19619,17 @@ class IntelAggregator:
                     command="osift/theHarvester",
                 ))
 
-        # ── Phone Numbers ─────────────────────────────────────────────────────
-        for rec in intel["phone_numbers"].get("valid", []):
-            display = rec.get("e164") or rec.get("raw", "")
-            loc     = rec.get("location", "")
-            country = rec.get("country",  "")
-            carrier = rec.get("carrier",  "")
-            src     = rec.get("source",   "")
-            desc    = f"Valid phone: {display}"
-            if loc:     desc += f" | Location: {loc}"
-            if country: desc += f" ({country})"
-            if carrier: desc += f" | Carrier: {carrier}"
-            if src:     desc += f" | Source: {src}"
-            rows.append(_row(f"Phone Number: {display}", desc, command="osift"))
+        # ── Phone Numbers — intelligence-only, not emitted as findings ──────
 
-        # ── IP Addresses ──────────────────────────────────────────────────────
+        # ── IP Addresses (only those resolved from primary subdomains) ──────
+        _primary_ips = set()
+        for _sub in intel["subdomains"].get("primary", []):
+            for _sip in _sub.get("ips", []):
+                _primary_ips.add(_sip)
         for rec in intel["ip_addresses"]:
             ip      = rec.get("ip", "")
+            if ip not in _primary_ips:
+                continue
             org     = rec.get("org", "")
             country = rec.get("country", "")
             fqdns   = ", ".join(rec.get("fqdns", [])[:5])
@@ -19764,23 +19758,7 @@ class IntelAggregator:
                 command="osift/whois",
             ))
 
-        # ── Physical Addresses ────────────────────────────────────────────────
-        for rec in intel["physical_addresses"]:
-            addr_parts = [
-                rec.get("street", ""), rec.get("city", ""),
-                rec.get("state", ""),  rec.get("country", ""),
-                rec.get("postal_code", ""),
-            ]
-            addr_str = ", ".join(p for p in addr_parts if p)
-            if not addr_str:
-                addr_str = str(rec)
-            src = rec.get("source", "")
-            desc = f"Address: {addr_str}"
-            if src: desc += f" | Source: {src}"
-            rows.append(_row(
-                f"Physical Address: {addr_str}", desc,
-                command="osift",
-            ))
+        # ── Physical Addresses — intelligence-only, not emitted as findings ─
 
         # ── Credential Breaches ───────────────────────────────────────────────
         for rec in intel["breaches"]:

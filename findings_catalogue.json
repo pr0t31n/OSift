@@ -9,37 +9,92 @@
     {
       "id": "OSIFT-001",
       "title": "Subdomain Discovered",
-      "aliases": [],
+      "aliases": [
+        "Subdomain Discovered",
+        "Live Host Confirmed",
+        "Hostname Identified"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
-      "nessus_plugin_ids": [],
+      "nessus_plugin_ids": [
+        12053
+      ],
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "CM-8",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.4.1"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
       "hitrust": [],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.001",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: Domain Properties"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Review all discovered subdomains for unintended exposure. Ensure internal/development subdomains are not publicly resolvable where unnecessary.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Process",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Low",
+      "validation_tools": [
+        {
+          "name": "dnsx",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/dnsx",
+          "install": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+          "command": "subfinder -d TARGET -all | dnsx -a -aaaa -cname -mx -txt -resp\ndnsx -d TARGET -w dns-wordlist.txt -a",
+          "description": "Fast DNS resolver and bulk DNS enumeration with wildcard filtering"
+        },
+        {
+          "name": "subfinder",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/subfinder",
+          "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+          "command": "subfinder -d TARGET -all -o subdomains.txt",
+          "description": "Passive subdomain enumeration using 40+ sources (certificate transparency, DNS, APIs)"
+        },
+        {
+          "name": "nmap",
+          "type": "cli",
+          "url": "https://nmap.org",
+          "install": "apt-get install nmap  OR  brew install nmap",
+          "command": "nmap -sV -sC --script vuln -p TARGET\nnmap -sV --script ssl-enum-ciphers -p 443 TARGET",
+          "description": "Network discovery and security scanning with 600+ NSE scripts"
+        }
+      ],
       "description": "A subdomain belonging to the target organisation was identified through passive or active enumeration (Amass, subfinder, certificate transparency, theHarvester, puredns brute-force).",
       "impact": "Discovered subdomains expand the known attack surface and may reveal development environments, internal tools, or forgotten services that lack production-grade security controls.",
       "_x_severity": "INFO",
@@ -55,37 +110,92 @@
     {
       "id": "OSIFT-002",
       "title": "Live Host Confirmed",
-      "aliases": [],
+      "aliases": [
+        "Subdomain Discovered",
+        "Live Host Confirmed",
+        "Hostname Identified"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
-      "nessus_plugin_ids": [],
+      "nessus_plugin_ids": [
+        12053
+      ],
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "CM-8",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.4.1"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
       "hitrust": [],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.001",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: Domain Properties"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Ensure only intended services are publicly accessible. Review the confirmed host list for shadow IT or forgotten assets.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Process",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Low",
+      "validation_tools": [
+        {
+          "name": "dnsx",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/dnsx",
+          "install": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+          "command": "subfinder -d TARGET -all | dnsx -a -aaaa -cname -mx -txt -resp\ndnsx -d TARGET -w dns-wordlist.txt -a",
+          "description": "Fast DNS resolver and bulk DNS enumeration with wildcard filtering"
+        },
+        {
+          "name": "subfinder",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/subfinder",
+          "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+          "command": "subfinder -d TARGET -all -o subdomains.txt",
+          "description": "Passive subdomain enumeration using 40+ sources (certificate transparency, DNS, APIs)"
+        },
+        {
+          "name": "nmap",
+          "type": "cli",
+          "url": "https://nmap.org",
+          "install": "apt-get install nmap  OR  brew install nmap",
+          "command": "nmap -sV -sC --script vuln -p TARGET\nnmap -sV --script ssl-enum-ciphers -p 443 TARGET",
+          "description": "Network discovery and security scanning with 600+ NSE scripts"
+        }
+      ],
       "description": "A subdomain or IP address responded to HTTP/HTTPS probing (httpx) or ICMP/TCP and is confirmed to be serving traffic.",
       "impact": "Confirmed live hosts verify that discovered IP addresses are actively serving content, distinguishing real targets from inactive allocations. This narrows the attack surface to actionable targets for subsequent vulnerability scanning.",
       "_x_severity": "INFO",
@@ -297,36 +407,66 @@
     {
       "id": "OSIFT-007",
       "title": "DNS Misconfiguration",
-      "aliases": [],
+      "aliases": [
+        "DNS Misconfiguration",
+        "DNSSEC Not Enabled",
+        "Wildcard DNS Record Detected"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "MEDIUM",
-      "cwe": [],
-      "cve_examples": [],
+      "cwe": [
+        "CWE-345",
+        "CWE-924"
+      ],
+      "cve_examples": [
+        "CVE-2008-1447"
+      ],
       "cvss_v3_base": 5.3,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-      "nessus_plugin_ids": [],
+      "nessus_plugin_ids": [
+        35372
+      ],
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "SC-20",
+        "SC-21"
+      ],
+      "nist_800_171": [
+        "3.13.8"
+      ],
+      "pci_dss_4": [
+        "1.3.3"
+      ],
+      "iso_27001": [
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "13.1.1"
+      ],
+      "soc2": [
+        "CC6.6"
+      ],
       "hitrust": [],
       "gdpr": [],
       "mitre_attack": [],
-      "searchsploit_terms": [],
+      "searchsploit_terms": [
+        "dns cache poisoning",
+        "dnssec bypass"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Audit DNS records for the affected domain. Remove stale or dangling records. Ensure DNSSEC is correctly signed and validated.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Moderate",
       "validation_tools": [
         "CWE-350"
       ],
@@ -348,12 +488,20 @@
     {
       "id": "OSIFT-008",
       "title": "SPF Record Missing",
-      "aliases": [],
+      "aliases": [
+        "DMARC Record Missing",
+        "MTA-STS Not Configured",
+        "SPF Record Missing",
+        "DKIM Configuration Missing"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "MEDIUM",
-      "cwe": [],
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 5.3,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
@@ -361,23 +509,60 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "SC-5",
+        "SI-8",
+        "SC-8"
+      ],
+      "nist_800_171": [
+        "3.13.8"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.13.2.3",
+        "A.10.1.1"
+      ],
+      "iso_27002": [
+        "13.2.3",
+        "10.1.1"
+      ],
+      "soc2": [
+        "CC6.7"
+      ],
+      "hitrust": [
+        "09.s"
+      ],
+      "gdpr": [
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [
+        "spf dmarc bypass",
+        "email spoofing"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Add an SPF TXT record to the domain's DNS: e.g., v=spf1 include:_spf.google.com ~all. Consult your mail provider's documentation.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-346",
         "RFC 7208"
@@ -401,12 +586,20 @@
     {
       "id": "OSIFT-009",
       "title": "DMARC Record Missing",
-      "aliases": [],
+      "aliases": [
+        "DMARC Record Missing",
+        "MTA-STS Not Configured",
+        "SPF Record Missing",
+        "DKIM Configuration Missing"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "MEDIUM",
-      "cwe": [],
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 5.3,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
@@ -414,23 +607,60 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "SC-5",
+        "SI-8",
+        "SC-8"
+      ],
+      "nist_800_171": [
+        "3.13.8"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.13.2.3",
+        "A.10.1.1"
+      ],
+      "iso_27002": [
+        "13.2.3",
+        "10.1.1"
+      ],
+      "soc2": [
+        "CC6.7"
+      ],
+      "hitrust": [
+        "09.s"
+      ],
+      "gdpr": [
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [
+        "spf dmarc bypass",
+        "email spoofing"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Add a DMARC record starting with p=quarantine or p=reject. Example: v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-346",
         "RFC 7489"
@@ -454,12 +684,20 @@
     {
       "id": "OSIFT-010",
       "title": "DKIM Configuration Missing",
-      "aliases": [],
+      "aliases": [
+        "DMARC Record Missing",
+        "MTA-STS Not Configured",
+        "SPF Record Missing",
+        "DKIM Configuration Missing"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "LOW",
-      "cwe": [],
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 3.7,
       "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
@@ -467,24 +705,78 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "SC-5",
+        "SI-8",
+        "SC-8"
+      ],
+      "nist_800_171": [
+        "3.13.8"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.13.2.3",
+        "A.10.1.1"
+      ],
+      "iso_27002": [
+        "13.2.3",
+        "10.1.1"
+      ],
+      "soc2": [
+        "CC6.7"
+      ],
+      "hitrust": [
+        "09.s"
+      ],
+      "gdpr": [
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [
+        "spf dmarc bypass",
+        "email spoofing"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Configure DKIM signing on your mail server and publish the public key as a DNS TXT record under <selector>._domainkey.<domain>.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [
+        {
+          "name": "dnsx",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/dnsx",
+          "install": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+          "command": "subfinder -d TARGET -all | dnsx -a -aaaa -cname -mx -txt -resp\ndnsx -d TARGET -w dns-wordlist.txt -a",
+          "description": "Fast DNS resolver and bulk DNS enumeration with wildcard filtering"
+        },
+        {
+          "name": "nuclei",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/nuclei",
+          "install": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+          "command": "nuclei -u TARGET -t cves/ -t vulnerabilities/ -t exposures/\nnuclei -u TARGET -tags sqli,xss,ssrf",
+          "description": "Fast template-based vulnerability scanner with 5000+ community templates"
+        }
+      ],
       "description": "No DKIM (DomainKeys Identified Mail) selector was discoverable for the target domain. Without DKIM, email authentication is weaker and phishing risk increases.",
       "impact": "",
       "_x_severity": "LOW",
@@ -808,36 +1100,88 @@
     {
       "id": "OSIFT-017",
       "title": "DNS Zone Transfer Permitted (AXFR)",
-      "aliases": [],
+      "aliases": [
+        "DNS Zone Transfer Permitted (AXFR)"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "HIGH",
-      "cwe": [],
+      "cwe": [
+        "200",
+        "16"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 5.3,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
+      "nessus_plugin_ids": [
+        10595
+      ],
+      "qualys_qids": [
+        70001
+      ],
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
+      "nist_csf2": [
+        "PR.PS-01",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "SC-20",
+        "CM-7",
+        "AC-3"
+      ],
+      "nist_800_171": [
+        "3.4.6",
+        "3.13.1"
+      ],
+      "pci_dss_4": [
+        "1.3.2",
+        "6.5.1"
+      ],
+      "iso_27001": [
+        "A.8.9",
+        "A.8.23"
+      ],
+      "iso_27002": [
+        "8.9",
+        "8.21"
+      ],
+      "soc2": [
+        "CC6.1",
+        "CC6.6"
+      ],
+      "hitrust": [
+        "09.ab",
+        "01.n"
+      ],
+      "gdpr": [
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1590.002",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: DNS"
+        },
+        {
+          "technique": "T1018",
+          "tactic": "Discovery",
+          "name": "Remote System Discovery"
+        }
+      ],
+      "searchsploit_terms": [
+        "DNS zone transfer",
+        "AXFR"
+      ],
+      "metasploit_modules": [
+        "auxiliary/gather/dns_zone_transfer"
+      ],
       "kev": false,
       "remediation_brief": "Restrict zone transfer permissions to authorised secondary name server IP addresses using ACLs in the DNS server configuration.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "DNS",
+      "remediation_category": "Security Misconfiguration",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-200",
         "CWE-284",
@@ -863,12 +1207,18 @@
     {
       "id": "OSIFT-018",
       "title": "Employee Email Address Harvested",
-      "aliases": [],
+      "aliases": [
+        "Email Address Identified",
+        "Corporate Email Enumeration via OSINT",
+        "Employee Email Address Harvested"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
@@ -876,24 +1226,83 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "PR.AT-01"
+      ],
+      "nist_800_53": [
+        "PM-5",
+        "PL-4",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.1.22"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1",
+        "P4.1"
+      ],
+      "hitrust": [
+        "07.a"
+      ],
+      "gdpr": [
+        "Article 5",
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1598.003",
+          "tactic": "Reconnaissance",
+          "name": "Phishing for Information: Spearphishing Link"
+        },
+        {
+          "technique": "T1589.002",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Email Addresses"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Educate employees on minimising personal information exposure. Implement email security controls (SPF, DKIM, DMARC, anti-phishing).",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "People / Process",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        {
+          "name": "theHarvester",
+          "type": "cli",
+          "url": "https://github.com/laramies/theHarvester",
+          "install": "git clone https://github.com/laramies/theHarvester.git && pip3 install -r requirements/base.txt",
+          "command": "python3 theHarvester.py -d TARGET -b all -l 500 -f results",
+          "description": "OSINT tool for gathering emails, subdomains, IPs, and URLs from multiple sources"
+        },
+        {
+          "name": "SpiderFoot",
+          "type": "web+cli",
+          "url": "https://github.com/smicallef/spiderfoot",
+          "install": "pip install spiderfoot  OR  git clone https://github.com/smicallef/spiderfoot.git",
+          "command": "python3 sf.py -l 0.0.0.0:5001  # then open browser\npython3 sfcli.py -s TARGET -t INTERNET_NAME",
+          "description": "Automated OSINT tool with 200+ modules for deep reconnaissance on targets"
+        },
+        {
+          "name": "Amass",
+          "type": "cli",
+          "url": "https://github.com/owasp-amass/amass",
+          "install": "go install github.com/owasp-amass/amass/v4/...@master",
+          "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+        }
+      ],
       "description": "An employee email address was discovered via theHarvester, Hunter.io, LinkedIn, or public sources. Collected addresses support phishing and credential spray attacks.",
       "impact": "",
       "_x_severity": "INFO",
@@ -960,36 +1369,66 @@
     {
       "id": "OSIFT-020",
       "title": "Wayback Machine URL with Sensitive Path",
-      "aliases": [],
+      "aliases": [
+        "Internal Server Directory Structure Revealed",
+        "Wayback Machine URL with Sensitive Path"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "MEDIUM",
-      "cwe": [],
+      "cwe": [
+        "CWE-548",
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 5.3,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "PR.PS-01"
+      ],
+      "nist_800_53": [
+        "CM-7",
+        "SI-12"
+      ],
+      "nist_800_171": [
+        "3.4.6"
+      ],
+      "pci_dss_4": [
+        "6.2.4"
+      ],
+      "iso_27001": [
+        "A.12.6.1"
+      ],
+      "iso_27002": [
+        "12.6.1"
+      ],
+      "soc2": [
+        "CC6.6"
+      ],
+      "hitrust": [
+        "09.ab"
+      ],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1083",
+          "tactic": "Discovery",
+          "name": "File and Directory Discovery"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Verify whether the resource still exists. Remove sensitive files from public-facing web roots. Review server access logs for recent access to these paths.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-538"
       ],
@@ -1010,7 +1449,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Shodan Exposure — Open Service",
+      "title": "Shodan Exposure \u2014 Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1057,7 +1496,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Shodan Exposure — Known CVE on Service",
+      "title": "Shodan Exposure \u2014 Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1209,12 +1648,18 @@
     {
       "id": "OSIFT-025",
       "title": "ASN / IP Range Identified",
-      "aliases": [],
+      "aliases": [
+        "IP Address Identified",
+        "ASN / IP Range Identified",
+        "Cloud Service Provider Asset Identified"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
@@ -1222,24 +1667,79 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "CM-8",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.4.1"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
       "hitrust": [],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.005",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: IP Addresses"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "No immediate action required. Ensure only intended IP ranges are associated with the organisation's ASN. Review WHOIS/ARIN records for accuracy.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Network",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
+      "validation_tools": [
+        {
+          "name": "subfinder",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/subfinder",
+          "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+          "command": "subfinder -d TARGET -all -o subdomains.txt",
+          "description": "Passive subdomain enumeration using 40+ sources (certificate transparency, DNS, APIs)"
+        },
+        {
+          "name": "Amass",
+          "type": "cli",
+          "url": "https://github.com/owasp-amass/amass",
+          "install": "go install github.com/owasp-amass/amass/v4/...@master",
+          "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+        },
+        {
+          "name": "dnsx",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/dnsx",
+          "install": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+          "command": "subfinder -d TARGET -all | dnsx -a -aaaa -cname -mx -txt -resp\ndnsx -d TARGET -w dns-wordlist.txt -a",
+          "description": "Fast DNS resolver and bulk DNS enumeration with wildcard filtering"
+        },
+        {
+          "name": "nmap",
+          "type": "cli",
+          "url": "https://nmap.org",
+          "install": "apt-get install nmap  OR  brew install nmap",
+          "command": "nmap -sV -sC --script vuln -p TARGET\nnmap -sV --script ssl-enum-ciphers -p 443 TARGET",
+          "description": "Network discovery and security scanning with 600+ NSE scripts"
+        }
+      ],
       "description": "The Autonomous System Number (ASN) and associated IP ranges for the target organisation were identified via BGP data and asnmap. This defines the full network footprint for scanning.",
       "impact": "Identified ASN and IP ranges map the organization's network allocations, revealing hosting providers, data center locations, and the full scope of publicly routable infrastructure that may harbor additional attack surface.",
       "_x_severity": "INFO",
@@ -1503,36 +2003,90 @@
     {
       "id": "OSIFT-031",
       "title": "Weak or Default Credentials Accepted",
-      "aliases": [],
+      "aliases": [
+        "Default Admin Credentials",
+        "Default Username and Password",
+        "Factory Default Login",
+        "Unchanged Default Credentials",
+        "Weak or Default Credentials Accepted",
+        "Vendor Default Password"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "CRITICAL",
-      "cwe": [],
-      "cve_examples": [],
+      "cwe": [
+        "CWE-1392"
+      ],
+      "cve_examples": [
+        "CVE-2021-40438",
+        "CVE-2020-29583",
+        "CVE-2023-20198",
+        "CVE-2021-22005"
+      ],
       "cvss_v3_base": 9.8,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-      "nessus_plugin_ids": [],
-      "qualys_qids": [],
-      "owasp_web": "",
-      "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
-      "metasploit_modules": [],
-      "kev": false,
+      "nessus_plugin_ids": [
+        10061,
+        34970,
+        57792
+      ],
+      "qualys_qids": [
+        150100,
+        150101
+      ],
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_api": "API2:2023 \u2013 Broken Authentication",
+      "nist_csf2": [
+        "PR.AA-01",
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "IA-5",
+        "CM-6"
+      ],
+      "nist_800_171": [
+        "3.5.7"
+      ],
+      "pci_dss_4": [
+        "8.3.1",
+        "2.2.1"
+      ],
+      "iso_27001": [
+        "A.9.4.3"
+      ],
+      "iso_27002": [
+        "9.4.3"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [
+        "01.b",
+        "09.ab"
+      ],
+      "gdpr": [
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1078.001",
+          "tactic": "Initial Access",
+          "name": "Valid Accounts: Default Accounts"
+        }
+      ],
+      "searchsploit_terms": [
+        "default credentials",
+        "default password"
+      ],
+      "metasploit_modules": [
+        "auxiliary/scanner/http/default_credentials"
+      ],
+      "kev": true,
       "remediation_brief": "Replace all default credentials with strong, unique secrets and enforce a password policy prior to any deployment.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Authentication",
+      "remediation_category": "Authentication",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-1392",
         "OWASP A07:2021"
@@ -1603,37 +2157,92 @@
     {
       "id": "OSIFT-033",
       "title": "Wildcard DNS Record Detected",
-      "aliases": [],
+      "aliases": [
+        "DNS Misconfiguration",
+        "DNSSEC Not Enabled",
+        "Wildcard DNS Record Detected"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "LOW",
-      "cwe": [],
-      "cve_examples": [],
+      "cwe": [
+        "CWE-345",
+        "CWE-924"
+      ],
+      "cve_examples": [
+        "CVE-2008-1447"
+      ],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
-      "nessus_plugin_ids": [],
+      "nessus_plugin_ids": [
+        35372
+      ],
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "SC-20",
+        "SC-21"
+      ],
+      "nist_800_171": [
+        "3.13.8"
+      ],
+      "pci_dss_4": [
+        "1.3.3"
+      ],
+      "iso_27001": [
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "13.1.1"
+      ],
+      "soc2": [
+        "CC6.6"
+      ],
       "hitrust": [],
       "gdpr": [],
       "mitre_attack": [],
-      "searchsploit_terms": [],
+      "searchsploit_terms": [
+        "dns cache poisoning",
+        "dnssec bypass"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Remove wildcard records unless they serve a specific purpose. Document and review all subdomains that rely on wildcard resolution.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        {
+          "name": "dnsx",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/dnsx",
+          "install": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+          "command": "subfinder -d TARGET -all | dnsx -a -aaaa -cname -mx -txt -resp\ndnsx -d TARGET -w dns-wordlist.txt -a",
+          "description": "Fast DNS resolver and bulk DNS enumeration with wildcard filtering"
+        },
+        {
+          "name": "nuclei",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/nuclei",
+          "install": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+          "command": "nuclei -u TARGET -t cves/ -t vulnerabilities/ -t exposures/\nnuclei -u TARGET -tags sqli,xss,ssrf",
+          "description": "Fast template-based vulnerability scanner with 5000+ community templates"
+        },
+        {
+          "name": "fierce",
+          "type": "cli",
+          "url": "https://github.com/mschwager/fierce",
+          "install": "pip3 install fierce",
+          "command": "fierce --domain TARGET --subdomains --delay 0.5",
+          "description": "DNS reconnaissance tool for subdomain discovery and zone transfer testing"
+        }
+      ],
       "description": "A wildcard DNS record (*.domain.com) was detected. This causes all subdomains to resolve, which may mask dangling CNAMEs and complicate subdomain takeover detection.",
       "impact": "",
       "_x_severity": "LOW",
@@ -1649,12 +2258,18 @@
     {
       "id": "OSIFT-034",
       "title": "Cloud Service Provider Asset Identified",
-      "aliases": [],
+      "aliases": [
+        "IP Address Identified",
+        "ASN / IP Range Identified",
+        "Cloud Service Provider Asset Identified"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
@@ -1662,24 +2277,79 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "CM-8",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.4.1"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
       "hitrust": [],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.005",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: IP Addresses"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Ensure cloud-hosted assets have appropriate access controls, IAM policies, and logging. Review for misconfigured security groups or ACLs.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Network",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
+      "validation_tools": [
+        {
+          "name": "subfinder",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/subfinder",
+          "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+          "command": "subfinder -d TARGET -all -o subdomains.txt",
+          "description": "Passive subdomain enumeration using 40+ sources (certificate transparency, DNS, APIs)"
+        },
+        {
+          "name": "Amass",
+          "type": "cli",
+          "url": "https://github.com/owasp-amass/amass",
+          "install": "go install github.com/owasp-amass/amass/v4/...@master",
+          "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+        },
+        {
+          "name": "dnsx",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/dnsx",
+          "install": "go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+          "command": "subfinder -d TARGET -all | dnsx -a -aaaa -cname -mx -txt -resp\ndnsx -d TARGET -w dns-wordlist.txt -a",
+          "description": "Fast DNS resolver and bulk DNS enumeration with wildcard filtering"
+        },
+        {
+          "name": "nmap",
+          "type": "cli",
+          "url": "https://nmap.org",
+          "install": "apt-get install nmap  OR  brew install nmap",
+          "command": "nmap -sV -sC --script vuln -p TARGET\nnmap -sV --script ssl-enum-ciphers -p 443 TARGET",
+          "description": "Network discovery and security scanning with 600+ NSE scripts"
+        }
+      ],
       "description": "cloudlist or cdncheck identified assets hosted in cloud or CDN infrastructure (AWS, Azure, GCP, Cloudflare, Fastly, Akamai). Provides context for attack surface mapping.",
       "impact": "",
       "_x_severity": "INFO",
@@ -1742,37 +2412,101 @@
     {
       "id": "OSIFT-036",
       "title": "Third-Party / Supply Chain Domain Identified",
-      "aliases": [],
+      "aliases": [
+        "Third-Party / Supply Chain Domain Identified",
+        "Dependency Confusion Attack Surface"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
-      "cve_examples": [],
+      "cwe": [
+        "CWE-494"
+      ],
+      "cve_examples": [
+        "CVE-2021-22116"
+      ],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A08:2021 \u2013 Software and Data Integrity Failures",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
-      "searchsploit_terms": [],
+      "nist_csf2": [
+        "ID.SC-01",
+        "ID.SC-02"
+      ],
+      "nist_800_53": [
+        "SA-12",
+        "SR-3"
+      ],
+      "nist_800_171": [
+        "3.14.1"
+      ],
+      "pci_dss_4": [
+        "12.8.1",
+        "12.8.4"
+      ],
+      "iso_27001": [
+        "A.15.1.1",
+        "A.15.2.1"
+      ],
+      "iso_27002": [
+        "15.1.1",
+        "15.2.1"
+      ],
+      "soc2": [
+        "CC9.2"
+      ],
+      "hitrust": [
+        "09.aa"
+      ],
+      "gdpr": [
+        "Article 28"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1195",
+          "tactic": "Initial Access",
+          "name": "Supply Chain Compromise"
+        }
+      ],
+      "searchsploit_terms": [
+        "dependency confusion",
+        "supply chain attack"
+      ],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Maintain an inventory of third-party services. Assess vendor security posture. Monitor for supply chain compromise indicators.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_component": "Process",
+      "remediation_category": "Supply Chain",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        {
+          "name": "SpiderFoot",
+          "type": "web+cli",
+          "url": "https://github.com/smicallef/spiderfoot",
+          "install": "pip install spiderfoot  OR  git clone https://github.com/smicallef/spiderfoot.git",
+          "command": "python3 sf.py -l 0.0.0.0:5001  # then open browser\npython3 sfcli.py -s TARGET -t INTERNET_NAME",
+          "description": "Automated OSINT tool with 200+ modules for deep reconnaissance on targets"
+        },
+        {
+          "name": "subfinder",
+          "type": "cli",
+          "url": "https://github.com/projectdiscovery/subfinder",
+          "install": "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+          "command": "subfinder -d TARGET -all -o subdomains.txt",
+          "description": "Passive subdomain enumeration using 40+ sources (certificate transparency, DNS, APIs)"
+        },
+        {
+          "name": "Amass",
+          "type": "cli",
+          "url": "https://github.com/owasp-amass/amass",
+          "install": "go install github.com/owasp-amass/amass/v4/...@master",
+          "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+        }
+      ],
       "description": "Enumeration revealed domains or subdomains associated with third-party services, SaaS providers, or supply chain vendors (identified via CNAME targets, MX records, or certificate SANs).",
       "impact": "",
       "_x_severity": "INFO",
@@ -1789,12 +2523,18 @@
     {
       "id": "OSIFT-037",
       "title": "Email Address Identified",
-      "aliases": [],
+      "aliases": [
+        "Email Address Identified",
+        "Corporate Email Enumeration via OSINT",
+        "Employee Email Address Harvested"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
@@ -1802,23 +2542,57 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "PR.AT-01"
+      ],
+      "nist_800_53": [
+        "PM-5",
+        "PL-4",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.1.22"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1",
+        "P4.1"
+      ],
+      "hitrust": [
+        "07.a"
+      ],
+      "gdpr": [
+        "Article 5",
+        "Article 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1598.003",
+          "tactic": "Reconnaissance",
+          "name": "Phishing for Information: Spearphishing Link"
+        },
+        {
+          "technique": "T1589.002",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Email Addresses"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Educate employees on minimising professional email exposure in public contexts. Implement robust email security controls including SPF, DKIM, and DMARC at p=reject. Enable anti-phishing and impersonation protection in the email gateway. Monitor for credential spray activity against cloud identity providers.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "People / Process",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Moderate",
       "validation_tools": [
         "CWE-200"
       ],
@@ -1839,12 +2613,18 @@
     {
       "id": "OSIFT-038",
       "title": "IP Address Identified",
-      "aliases": [],
+      "aliases": [
+        "IP Address Identified",
+        "ASN / IP Range Identified",
+        "Cloud Service Provider Asset Identified"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
@@ -1852,23 +2632,45 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "ID.AM-03"
+      ],
+      "nist_800_53": [
+        "CM-8",
+        "RA-2"
+      ],
+      "nist_800_171": [
+        "3.4.1"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
       "hitrust": [],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.005",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: IP Addresses"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Reconcile all discovered IP addresses against the authorised asset inventory. Ensure cloud-hosted instances are protected by security groups or firewall rules limiting unnecessary public exposure. Review whether any discovered IPs host unintended or forgotten services.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Network",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-200"
       ],
@@ -1889,36 +2691,66 @@
     {
       "id": "OSIFT-039",
       "title": "Internal Server Directory Structure Revealed",
-      "aliases": [],
+      "aliases": [
+        "Internal Server Directory Structure Revealed",
+        "Wayback Machine URL with Sensitive Path"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "MEDIUM",
-      "cwe": [],
+      "cwe": [
+        "CWE-548",
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 5.3,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
+      "nist_csf2": [
+        "PR.DS-02",
+        "PR.PS-01"
+      ],
+      "nist_800_53": [
+        "CM-7",
+        "SI-12"
+      ],
+      "nist_800_171": [
+        "3.4.6"
+      ],
+      "pci_dss_4": [
+        "6.2.4"
+      ],
+      "iso_27001": [
+        "A.12.6.1"
+      ],
+      "iso_27002": [
+        "12.6.1"
+      ],
+      "soc2": [
+        "CC6.6"
+      ],
+      "hitrust": [
+        "09.ab"
+      ],
       "gdpr": [],
-      "mitre_attack": [],
+      "mitre_attack": [
+        {
+          "technique": "T1083",
+          "tactic": "Discovery",
+          "name": "File and Directory Discovery"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Configure the web application to display generic error pages rather than stack traces or exception details in production. Suppress server-side path information from HTTP response headers and application output. Review Wayback Machine archives for pages that previously revealed directory structure and ensure those resources are no longer publicly accessible.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-548",
         "CWE-200"
@@ -1941,12 +2773,18 @@
     {
       "id": "OSIFT-040",
       "title": "Phone Number Pattern Spotted",
-      "aliases": [],
+      "aliases": [
+        "Phone Number Pattern Spotted",
+        "Phone Number Pattern Spotted - Unconfirmed"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "INFO",
-      "cwe": [],
+      "cwe": [
+        "CWE-359",
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 0.0,
       "cvss_vector": "N/A",
@@ -1954,23 +2792,52 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "PM-5",
+        "PL-4",
+        "SC-28"
+      ],
+      "nist_800_171": [
+        "3.1.22"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "P4.1",
+        "CC6.1"
+      ],
+      "hitrust": [
+        "07.a"
+      ],
+      "gdpr": [
+        "Article 5",
+        "Article 25"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1589.001",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Credentials"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Review whether the exposed telephone number serves a legitimate public-facing business purpose (e.g., a sales or support line). For internal or employee numbers, remove them from public web properties. Conduct security awareness training focused on social engineering and vishing recognition.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "People / Process",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
       "validation_tools": [
         "CWE-200"
       ],
@@ -1989,13 +2856,19 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Potential PII Pattern — Social Security Number Format Detected",
-      "aliases": [],
+      "title": "Potential PII Pattern \u2014 Social Security Number Format Detected",
+      "aliases": [
+        "Social Security pattern detected:",
+        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "HIGH",
-      "cwe": [],
+      "cwe": [
+        "CWE-359",
+        "CWE-200"
+      ],
       "cve_examples": [],
       "cvss_v3_base": 7.5,
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
@@ -2003,23 +2876,58 @@
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
+      "nist_csf2": [
+        "PR.DS-01",
+        "ID.AM-01"
+      ],
+      "nist_800_53": [
+        "SC-28",
+        "PM-5",
+        "PL-4"
+      ],
+      "nist_800_171": [
+        "3.1.22",
+        "3.13.10"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1",
+        "A.18.1.4"
+      ],
+      "iso_27002": [
+        "8.1.1",
+        "18.1.4"
+      ],
+      "soc2": [
+        "P4.1",
+        "CC6.1"
+      ],
+      "hitrust": [
+        "07.a",
+        "06.d"
+      ],
+      "gdpr": [
+        "Article 5",
+        "Article 9",
+        "Article 32",
+        "Article 33"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1589",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
       "remediation_brief": "Immediately investigate whether the detected values are real SSNs or test data. If real, initiate incident response per your breach notification obligations (HIPAA, state data breach laws). Remove the file or page containing the data from public access. Implement data loss prevention (DLP) scanning to detect SSN-format strings in web application output and source code repositories. Conduct a broader audit of publicly accessible content for additional PII exposure.",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
+      "remediation_component": "People / Process",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "High",
       "validation_tools": [
         "CWE-359",
         "CWE-200"
@@ -2075,7 +2983,7 @@
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
       "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
@@ -2091,37 +2999,89 @@
     {
       "id": "OS-001",
       "title": "Phone Number Pattern Spotted - Unconfirmed",
-      "aliases": [],
+      "aliases": [
+        "Phone Number Pattern Spotted",
+        "Phone Number Pattern Spotted - Unconfirmed"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "",
-      "cwe": [],
+      "cwe": [
+        "CWE-359",
+        "CWE-200"
+      ],
       "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
+      "nist_csf2": [
+        "ID.AM-01",
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "PM-5",
+        "PL-4",
+        "SC-28"
+      ],
+      "nist_800_171": [
+        "3.1.22"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1"
+      ],
+      "iso_27002": [
+        "8.1.1"
+      ],
+      "soc2": [
+        "P4.1",
+        "CC6.1"
+      ],
+      "hitrust": [
+        "07.a"
+      ],
+      "gdpr": [
+        "Article 5",
+        "Article 25"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1589.001",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Credentials"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles \u2014 only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
+      "remediation_component": "People / Process",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Low",
+      "validation_tools": [
+        {
+          "name": "theHarvester",
+          "type": "cli",
+          "url": "https://github.com/laramies/theHarvester",
+          "install": "git clone https://github.com/laramies/theHarvester.git && pip3 install -r requirements/base.txt",
+          "command": "python3 theHarvester.py -d TARGET -b all -l 500 -f results",
+          "description": "OSINT tool for gathering emails, subdomains, IPs, and URLs from multiple sources"
+        },
+        {
+          "name": "SpiderFoot",
+          "type": "web+cli",
+          "url": "https://github.com/smicallef/spiderfoot",
+          "install": "pip install spiderfoot  OR  git clone https://github.com/smicallef/spiderfoot.git",
+          "command": "python3 sf.py -l 0.0.0.0:5001  # then open browser\npython3 sfcli.py -s TARGET -t INTERNET_NAME",
+          "description": "Automated OSINT tool with 200+ modules for deep reconnaissance on targets"
+        }
+      ],
       "description": "",
       "impact": "Discovered phone numbers enable vishing (voice phishing) and SMS-based social engineering attacks. Combined with employee names and roles from other OSINT sources, phone numbers allow targeted pretexting calls that bypass email security controls entirely.",
       "_scaffold_from": "osift.py:9195",
@@ -2130,37 +3090,95 @@
     {
       "id": "OS-002",
       "title": "Social Security pattern detected:",
-      "aliases": [],
+      "aliases": [
+        "Social Security pattern detected:",
+        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+      ],
       "source_tools": [
         "osift"
       ],
       "risk": "",
-      "cwe": [],
+      "cwe": [
+        "CWE-359",
+        "CWE-200"
+      ],
       "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
+      "cvss_v3_base": 7.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
       "owasp_web": "",
       "owasp_api": "",
-      "nist_csf2": [],
-      "nist_800_53": [],
-      "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
-      "soc2": [],
-      "hitrust": [],
-      "gdpr": [],
-      "mitre_attack": [],
+      "nist_csf2": [
+        "PR.DS-01",
+        "ID.AM-01"
+      ],
+      "nist_800_53": [
+        "SC-28",
+        "PM-5",
+        "PL-4"
+      ],
+      "nist_800_171": [
+        "3.1.22",
+        "3.13.10"
+      ],
+      "pci_dss_4": [
+        "12.5.1"
+      ],
+      "iso_27001": [
+        "A.8.1.1",
+        "A.18.1.4"
+      ],
+      "iso_27002": [
+        "8.1.1",
+        "18.1.4"
+      ],
+      "soc2": [
+        "P4.1",
+        "CC6.1"
+      ],
+      "hitrust": [
+        "07.a",
+        "06.d"
+      ],
+      "gdpr": [
+        "Article 5",
+        "Article 9",
+        "Article 32",
+        "Article 33"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1589",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information"
+        }
+      ],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "",
-      "remediation_component": "",
-      "remediation_category": "",
-      "remediation_effort": "",
-      "validation_tools": [],
+      "remediation_brief": "Immediately investigate any SSN-pattern strings discovered via OSINT to determine if real data has been exposed. If confirmed, invoke the incident response process, notify affected individuals, and report to relevant data protection authorities under applicable breach notification requirements. Implement DLP controls and audit document stores for improperly shared sensitive identifiers.",
+      "remediation_component": "People / Process",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "High",
+      "validation_tools": [
+        {
+          "name": "theHarvester",
+          "type": "cli",
+          "url": "https://github.com/laramies/theHarvester",
+          "install": "git clone https://github.com/laramies/theHarvester.git && pip3 install -r requirements/base.txt",
+          "command": "python3 theHarvester.py -d TARGET -b all -l 500 -f results",
+          "description": "OSINT tool for gathering emails, subdomains, IPs, and URLs from multiple sources"
+        },
+        {
+          "name": "SpiderFoot",
+          "type": "web+cli",
+          "url": "https://github.com/smicallef/spiderfoot",
+          "install": "pip install spiderfoot  OR  git clone https://github.com/smicallef/spiderfoot.git",
+          "command": "python3 sf.py -l 0.0.0.0:5001  # then open browser\npython3 sfcli.py -s TARGET -t INTERNET_NAME",
+          "description": "Automated OSINT tool with 200+ modules for deep reconnaissance on targets"
+        }
+      ],
       "description": "",
       "impact": "",
       "_scaffold_from": "osift.py:9209",

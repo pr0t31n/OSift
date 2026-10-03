@@ -16303,7 +16303,6 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
                         host=data.domain)
 
     _emit_email_group_ef(_inscope_emails, "Email Address Identified",          "email_identified")
-    _emit_email_group_ef(_unknown_emails, "Email Address Identified (Unknown)", "email_identified_unknown")
 
     # ── Unified findings report ────────────────────────────────────────────────
     # Normalise output_file paths to be portable relative paths.
@@ -18840,19 +18839,16 @@ class IntelAggregator:
         # the confirmed (DNS-resolved or HTTP-responding) set is available.
         # Secondary subdomains and secondary domains are not emitted as findings.
 
-        # Primary emails only — secondary emails are excluded from findings
+        # Primary emails — in-scope only; out-of-scope emails are intelligence, not findings
         _scope_domains_pe = set(data.domains if data.domains else [data.domain])
         for rec in intel["email_addresses"]["primary"]:
             _pe_email = rec["email"]
             _pe_dom   = _pe_email.split("@", 1)[1].lower() if "@" in _pe_email else ""
-            _pe_title = (
-                "Email Address Identified"
-                if any(_pe_dom == _d or _pe_dom.endswith("." + _d) for _d in _scope_domains_pe)
-                else "Email Address Identified (Unknown)"
-            )
+            if not any(_pe_dom == _d or _pe_dom.endswith("." + _d) for _d in _scope_domains_pe):
+                continue
             _pe_srcs = [_s for _s in (rec.get("sources") or []) if _s] or ["OSift"]
             add_finding(data, _pe_srcs[0], "primary_email", self.CAT_EMAIL, "info",
-                        _pe_title,
+                        "Email Address Identified",
                         host=data.domain,
                         email=_pe_email,
                         affected=_pe_email,
@@ -18861,36 +18857,12 @@ class IntelAggregator:
                         breach=rec.get("breach", False))
             for _pe_src in _pe_srcs[1:]:
                 add_finding(data, _pe_src, "primary_email", self.CAT_EMAIL, "info",
-                            _pe_title,
+                            "Email Address Identified",
                             host=data.domain,
                             email=_pe_email,
                             timestamp=ts)
 
-        # Valid phone numbers — emit as "Phone Number Pattern Spotted - Confirmed"
-        # using type="phone_confirmed" so findings from the crawl path (same type)
-        # merge with these when the same E.164 number appears in both places.
-        for rec in intel["phone_numbers"]["valid"]:
-            _pv_e164     = (rec.get("e164") or rec.get("raw") or "").strip()
-            _pv_affected = _build_phone_affected(rec)
-            if not _pv_affected:
-                continue
-            ext = rec.get("external_validation") or {}
-            add_finding(data, "phone-validator", "phone_confirmed", self.CAT_PHONE, "info",
-                        "Phone Number Pattern Spotted - Confirmed",
-                        host=data.domain,
-                        phone=_pv_e164,
-                        affected=_pv_affected,
-                        timestamp=ts,
-                        phone_e164=rec.get("e164"),
-                        phone_raw=rec.get("raw"),
-                        area_code=rec.get("area_code"),
-                        location=rec.get("location", ""),
-                        country=rec.get("country", ""),
-                        region=rec.get("region", ""),
-                        format_type=rec.get("format_type", ""),
-                        carrier=ext.get("carrier", ""),
-                        line_type=ext.get("line_type", ""),
-                        phone_source=rec.get("source", ""))
+        # Phone numbers — intelligence only, not emitted as findings
 
         # Credential breaches
         for rec in intel["breaches"]:
@@ -19645,22 +19617,7 @@ class IntelAggregator:
             if cloud:   desc += f" | Cloud: {cloud}"
             rows.append(_row(f"IP Address: {ip}", desc, ip=ip, command="osift"))
 
-        # ── Employees ─────────────────────────────────────────────────────────
-        for rec in intel["employees"]:
-            name   = rec.get("name", "")
-            title  = rec.get("title", "")
-            dept   = rec.get("department", "")
-            email  = rec.get("email", "")
-            src    = rec.get("source", "")
-            desc   = f"Person: {name}"
-            if title: desc += f" | Title: {title}"
-            if dept:  desc += f" | Dept: {dept}"
-            if email: desc += f" | Email: {email}"
-            if src:   desc += f" | Source: {src}"
-            rows.append(_row(
-                f"Employee: {name}", desc,
-                command="osift/theHarvester",
-            ))
+        # ── Employees — intelligence-only, not emitted as findings ─────────
 
         # ── TLS Certificates ──────────────────────────────────────────────────
         for rec in intel["certificates"]:
@@ -21082,40 +21039,6 @@ class PeopleDorker:
         self._save_results(_query_results, _people)
 
         if _people:
-            sources_seen = sorted({p["source"].split(":")[1] for p in _people})
-            # Build affected list: each discovered person as a line
-            _aff_lines = []
-            for _pp in _people:
-                _fn = _pp.get("first_name", "")
-                _ln = _pp.get("last_name", "")
-                _ps = _pp.get("source", "").split(":")[-1] if _pp.get("source") else ""
-                _pe = _pp.get("email", "")
-                _ph = _pp.get("phone", "")
-                _parts = [f"{_fn} {_ln}".strip()]
-                if _pe:
-                    _parts.append(_pe)
-                if _ph:
-                    _parts.append(_ph)
-                if _ps:
-                    _parts.append(f"({_ps})")
-                _aff_lines.append(" — ".join(_parts))
-            _people_file = self._out_dir / "discovered_people.json"
-            add_finding(
-                self.data,
-                tool     = "people_dorker",
-                type_    = "Employee PII Exposure",
-                category = CAT_SENSITIVE,
-                severity = "MEDIUM",
-                detail   = (
-                    f"Search-engine dorking discovered {len(_people)} potential employee "
-                    f"name(s) and/or personal information for '{self.company}' via "
-                    f"people-finder and professional directory sites. Sources: "
-                    + ", ".join(sources_seen) + "."
-                ),
-                domain   = self.domain,
-                affected = "\n".join(_aff_lines),
-                output_file = str(_people_file),
-            )
             self.log.success(
                 f"[DORK] Phase 14 complete: {len(_people)} people, "
                 f"{len(self._found_phones)} phone(s) discovered"
@@ -21325,9 +21248,9 @@ class DnsTwistRunner:
 
                 total_registered += 1
 
-                dns_a = entry.get("dns_a") or []
-                dns_aaaa = entry.get("dns_aaaa") or []
-                dns_mx = entry.get("dns_mx") or []
+                dns_a = [a for a in (entry.get("dns_a") or []) if isinstance(a, str) and not a.startswith("!")]
+                dns_aaaa = [a for a in (entry.get("dns_aaaa") or []) if isinstance(a, str) and not a.startswith("!")]
+                dns_mx = [m for m in (entry.get("dns_mx") or []) if not (isinstance(m, str) and m.startswith("!"))]
                 dns_ns = entry.get("dns_ns") or []
                 has_ip = bool(dns_a or dns_aaaa)
                 has_mx = bool(dns_mx)
@@ -21347,6 +21270,7 @@ class DnsTwistRunner:
 
                 detail = f"Typosquatting Domain Detected: {perm_domain}"
                 detail += f" (fuzzer: {fuzzer}){detail_suffix}"
+                typo_title = "Typosquatting Domain Detected"
                 if whois_reg:
                     detail += f"\nRegistrar: {whois_reg}"
                 if whois_created:
@@ -21360,9 +21284,9 @@ class DnsTwistRunner:
                     self.data, "dnstwist", "typosquatting", CAT_BRAND,
                     severity, detail,
                     domain=perm_domain, affected=perm_domain,
-                    host=domain,
                     output_file=str(out_file),
                     fuzzer=fuzzer,
+                    title=typo_title,
                 )
 
                 if has_ip:

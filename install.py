@@ -780,6 +780,39 @@ def _create_tool_symlinks():
         link_path.symlink_to(target)
         info(f"Symlink: {link_path} → {target}")
 
+    _fix_emailharvester_plugins()
+
+
+def _fix_emailharvester_plugins():
+    """Ensure EmailHarvester can find its plugins directory.
+
+    pip install EmailHarvester places a standalone script at /usr/local/bin/
+    that uses os.path.dirname(os.path.realpath(__file__)) to locate plugins/.
+    When that resolves to /usr/local/bin/ instead of /opt/EmailHarvester/,
+    it crashes with FileNotFoundError.  Fix: symlink plugins/ next to
+    wherever the binary resolves, if the git clone has the real plugins.
+    """
+    eh_bin = BIN_DIR / "EmailHarvester"
+    src_plugins = OPT_DIR / "EmailHarvester" / "plugins"
+    if not src_plugins.is_dir():
+        warn("EmailHarvester plugins/ not found in /opt/EmailHarvester/; skipping fix.")
+        return
+
+    if eh_bin.exists() or eh_bin.is_symlink():
+        resolved = Path(os.path.realpath(str(eh_bin)))
+        resolved_dir = resolved.parent
+        target_plugins = resolved_dir / "plugins"
+        if target_plugins.is_dir() and not target_plugins.is_symlink():
+            info(f"EmailHarvester plugins/ already present at {target_plugins}")
+            return
+        if resolved_dir != src_plugins.parent:
+            if target_plugins.is_symlink():
+                target_plugins.unlink()
+            target_plugins.symlink_to(src_plugins)
+            info(f"Symlink: {target_plugins} → {src_plugins}")
+        else:
+            info("EmailHarvester resolves to /opt/EmailHarvester/; plugins/ already local.")
+
 
 # ─── symlinks ────────────────────────────────────────────────────────────────
 
@@ -839,6 +872,18 @@ def run_check():
         status = f"{G}OK{W}" if ok else f"{Y}MISSING{W}"
         print(f"  {'symlink:'+name:22s} {status}")
 
+    # EmailHarvester plugins reachability
+    eh_bin = BIN_DIR / "EmailHarvester"
+    if eh_bin.exists() or eh_bin.is_symlink():
+        resolved_dir = Path(os.path.realpath(str(eh_bin))).parent
+        plugins_ok = (resolved_dir / "plugins").is_dir()
+        label = "EH-plugins"
+        if plugins_ok:
+            info(f"{label:22s} {G}OK{W}  ({resolved_dir / 'plugins'})")
+        else:
+            err(f"{label:22s} {R}MISSING{W}  (plugins/ not found at {resolved_dir})")
+            all_ok = False
+
     print()
     if all_ok:
         info(f"{G}All checks passed.{W}")
@@ -869,6 +914,13 @@ def post_install_summary():
         link = BIN_DIR / name
         ok = link.is_symlink()
         results.append((f"symlink:{name}", ok, str(link) if ok else "missing"))
+
+    eh_bin = BIN_DIR / "EmailHarvester"
+    if eh_bin.exists() or eh_bin.is_symlink():
+        resolved_dir = Path(os.path.realpath(str(eh_bin))).parent
+        plugins_ok = (resolved_dir / "plugins").is_dir()
+        results.append(("EH-plugins", plugins_ok,
+                         str(resolved_dir / "plugins") if plugins_ok else "missing"))
 
     pad = max(len(r[0]) for r in results) + 2
     print()

@@ -739,7 +739,7 @@ def _record_timeout_action_item(
     ip: str = "",
     port: int = 0,
     hostname: str = "",
-    priority: str = "HIGH",
+    priority: str = "MEDIUM",
 ):
     """Record a timeout/error action item for a tool that failed to complete."""
     entry = {

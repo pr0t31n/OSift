@@ -2,7 +2,7 @@
   "version": "1.6.0",
   "tool": "osift",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 44,
+  "total": 48,
   "from_existing": 42,
   "newly_scaffolded": 2,
   "findings": [
@@ -41,7 +41,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A subdomain belonging to the target organisation was identified through passive or active enumeration (Amass, subfinder, certificate transparency, theHarvester, puredns brute-force).",
-      "impact": "",
+      "impact": "Discovered subdomains expand the known attack surface and may reveal development environments, internal tools, or forgotten services that lack production-grade security controls.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "Review all discovered subdomains for unintended exposure. Ensure internal/development subdomains are not publicly resolvable where unnecessary.",
@@ -87,7 +87,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A subdomain or IP address responded to HTTP/HTTPS probing (httpx) or ICMP/TCP and is confirmed to be serving traffic.",
-      "impact": "",
+      "impact": "Confirmed live hosts verify that discovered IP addresses are actively serving content, distinguishing real targets from inactive allocations. This narrows the attack surface to actionable targets for subsequent vulnerability scanning.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "Ensure only intended services are publicly accessible. Review the confirmed host list for shadow IT or forgotten assets.",
@@ -136,7 +136,7 @@
         "CWE-200"
       ],
       "description": "A non-standard or sensitive port (e.g., 8080, 8443, 9200, 27017, 3306) was found open on a subdomain via naabu port scanning or Shodan. Exposes additional attack surface.",
-      "impact": "",
+      "impact": "Open ports on subdomains expose services that may not receive the same security attention as the primary domain. These services often have default configurations, weak credentials, or unpatched vulnerabilities.",
       "_x_severity": "MEDIUM",
       "_x_category": "Attack Surface",
       "_x_remediation": "Restrict open ports to those strictly required. Apply firewall rules to limit access to sensitive ports (databases, admin panels) by source IP.",
@@ -231,7 +231,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The server's TLS certificate has passed its expiry date, causing browser trust errors and indicating a breakdown in certificate lifecycle management.",
-      "impact": "",
+      "impact": "An expired certificate causes browser warnings that train users to bypass security prompts, and in many configurations disables certificate pinning. An attacker can present their own certificate to users conditioned to click through warnings, enabling silent interception of all encrypted traffic.",
       "_x_severity": "HIGH",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
@@ -331,7 +331,7 @@
         "CWE-350"
       ],
       "description": "A DNS record anomaly was detected: dangling CNAME, multiple conflicting A records, DNSSEC misconfiguration, or inconsistent NS delegation that could be exploited.",
-      "impact": "",
+      "impact": "DNS misconfigurations can enable domain takeover, cache poisoning, or unauthorized zone transfers. An attacker exploiting these weaknesses can redirect traffic, intercept email, or impersonate the organization's services.",
       "_x_severity": "MEDIUM",
       "_x_category": "DNS",
       "_x_remediation": "Audit DNS records for the affected domain. Remove stale or dangling records. Ensure DNSSEC is correctly signed and validated.",
@@ -533,7 +533,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "An email address associated with the target organisation appeared in a known data breach (HIBP or Dehashed). The account holder's credentials may have been exposed.",
-      "impact": "",
+      "impact": "Email addresses found in breach databases indicate that associated passwords may be available to attackers. Credential reuse across services means these compromised credentials may grant access to the organization's systems.",
       "_x_severity": "HIGH",
       "_x_category": "Breach Intelligence",
       "_x_remediation": "Notify affected employees. Force password resets for all affected accounts. Enable MFA. Review whether compromised accounts have access to sensitive systems.",
@@ -583,7 +583,7 @@
         "CWE-521"
       ],
       "description": "A plaintext or reversibly hashed password was found in a breach database (Dehashed) for a target-domain email address. Direct account compromise may be possible.",
-      "impact": "",
+      "impact": "Plaintext credentials from data breaches provide direct access if the user has reused passwords across services. This represents an immediate, exploitable risk requiring urgent password reset and multi-factor authentication enforcement.",
       "_x_severity": "CRITICAL",
       "_x_category": "Breach Intelligence",
       "_x_remediation": "Immediately force a password reset for the affected account. Check for reuse across other systems (VPN, cloud consoles, O365). Enable MFA on all accounts.",
@@ -844,7 +844,7 @@
         "CVE-1999-0532"
       ],
       "description": "The DNS server responds to unauthenticated AXFR zone transfer requests, exposing the complete DNS zone including internal hostnames, IP addresses, and mail infrastructure.",
-      "impact": "",
+      "impact": "Permitted zone transfers expose the complete DNS zone contents including all hostnames, IP addresses, and service records. This provides an attacker with a comprehensive map of the organization's infrastructure without active scanning.",
       "_x_severity": "HIGH",
       "_x_category": "DNS",
       "_x_remediation": "Restrict zone transfer permissions to authorised secondary name server IP addresses using ACLs in the DNS server configuration.",
@@ -944,7 +944,7 @@
         "CWE-200"
       ],
       "description": "The technology stack of a live host was identified (Wappalyzer, httpx, whatweb): CMS, web framework, server software, JavaScript libraries, CDN providers. Helps attackers target known vulnerabilities.",
-      "impact": "",
+      "impact": "Technology fingerprints reveal the application stack, framework versions, and third-party components. An attacker uses this to target version-specific vulnerabilities and narrow exploit selection to applicable attack vectors.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "Remove version disclosure from HTTP headers (Server, X-Powered-By). Keep software up to date. Consider a WAF to obscure fingerprinting.",
@@ -1010,7 +1010,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Shodan Exposure \u2014 Open Service",
+      "title": "Shodan Exposure — Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1043,7 +1043,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "Shodan reports an open service on a target IP that is visible to the public internet. Banner data, software version, and service type are indexed and searchable by anyone.",
-      "impact": "",
+      "impact": "Shodan-indexed services are visible to any internet user and often reveal version strings, default pages, and configuration details. Attackers routinely search Shodan for exposed services matching known vulnerable versions.",
       "_x_severity": "MEDIUM",
       "_x_category": "Attack Surface",
       "_x_remediation": "Restrict access to services that do not need to be publicly reachable. Apply firewall rules. Update exposed services to current versions.",
@@ -1057,7 +1057,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Shodan Exposure \u2014 Known CVE on Service",
+      "title": "Shodan Exposure — Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1092,7 +1092,7 @@
         "CWE-1026"
       ],
       "description": "Shodan has associated one or more CVEs with a service running on a target IP based on the service banner and version string. A known public exploit may exist.",
-      "impact": "",
+      "impact": "Shodan-indexed services are visible to any internet user and often reveal version strings, default pages, and configuration details. Attackers routinely search Shodan for exposed services matching known vulnerable versions.",
       "_x_severity": "HIGH",
       "_x_category": "Attack Surface",
       "_x_remediation": "Patch or update the affected service immediately. If patching is not immediately possible, apply mitigating controls (WAF rule, network restriction).",
@@ -1195,7 +1195,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A certificate was found in CT logs (crt.sh, Certspotter, Facebook CT) for the target domain. The SAN/CN reveals subdomain names that may not be otherwise discoverable.",
-      "impact": "",
+      "impact": "Certificate Transparency logs reveal all certificates ever issued for the domain, exposing subdomain naming patterns, internal service names, and historical infrastructure that may still be accessible.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "No direct remediation required. Review disclosed subdomains for unintended exposure. Consider certificate issuance monitoring for your domain.",
@@ -1241,7 +1241,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The Autonomous System Number (ASN) and associated IP ranges for the target organisation were identified via BGP data and asnmap. This defines the full network footprint for scanning.",
-      "impact": "",
+      "impact": "Identified ASN and IP ranges map the organization's network allocations, revealing hosting providers, data center locations, and the full scope of publicly routable infrastructure that may harbor additional attack surface.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "No immediate action required. Ensure only intended IP ranges are associated with the organisation's ASN. Review WHOIS/ARIN records for accuracy.",
@@ -1289,7 +1289,7 @@
         "CWE-200"
       ],
       "description": "WHOIS records for the target domain revealed registrant contact details, nameserver names, registrar information, and registration dates. This information aids in phishing and social engineering.",
-      "impact": "",
+      "impact": "WHOIS records may reveal registrant names, email addresses, phone numbers, and physical addresses of domain administrators. This personally identifiable information enables targeted social engineering against infrastructure personnel.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "Enable WHOIS privacy protection through your registrar for domains where registrant PII should not be public.",
@@ -1823,7 +1823,7 @@
         "CWE-200"
       ],
       "description": "One or more email addresses associated with the target organisation or its employees were harvested during OSINT enumeration using tools such as theHarvester, Hunter.io, or Phonebook.cz. Exposed email addresses directly enable phishing campaigns, password spray attacks against cloud identity platforms (M365, Google Workspace), and account enumeration. Even a single valid address provides an attacker with a confirmed naming convention from which to infer additional accounts.",
-      "impact": "",
+      "impact": "Harvested email addresses enable targeted phishing, credential stuffing against SSO portals, and username enumeration. Email naming conventions reveal the format used for all employees, allowing generation of valid email addresses for the entire organization.",
       "_x_severity": "INFO",
       "_x_category": "Information Disclosure",
       "_x_remediation": "Educate employees on minimising professional email exposure in public contexts. Implement robust email security controls including SPF, DKIM, and DMARC at p=reject. Enable anti-phishing and impersonation protection in the email gateway. Monitor for credential spray activity against cloud identity providers.",
@@ -1975,7 +1975,7 @@
         "CWE-200"
       ],
       "description": "A pattern matching a telephone number (e.g., +1-555-867-5309, (800) 123-4567) was identified in publicly accessible web content associated with the target domain. Exposed phone numbers can be used to conduct vishing (voice phishing) attacks impersonating employees or IT support, to enumerate internal organisational structure, or to harvest contact information for social engineering campaigns targeting staff.",
-      "impact": "",
+      "impact": "Discovered phone numbers enable vishing (voice phishing) and SMS-based social engineering attacks. Combined with employee names and roles from other OSINT sources, phone numbers allow targeted pretexting calls that bypass email security controls entirely.",
       "_x_severity": "INFO",
       "_x_category": "PII Exposure",
       "_x_remediation": "Review whether the exposed telephone number serves a legitimate public-facing business purpose (e.g., a sales or support line). For internal or employee numbers, remove them from public web properties. Conduct security awareness training focused on social engineering and vishing recognition.",
@@ -1989,7 +1989,7 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Potential PII Pattern \u2014 Social Security Number Format Detected",
+      "title": "Potential PII Pattern — Social Security Number Format Detected",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -2075,8 +2075,8 @@
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
-      "impact": "",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
       "_x_remediation": "Replace the self-signed certificate with one issued by a publicly trusted CA. For internet-facing services, use Let's Encrypt via ACME automation (certbot, acme.sh, or Caddy) for zero-cost, automatically renewing certificates. For internal services, establish an internal CA with proper trust distribution rather than using ad-hoc self-signed certificates.",
@@ -2123,7 +2123,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Discovered phone numbers enable vishing (voice phishing) and SMS-based social engineering attacks. Combined with employee names and roles from other OSINT sources, phone numbers allow targeted pretexting calls that bypass email security controls entirely.",
       "_scaffold_from": "osift.py:9195",
       "_template": false
     },
@@ -2165,6 +2165,200 @@
       "impact": "",
       "_scaffold_from": "osift.py:9209",
       "_template": false
+    },
+    {
+      "id": "OSIFT-043",
+      "title": "DNS: DMARC record found",
+      "aliases": [
+        "DMARC Record Found",
+        "DMARC Policy Detected"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "A DMARC (Domain-based Message Authentication, Reporting and Conformance) record was found for the domain. DMARC instructs receiving mail servers on how to handle messages that fail SPF and DKIM validation checks.",
+      "impact": "A properly configured DMARC record instructs receiving mail servers to reject or quarantine spoofed emails. While this is a positive security control, the DMARC policy details reveal the organization's email authentication architecture and reporting endpoints, which inform phishing campaign design.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure DMARC policy is set to 'reject' (p=reject) for maximum protection against email spoofing. Configure aggregate and forensic reporting endpoints to monitor policy violations.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "dig",
+        "nslookup",
+        "dmarcian"
+      ]
+    },
+    {
+      "id": "OSIFT-044",
+      "title": "DNS: Missing CAA Record",
+      "aliases": [
+        "Missing CAA Record",
+        "No CAA Record",
+        "CAA Record Not Found"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "description": "No Certificate Authority Authorization (CAA) DNS record was found for the domain. CAA records restrict which certificate authorities are permitted to issue certificates for the domain.",
+      "impact": "Without a CAA record, any certificate authority worldwide can issue certificates for this domain. An attacker who compromises or social-engineers a less-secure CA can obtain a trusted certificate, enabling undetectable man-in-the-middle attacks against the organization's users and services.",
+      "cwe": [
+        "CWE-295"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-2"
+      ],
+      "nist_800_53": [
+        "SC-17"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Add a CAA DNS record specifying the authorized certificate authorities for the domain. Example: 'example.com. IN CAA 0 issue \"letsencrypt.org\"'. This prevents unauthorized CAs from issuing certificates.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Cryptography",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "dig",
+        "nslookup"
+      ]
+    },
+    {
+      "id": "OSIFT-045",
+      "title": "nslookup forward lookup: {record_summary}",
+      "aliases": [
+        "DNS Forward Lookup",
+        "DNS Record Enumeration"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "Forward DNS lookup enumeration was performed, revealing mail exchange (MX), name server (NS), text (TXT), and other DNS records for the domain.",
+      "impact": "DNS record enumeration reveals mail servers, nameservers, SPF policies, and other infrastructure details that map the organization's digital footprint. An attacker uses this data to identify email providers, hosting relationships, and security mechanisms that inform subsequent attack phases.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review DNS records for unnecessary information disclosure. Ensure SPF, DKIM, and DMARC are properly configured. Consider restricting zone transfers and minimizing publicly exposed DNS records.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "dig",
+        "nslookup",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-046",
+      "title": "Typosquatting Domain Detected",
+      "aliases": [
+        "Typosquat Domain",
+        "Domain Typosquatting",
+        "Similar Domain Detected"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "One or more domains visually or typographically similar to the target domain were detected with active DNS resolution, indicating potential typosquatting infrastructure.",
+      "impact": "Typosquatting domains that resolve to active infrastructure can be used for phishing, credential harvesting, or malware distribution targeting the organization's users and customers. An attacker registers domains visually similar to the legitimate domain to intercept mistyped URLs or craft convincing phishing campaigns.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1583.001",
+          "tactic": "Resource Development",
+          "name": "Acquire Infrastructure: Domains"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Monitor for typosquatting domains using automated tools (dnstwist). Consider registering common misspellings of the domain proactively. Implement DMARC to prevent spoofed emails from look-alike domains. Establish a domain takedown process with registrars.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Brand Protection",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "dnstwist",
+        "urlcrazy"
+      ]
     }
   ]
 }

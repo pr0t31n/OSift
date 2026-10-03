@@ -9548,18 +9548,22 @@ class EmailAndPeopleOSINT:
     def _check_dehashed(self):
         if not REQUESTS_AVAILABLE:
             return
-        self.log.info("[DEHASHED] Querying Dehashed API")
+        self.log.info("[DEHASHED] Querying Dehashed API v2")
         session = make_session()
-        session.auth = (self.dehashed_user, self.dehashed_key)
+        session.headers.update({
+            "Dehashed-Email": self.dehashed_user,
+            "Dehashed-Api-Key": self.dehashed_key,
+            "Accept": "application/json",
+        })
         total_ingested = 0
         for field_name, value in [("domain", self.domain), ("email", f"@{self.domain}")]:
             page = 1
             while True:
                 try:
-                    resp = session.get(
-                        "https://api.dehashed.com/search",
-                        params={"query": f"{field_name}:{value}",
-                                "size": 10000, "page": page},
+                    resp = session.post(
+                        "https://api.dehashed.com/v2/search",
+                        json={"query": f"{field_name}:{value}",
+                              "size": 10000, "page": page},
                         timeout=60,
                     )
                     if resp.status_code != 200:
@@ -9573,9 +9577,13 @@ class EmailAndPeopleOSINT:
                     if not entries:
                         break
                     for entry in entries:
-                        email = entry.get("email", "")
-                        if email:
-                            self._add_email(email, "dehashed")
+                        em_raw = entry.get("email", [])
+                        if isinstance(em_raw, list):
+                            for em in em_raw:
+                                if em:
+                                    self._add_email(em, "dehashed")
+                        elif em_raw:
+                            self._add_email(em_raw, "dehashed")
                         self.data.breach_data.append({
                             **entry,
                             "source":       "dehashed",
@@ -9585,11 +9593,11 @@ class EmailAndPeopleOSINT:
                             "output_file":  str(self.output_dir / "company" / "breach_data" / "dehashed_results.json"),
                         })
                     total_ingested += len(entries)
-                    total_avail = data.get("total", 0)
+                    balance = data.get("balance", "?")
                     self.log.info(
                         f"[DEHASHED] {field_name}:{value} page {page} — "
-                        f"{len(entries)} entries (total available: {total_avail})")
-                    if len(entries) < 10000 or page * 10000 >= total_avail:
+                        f"{len(entries)} entries (balance: {balance})")
+                    if len(entries) < 10000:
                         break
                     page += 1
                 except Exception as e:

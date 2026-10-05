@@ -9330,6 +9330,42 @@ class WhoisCollector:
                     self.log.warning(f"[WHOIS] Unexpected error: {exc}")
         self.log.success(f"[WHOIS] Collected WHOIS for {len(self.data.whois_data)} domains")
 
+    _PRIVACY_PROXY_DOMAINS = frozenset({
+        "withheldforprivacy.com",
+        "whoisguard.com",
+        "domainsbyproxy.com",
+        "contactprivacy.com",
+        "whoisprivacyprotect.com",
+        "privacyguardian.org",
+        "whoisprotectservice.com",
+        "privacy.link",
+        "registryprivacy.com",
+        "perfectprivacy.com",
+        "privacyprotect.org",
+        "domainprivacygroup.com",
+        "protecteddomainservices.com",
+        "identity-protect.org",
+        "proxy.dreamhost.com",
+    })
+
+    _PRIVACY_PROXY_LABELS = {
+        "withheldforprivacy.com":       "Withheld for Privacy (Namecheap)",
+        "whoisguard.com":              "WhoisGuard (Namecheap)",
+        "domainsbyproxy.com":          "Domains By Proxy (GoDaddy)",
+        "contactprivacy.com":          "Contact Privacy (Tucows)",
+        "whoisprivacyprotect.com":     "WHOIS Privacy Protect",
+        "privacyguardian.org":         "Privacy Guardian",
+        "whoisprotectservice.com":     "WHOIS Protect Service",
+        "privacy.link":                "Privacy.link",
+        "registryprivacy.com":         "Registry Privacy",
+        "perfectprivacy.com":          "Perfect Privacy",
+        "privacyprotect.org":          "PrivacyProtect.org",
+        "domainprivacygroup.com":      "Domain Privacy Group",
+        "protecteddomainservices.com": "Protected Domain Services",
+        "identity-protect.org":        "Identity Protect",
+        "proxy.dreamhost.com":         "DreamHost Privacy",
+    }
+
     def _whois(self, domain: str):
         self.log.info(f"[WHOIS] Querying {domain}")
         result: Dict[str, Any] = {}
@@ -9370,6 +9406,57 @@ class WhoisCollector:
             result["source"] = "whois_command"
             for email in re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', stdout):
                 self._add_email(email, "whois_raw", domain)
+
+        # ── Privacy proxy detection ────────────────────────────────────────────
+        _privacy_service = None
+        _privacy_emails  = []
+        for _em in (result.get("emails") or []):
+            _em_lower = str(_em).lower().strip()
+            if "@" in _em_lower:
+                _em_domain = _em_lower.rsplit("@", 1)[1]
+                if _em_domain in self._PRIVACY_PROXY_DOMAINS:
+                    _privacy_service = self._PRIVACY_PROXY_LABELS.get(
+                        _em_domain, _em_domain)
+                    _privacy_emails.append(_em_lower)
+        if not _privacy_service and result.get("org"):
+            _org_lower = str(result["org"]).lower()
+            _privacy_org_keywords = (
+                "whois privacy", "privacy protect", "redacted for privacy",
+                "data protected", "domains by proxy", "contact privacy",
+                "withheld for privacy", "whoisguard",
+            )
+            for _kw in _privacy_org_keywords:
+                if _kw in _org_lower:
+                    _privacy_service = result["org"]
+                    break
+        if _privacy_service:
+            result["privacy_service"] = _privacy_service
+            result["privacy_emails"]  = _privacy_emails
+            _registrar = result.get("registrar") or "Unknown"
+            _detail = (
+                f"Domain {domain} uses privacy proxy registration "
+                f"({_privacy_service}). Registrar: {_registrar}. "
+                f"True registrant identity is shielded from public WHOIS."
+            )
+            if _privacy_emails:
+                _detail += f" Privacy proxy contacts: {', '.join(_privacy_emails)}."
+            add_finding(
+                self.data,
+                tool="whois",
+                type_="whois_intelligence",
+                category="Domain Registration",
+                severity="INFO",
+                detail=_detail,
+                domain=domain,
+                host=domain,
+                title=f"WHOIS Privacy Service Detected: {domain}",
+                remediation="Informational — privacy registration is a legitimate "
+                            "security practice. Note that direct registrant contact "
+                            "requires going through the privacy proxy service.",
+            )
+            self.log.info(
+                f"[WHOIS] Privacy proxy detected for {domain}: {_privacy_service}"
+            )
 
         self.data.whois_data[domain] = result
         out = self.output_dir / f"{_safe_filename(domain)}_whois.json"
@@ -15773,6 +15860,22 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
                 "sources":  sorted(set(_meta.get("sources") or [])),
                 "severity": "INFO",
             }
+        _whois_map: Dict[str, Dict] = {}
+        for _wd, _wm in data.whois_data.items():
+            if not _wm:
+                continue
+            _whois_map[_wd] = {
+                "domain":          _wd,
+                "registrar":       _wm.get("registrar"),
+                "creation_date":   _wm.get("creation_date"),
+                "expiration_date": _wm.get("expiration_date"),
+                "updated_date":    _wm.get("updated_date"),
+                "name_servers":    _wm.get("name_servers") or [],
+                "org":             _wm.get("org"),
+                "registrant":      _wm.get("registrant"),
+                "privacy_service": _wm.get("privacy_service"),
+                "privacy_emails":  _wm.get("privacy_emails") or [],
+            }
         (reports_dir / "targets_osint.json").write_text(
             json.dumps({
                 "domain":     data.domain,
@@ -15781,6 +15884,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
                 "subdomains": sorted(_subs_map.values(), key=lambda x: x["host"]),
                 "emails":     sorted(_emails_map.values(), key=lambda x: x["email"]),
                 "ips":        sorted(_ips_map.values(), key=lambda x: x["ip"]),
+                "whois":      sorted(_whois_map.values(), key=lambda x: x["domain"]),
             }, indent=2, default=str),
             encoding="utf-8",
         )
@@ -17167,6 +17271,22 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             _emails_map[_em_key].setdefault("in_scope",  _em_inscope)
             _emails_map[_em_key].setdefault("confirmed", _em_confirmed)
 
+    _whois_map_fr: Dict[str, Dict] = {}
+    for _wd_fr, _wm_fr in data.whois_data.items():
+        if not _wm_fr:
+            continue
+        _whois_map_fr[_wd_fr] = {
+            "domain":          _wd_fr,
+            "registrar":       _wm_fr.get("registrar"),
+            "creation_date":   _wm_fr.get("creation_date"),
+            "expiration_date": _wm_fr.get("expiration_date"),
+            "updated_date":    _wm_fr.get("updated_date"),
+            "name_servers":    _wm_fr.get("name_servers") or [],
+            "org":             _wm_fr.get("org"),
+            "registrant":      _wm_fr.get("registrant"),
+            "privacy_service": _wm_fr.get("privacy_service"),
+            "privacy_emails":  _wm_fr.get("privacy_emails") or [],
+        }
     osint_targets = {
         "domain":     data.domain,
         "company":    data.company,
@@ -17174,6 +17294,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         "subdomains": sorted(_subs_map.values(),  key=lambda x: x["host"]),
         "emails":     sorted(_emails_map.values(), key=lambda x: x["email"]),
         "ips":        sorted(_ips_map.values(),    key=lambda x: x["ip"]),
+        "whois":      sorted(_whois_map_fr.values(), key=lambda x: x["domain"]),
     }
     to_path = output_dir / "reports" / "targets_osint.json"
     to_path.write_text(

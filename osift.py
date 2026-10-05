@@ -3158,8 +3158,14 @@ class ShodanAPI:
         (r"hubspot-",                    "HubSpot"),
         (r"miro-verification=",          "Miro"),
         (r"zoom-domain-verification=",   "Zoom"),
+        (r"ZOOM_verify_",               "Zoom"),
         (r"slack-domain-verification=",  "Slack"),
         (r"postman-domain-verification=", "Postman"),
+        (r"hpe-greenlake-domain-verification=", "HPE GreenLake"),
+        (r"bw=[A-Za-z0-9+/=]{10,}",     "Bitwarden"),
+        (r"webex-domain-verification=",  "Cisco Webex"),
+        (r"citrix-verification-code=",   "Citrix"),
+        (r"dropbox-domain-verification=", "Dropbox"),
     ]
 
     # SPF include: patterns that reveal mail infrastructure
@@ -3181,6 +3187,8 @@ class ShodanAPI:
         (r"ellucian",           "Ellucian"),
         (r"cashnet\.com",       "CashNet / TouchNet Payments"),
         (r"oracleemaildelivery\.com", "Oracle Email Delivery"),
+        (r"pphosted\.com",           "Proofpoint"),
+        (r"proofpoint\.com",         "Proofpoint"),
     ]
 
     # Subdomain naming patterns that suggest Banner ERP / higher-ed infrastructure
@@ -9449,7 +9457,7 @@ class WhoisCollector:
                 detail=_detail,
                 domain=domain,
                 host=domain,
-                title=f"WHOIS Privacy Service Detected: {domain}",
+                title="WHOIS Privacy Service Detected",
                 remediation="Informational — privacy registration is a legitimate "
                             "security practice. Note that direct registrant contact "
                             "requires going through the privacy proxy service.",
@@ -15801,13 +15809,22 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
                 if _fqdn_k:
                     _fqdn_to_ips_snap.setdefault(_fqdn_k, []).append(_ip_k)
 
+        # Collect all wildcard IPs so we can strip them from subdomain records
+        _all_wc_ips: Set[str] = set()
+        for _wc_list in data.wildcard_ips.values():
+            _all_wc_ips.update(_wc_list)
+
         _subs_map: Dict[str, Dict] = {}
         for _sub, _meta in data.subdomains.items():
             _ips = list(_meta.get("ips") or [])
-            # Supplement with reverse-lookup from ip_addresses
             for _rip in _fqdn_to_ips_snap.get(_sub, []):
                 if _rip not in _ips:
                     _ips.append(_rip)
+            # Strip wildcard-only IPs — these are false positives
+            if _all_wc_ips and _ips:
+                _real_ips = [i for i in _ips if i not in _all_wc_ips]
+                if not _real_ips:
+                    _ips = []
             _subs_map[_sub] = {
                 "host":         _sub,
                 "ip":           _ips[0] if _ips else "",
@@ -15820,6 +15837,9 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
             }
         _ips_map: Dict[str, Dict] = {}
         for _ip, _meta in data.ip_addresses.items():
+            # Skip wildcard IPs — they are DNS false positives
+            if _ip in _all_wc_ips:
+                continue
             # Build enriched FQDN list: combine ip_addresses[ip]["fqdns"] with
             # reverse lookup from data.subdomains (subdomains that resolved to this IP)
             _fqdns_set: Dict[str, List[int]] = {}  # fqdn -> ports
@@ -17097,6 +17117,11 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     _EMAIL_TYPES_V = {"email", "email_address", "credential_email"}
     _IP_TYPES_V    = {"ip", "ip_intel", "ip_address", "ip_info", "ip_reputation"}
 
+    # Collect all wildcard IPs so they can be stripped from output
+    _all_wc_ips_fr: Set[str] = set()
+    for _wc_list_fr in data.wildcard_ips.values():
+        _all_wc_ips_fr.update(_wc_list_fr)
+
     _subs_map:   Dict[str, Dict] = {}
     _emails_map: Dict[str, Dict] = {}
     _ips_map:    Dict[str, Dict] = {}
@@ -17190,6 +17215,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     # ip_addresses["fqdns"] (Shodan/OTX) also get an IP in the Subdomains table.
     _fqdn_to_ips_fr: Dict[str, List[str]] = {}
     for _ip_fr, _ip_mfr in data.ip_addresses.items():
+        if _ip_fr in _all_wc_ips_fr:
+            continue
         for _fqdn_fr in (_ip_mfr.get("fqdns") or []):
             if _fqdn_fr:
                 _fqdn_to_ips_fr.setdefault(_fqdn_fr, []).append(_ip_fr)
@@ -17204,6 +17231,11 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             for _rip in _fqdn_to_ips_fr.get(_sub_fqdn, []):
                 if _rip not in _sub_ips:
                     _sub_ips.append(_rip)
+            # Strip wildcard-only IPs
+            if _all_wc_ips_fr and _sub_ips:
+                _real_ips_fr = [i for i in _sub_ips if i not in _all_wc_ips_fr]
+                if not _real_ips_fr:
+                    _sub_ips = []
             _subs_map[_sub_fqdn] = {
                 "host":         _sub_fqdn,
                 "ip":           _sub_ips[0] if _sub_ips else "",
@@ -17222,6 +17254,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
 
     # Pull from data.ip_addresses — build enriched structure with fqdns list
     for _ip_key, _ip_meta in data.ip_addresses.items():
+        if _ip_key in _all_wc_ips_fr:
+            continue
         _fqdns_set_gr: Dict[str, List[int]] = {}
         for _fqdn_r in (_ip_meta.get("fqdns") or []):
             if _fqdn_r:

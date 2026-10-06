@@ -2892,6 +2892,8 @@ class ShodanAPI:
                     sub_rec = self.data.subdomains.setdefault(
                         hn_lower, {"sources": [], "ips": [], "ports": [], "http_status": None}
                     )
+                    sub_rec.setdefault("sources", [])
+                    sub_rec.setdefault("ips", [])
                     if "shodan_ssl" not in sub_rec["sources"]:
                         sub_rec["sources"].append("shodan_ssl")
                     if ip not in sub_rec["ips"]:
@@ -3629,6 +3631,8 @@ class CensysAPI:
                                     sub_rec = self.data.subdomains.setdefault(
                                         name, {"sources": [], "ips": [], "ports": [], "http_status": None}
                                     )
+                                    sub_rec.setdefault("sources", [])
+                                    sub_rec.setdefault("ips", [])
                                     if "censys" not in sub_rec["sources"]:
                                         sub_rec["sources"].append("censys")
                                     if ip not in sub_rec["ips"]:
@@ -3901,6 +3905,8 @@ class FullHuntAPI:
                     sub_rec = self.data.subdomains.setdefault(
                         fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None}
                     )
+                    sub_rec.setdefault("sources", [])
+                    sub_rec.setdefault("ips", [])
                     if "fullhunt" not in sub_rec["sources"]:
                         sub_rec["sources"].append("fullhunt")
                     if ip and ip not in sub_rec["ips"]:
@@ -6145,6 +6151,8 @@ class CrtShAPI:
                 continue   # not novel
             self.data.subdomains[sub] = self.data.subdomains.get(sub, {})
             self.data.subdomains[sub].setdefault("sources", []).append("crt.sh")
+            self.data.subdomains[sub].setdefault("ips", [])
+            self.data.subdomains[sub].setdefault("ports", [])
             add_finding(
                 self.data,
                 tool="crt.sh",
@@ -6287,6 +6295,8 @@ class FOFAAPI:
             if not sub_domain: continue
             self.data.subdomains[sub_domain] = self.data.subdomains.get(sub_domain, {})
             self.data.subdomains[sub_domain].setdefault("sources", []).append("fofa")
+            self.data.subdomains[sub_domain].setdefault("ips", [])
+            self.data.subdomains[sub_domain].setdefault("ports", [])
             add_finding(
                 self.data,
                 tool="fofa",
@@ -6346,6 +6356,8 @@ class ZoomEyeAPI:
             if host:
                 self.data.subdomains[host] = self.data.subdomains.get(host, {})
                 self.data.subdomains[host].setdefault("sources", []).append("zoomeye")
+                self.data.subdomains[host].setdefault("ips", [])
+                self.data.subdomains[host].setdefault("ports", [])
             add_finding(
                 self.data,
                 tool="zoomeye",
@@ -9257,6 +9269,7 @@ class IPIntelligence:
             for fut in concurrent.futures.as_completed({ex.submit(resolve, f): f for f in self.data.subdomains}):
                 fqdn, ips = fut.result()
                 sub_rec = self.data.subdomains[fqdn]
+                sub_rec.setdefault("ips", [])
                 for ip in ips:
                     if ip not in sub_rec["ips"]:
                         sub_rec["ips"].append(ip)
@@ -13767,6 +13780,7 @@ class PDDnsx:
                 sub_rec = self.data.subdomains.setdefault(
                     host, {"sources": [], "ips": [], "ports": [], "http_status": None}
                 )
+                sub_rec.setdefault("ips", [])
                 if ip not in sub_rec["ips"]:
                     sub_rec["ips"].append(ip)
                     resolved_count += 1
@@ -13778,6 +13792,7 @@ class PDDnsx:
                     rec = self.data.subdomains.setdefault(
                         cname, {"sources": [], "ips": [], "ports": [], "http_status": None}
                     )
+                    rec.setdefault("sources", [])
                     if "dnsx_cname" not in rec["sources"]:
                         rec["sources"].append("dnsx_cname")
                         new_sub_count += 1
@@ -13790,6 +13805,7 @@ class PDDnsx:
 
             # Mark host as dns-validated
             if host in self.data.subdomains:
+                self.data.subdomains[host].setdefault("sources", [])
                 if "dnsx" not in self.data.subdomains[host]["sources"]:
                     self.data.subdomains[host]["sources"].append("dnsx")
             resolved_hosts.append(host)
@@ -14089,6 +14105,7 @@ class DNSEnrichmentRunner:
                 sub_rec = self.data.subdomains.setdefault(
                     host, {"sources": [], "ips": [], "ports": [], "http_status": None}
                 )
+                sub_rec.setdefault("ips", [])
                 if ip not in sub_rec["ips"]:
                     sub_rec["ips"].append(ip)
                     resolved_count += 1

@@ -2,17 +2,18 @@
   "version": "1.6.0",
   "tool": "osift",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 48,
+  "total": 55,
   "from_existing": 42,
   "newly_scaffolded": 2,
   "findings": [
     {
       "id": "OSIFT-001",
-      "title": "Subdomain Discovered",
+      "title": "Discovery: Subdomain",
       "aliases": [
         "Subdomain Discovered",
         "Live Host Confirmed",
-        "Hostname Identified"
+        "Hostname Identified",
+        "Subdomain Identified"
       ],
       "source_tools": [
         "osift"
@@ -1120,7 +1121,7 @@
       "qualys_qids": [
         70001
       ],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.PS-01",
@@ -1300,7 +1301,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         }
       ],
       "description": "An employee email address was discovered via theHarvester, Hunter.io, LinkedIn, or public sources. Collected addresses support phishing and credential spray attacks.",
@@ -1386,7 +1387,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -1449,7 +1450,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Shodan Exposure — Open Service",
+      "title": "Shodan Exposure \u2014 Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1496,7 +1497,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Shodan Exposure — Known CVE on Service",
+      "title": "Shodan Exposure \u2014 Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1721,7 +1722,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2035,8 +2036,8 @@
         150100,
         150101
       ],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
-      "owasp_api": "API2:2023 – Broken Authentication",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_api": "API2:2023 \u2013 Broken Authentication",
       "nist_csf2": [
         "PR.AA-01",
         "DE.CM-01"
@@ -2331,7 +2332,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2430,7 +2431,7 @@
       "cvss_vector": "N/A",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A08:2021 – Software and Data Integrity Failures",
+      "owasp_web": "A08:2021 \u2013 Software and Data Integrity Failures",
       "owasp_api": "",
       "nist_csf2": [
         "ID.SC-01",
@@ -2504,7 +2505,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         }
       ],
       "description": "Enumeration revealed domains or subdomains associated with third-party services, SaaS providers, or supply chain vendors (identified via CNAME targets, MX records, or certificate SANs).",
@@ -2522,7 +2523,7 @@
     },
     {
       "id": "OSIFT-037",
-      "title": "Email Address Identified",
+      "title": "Discovery: Email Address",
       "aliases": [
         "Email Address Identified",
         "Corporate Email Enumeration via OSINT",
@@ -2612,7 +2613,7 @@
     },
     {
       "id": "OSIFT-038",
-      "title": "IP Address Identified",
+      "title": "Discovery: IP Address",
       "aliases": [
         "IP Address Identified",
         "ASN / IP Range Identified",
@@ -2708,7 +2709,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -2856,10 +2857,10 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Potential PII Pattern — Social Security Number Format Detected",
+      "title": "Potential PII Pattern \u2014 Social Security Number Format Detected",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern — Social Security Number Format Detected"
+        "Potential PII Pattern \u2014 Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -2983,7 +2984,7 @@
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
       "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
@@ -3060,7 +3061,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles — only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
+      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles \u2014 only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
       "remediation_component": "People / Process",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Low",
@@ -3092,7 +3093,7 @@
       "title": "Social Security pattern detected:",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern — Social Security Number Format Detected"
+        "Potential PII Pattern \u2014 Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -3376,6 +3377,377 @@
       "validation_tools": [
         "dnstwist",
         "urlcrazy"
+      ]
+    },
+    {
+      "id": "OSIFT-047",
+      "title": "DNS: A Record",
+      "aliases": [
+        "nslookup forward lookup: A"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "A record maps a domain to an IPv4 address, revealing the IP infrastructure behind a hostname.",
+      "impact": "Exposing A records allows attackers to identify hosting providers, colocated services, and network topology for targeted attacks.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Minimize unnecessary A records. Use CDN or proxy services to obscure origin server IPs where appropriate.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-048",
+      "title": "DNS: AAAA Record",
+      "aliases": [
+        "nslookup forward lookup: AAAA"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "AAAA record maps a domain to an IPv6 address, revealing dual-stack infrastructure.",
+      "impact": "IPv6 records can expose additional attack surface on hosts that may have different firewall rules or monitoring than their IPv4 counterparts.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure IPv6 hosts have equivalent security controls to IPv4. Remove AAAA records for services not intentionally dual-stacked.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-049",
+      "title": "DNS: MX Record",
+      "aliases": [
+        "nslookup forward lookup: MX"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "MX record identifies the mail servers responsible for accepting email for the domain.",
+      "impact": "Attackers use MX records to identify email infrastructure, target mail servers for exploitation, and craft phishing campaigns that mimic legitimate mail routing.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure MX records point only to authorized mail servers. Implement SPF, DKIM, and DMARC. Remove MX records for domains that do not send or receive email.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-050",
+      "title": "DNS: NS Record",
+      "aliases": [
+        "nslookup forward lookup: NS"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "NS record identifies the authoritative nameservers for the domain.",
+      "impact": "Knowledge of nameservers enables DNS cache poisoning attempts, zone transfer attacks, and helps map the organization's DNS infrastructure and hosting relationships.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Use reputable DNS providers with DNSSEC support. Restrict zone transfers to authorized secondaries. Monitor for unauthorized NS record changes.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-051",
+      "title": "DNS: TXT Record",
+      "aliases": [
+        "nslookup forward lookup: TXT"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "TXT records contain arbitrary text data including SPF policies, DKIM keys, domain verification tokens, and service configuration.",
+      "impact": "TXT records can leak internal service configurations, reveal third-party integrations (Google Workspace, Microsoft 365, etc.), and expose verification tokens that may enable service takeover.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Audit TXT records regularly. Remove obsolete verification tokens. Ensure SPF records use restrictive policies (-all). Implement DKIM and DMARC.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-052",
+      "title": "DNS: SOA Record",
+      "aliases": [
+        "nslookup forward lookup: SOA"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "SOA record contains the primary nameserver, responsible party email, and zone serial/refresh parameters.",
+      "impact": "SOA records reveal the primary DNS administrator's contact, zone update frequency, and infrastructure details useful for social engineering and timing attacks around zone refreshes.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure SOA contact email does not expose internal personnel. Use reasonable TTL and refresh values.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-053",
+      "title": "DNS: CNAME Record",
+      "aliases": [
+        "nslookup forward lookup: CNAME"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "CNAME record creates an alias from one domain to another canonical name.",
+      "impact": "CNAME records can reveal internal naming conventions, third-party service dependencies, and may be vulnerable to subdomain takeover if the canonical target is decommissioned.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-2"
+      ],
+      "nist_800_53": [
+        "SC-20"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.001",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: DNS/Passive DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Regularly audit CNAME records for dangling references. Remove CNAMEs pointing to decommissioned services to prevent subdomain takeover.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "nslookup",
+        "dig",
+        "dnsx"
       ]
     }
   ]

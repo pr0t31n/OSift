@@ -8842,14 +8842,22 @@ class DNSEnumerator:
                 json.dumps({"domain": self.domain, "records": forward}, indent=2),
                 encoding="utf-8",
             )
+            for rt, recs in forward.items():
+                affected_vals = []
+                for r in recs:
+                    v = (r.get("value") or "").strip().rstrip(".")
+                    if v:
+                        affected_vals.append(v)
+                add_finding(
+                    self.data, "OSift-DNS",
+                    f"dns_{rt.lower()}_record", CAT_DNS, "INFO",
+                    f"DNS: {rt} Record",
+                    host=self.domain, domain=self.domain,
+                    affected="\n".join(affected_vals) if affected_vals else self.domain,
+                    output_file=str(fwd_path),
+                )
             rec_summary = ", ".join(
                 f"{rt}({len(recs)})" for rt, recs in forward.items()
-            )
-            add_finding(
-                self.data, "OSift-DNS", "nslookup_forward", CAT_DNS, "INFO",
-                f"nslookup forward lookup: {rec_summary}",
-                host=self.domain, domain=self.domain, affected=self.domain,
-                output_file=str(fwd_path),
             )
             self.log.success(f"[nslookup] Forward: {rec_summary}")
         else:
@@ -9058,7 +9066,7 @@ class DNSEnumerator:
         _tool = source if not source.startswith("SRV/") else "SRV record"
         add_finding(
             self.data, _tool, "subdomain_identified", "DNS", "INFO",
-            "Subdomain Identified",
+            "Discovery: Subdomain",
             host=self.domain, affected=fqdn,
             output_file=output_file,
         )
@@ -9221,7 +9229,7 @@ class AmassEnumerator:
                         rec["sources"].append("amass")
                     add_finding(
                         self.data, "amass", "subdomain_identified", "DNS", "INFO",
-                        "Subdomain Identified",
+                        "Discovery: Subdomain",
                         host=self.domain, affected=sub,
                         output_file=str(out_file),
                     )
@@ -11085,7 +11093,7 @@ class TheHarvesterRunner:
             str(json_path) if json_path.exists() else ""
         )
 
-        # One "Subdomain Identified" finding accumulating all discovered hosts
+        # One "Discovery: Subdomain" finding accumulating all discovered hosts
         if _new_hosts:
             add_finding(
                 self.data,
@@ -11093,14 +11101,14 @@ class TheHarvesterRunner:
                 type_="subdomain_identified",
                 category="DNS",
                 severity="INFO",
-                detail="Subdomain Identified",
+                detail="Discovery: Subdomain",
                 host=self.domain,
                 affected="\n".join(sorted(set(_new_hosts))),
                 output_file=_ev_file,
                 raw_command=cmd_str,
             )
 
-        # One "IP Identified" finding accumulating all discovered IPs
+        # One "Discovery: IP Address" finding accumulating all discovered IPs
         if _new_ips:
             add_finding(
                 self.data,
@@ -11108,7 +11116,7 @@ class TheHarvesterRunner:
                 type_="ip_identified",
                 category=CAT_RECON,
                 severity="INFO",
-                detail="IP Identified",
+                detail="Discovery: IP Address",
                 host=self.domain,
                 affected="\n".join(sorted(set(_new_ips))),
                 output_file=_ev_file,
@@ -11156,7 +11164,7 @@ class TheHarvesterRunner:
                 type_="subdomain_identified",
                 category="DNS",
                 severity="INFO",
-                detail="Subdomain Identified",
+                detail="Discovery: Subdomain",
                 host=self.domain,
                 affected="\n".join(sorted(set(_new_hosts))),
                 output_file=_ev_file,
@@ -11301,7 +11309,7 @@ class XurlFind3rRunner:
                             rec["sources"].append("xurlfind3r")
                         add_finding(
                             self.data, "xurlfind3r", "subdomain_identified", "DNS", "INFO",
-                            "Subdomain Identified",
+                            "Discovery: Subdomain",
                             host=self.domain, affected=host,
                             output_file=str(path),
                         )
@@ -11355,7 +11363,7 @@ class XurlFind3rRunner:
                         rec["sources"].append("xurlfind3r")
                     add_finding(
                         self.data, "xurlfind3r", "subdomain_identified", "DNS", "INFO",
-                        "Subdomain Identified",
+                        "Discovery: Subdomain",
                         host=self.domain, affected=_h,
                         output_file=_out_file_str,
                     )
@@ -11890,7 +11898,7 @@ class WaybackURLsRunner:
                         rec["sources"].append("waybackurls")
                     add_finding(
                         self.data, "waybackurls", "subdomain_identified", "DNS", "INFO",
-                        "Subdomain Identified",
+                        "Discovery: Subdomain",
                         host=self.domain, affected=host,
                         output_file=str(file_path) if file_path.exists() else "",
                     )
@@ -13434,7 +13442,7 @@ def _ingest_subdomain_list(
             new_count += 1
         add_finding(
             data, source, "subdomain_identified", "DNS", "INFO",
-            "Subdomain Identified",
+            "Discovery: Subdomain",
             host=domain, affected=host,
             output_file=str(path),
         )
@@ -13798,7 +13806,7 @@ class PDDnsx:
                         new_sub_count += 1
                     add_finding(
                         self.data, "dnsx_cname", "subdomain_identified", "DNS", "INFO",
-                        "Subdomain Identified",
+                        "Discovery: Subdomain",
                         host=self.domain, affected=cname,
                         output_file=str(out_json),
                     )
@@ -13959,7 +13967,7 @@ class DNSEnrichmentRunner:
                         add_finding(
                             data=self.data, tool="dig",
                             type_="subdomain_identified", category="DNS", severity="INFO",
-                            detail="Subdomain Identified",
+                            detail="Discovery: Subdomain",
                             host=self.domain, affected=cname_target,
                             output_file=str(self.out_dig / f"{_safe_filename(fqdn)}.json"),
                         )
@@ -14900,7 +14908,7 @@ class PDUncover:
                         sub_rec.setdefault("ips", []).append(ip)
                     add_finding(
                         self.data, "uncover", "subdomain_identified", "DNS", "INFO",
-                        "Subdomain Identified",
+                        "Discovery: Subdomain",
                         host=self.domain, affected=host,
                         output_file=str(_qfile) if _qfile.exists() else "",
                     )
@@ -15016,7 +15024,7 @@ class PDCloudlist:
                     sub_rec.setdefault("ips", []).append(public_ip)
                 add_finding(
                     self.data, "cloudlist", "subdomain_identified", "DNS", "INFO",
-                    "Subdomain Identified",
+                    "Discovery: Subdomain",
                     host=self.domain, affected=dns_name,
                     output_file=str(self.out / "cloudlist_full.json"),
                 )
@@ -16456,7 +16464,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             add_finding(data, _src, type_, CAT_RECON, "INFO", title,
                         host=data.domain)
 
-    _emit_email_group_ef(_inscope_emails, "Email Address Identified",          "email_identified")
+    _emit_email_group_ef(_inscope_emails, "Discovery: Email Address",          "email_identified")
 
     # ── Unified findings report ────────────────────────────────────────────────
     # Normalise output_file paths to be portable relative paths.
@@ -19033,7 +19041,7 @@ class IntelAggregator:
                 continue
             _pe_srcs = [_s for _s in (rec.get("sources") or []) if _s] or ["OSift"]
             add_finding(data, _pe_srcs[0], "primary_email", self.CAT_EMAIL, "info",
-                        "Email Address Identified",
+                        "Discovery: Email Address",
                         host=data.domain,
                         email=_pe_email,
                         affected=_pe_email,
@@ -19042,7 +19050,7 @@ class IntelAggregator:
                         breach=rec.get("breach", False))
             for _pe_src in _pe_srcs[1:]:
                 add_finding(data, _pe_src, "primary_email", self.CAT_EMAIL, "info",
-                            "Email Address Identified",
+                            "Discovery: Email Address",
                             host=data.domain,
                             email=_pe_email,
                             timestamp=ts)

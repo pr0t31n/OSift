@@ -270,7 +270,7 @@ _SCAN_SEM           = _AdaptiveSemaphore(_SCAN_CONCURRENCY)
 
 # ── Per-subprocess memory limit ──────────────────────────────────────────────
 _SUBPROCESS_MEM_LIMIT_BYTES = int(2 * 1024 ** 3)  # 2 GB per child process
-_GO_SUBPROCESS_MEM_LIMIT_BYTES = int(8 * 1024 ** 3)  # 8 GB for Go binaries
+_GO_SUBPROCESS_MEM_LIMIT_BYTES = int(4 * 1024 ** 3)  # 4 GB for Go binaries
 
 def _mem_limit_preexec():
     """preexec_fn: cap each child's virtual address space to prevent OOM."""
@@ -313,7 +313,7 @@ def _untrack_proc(proc):
         except ValueError:
             pass
 
-def _start_oom_watchdog(threshold_pct=90, interval=15):
+def _start_oom_watchdog(threshold_pct=80, interval=10):
     """Kill the largest tracked subprocess when system memory exceeds threshold."""
     try:
         import psutil as _psw
@@ -1561,7 +1561,9 @@ def _shell(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
         return "", str(exc), -1
 
 def _shell_go(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
-    """Like _shell() but with a higher RLIMIT_AS for Go binaries."""
+    """Like _shell() but with a higher RLIMIT_AS and GOMEMLIMIT for Go binaries."""
+    _env = os.environ.copy()
+    _env.setdefault("GOMEMLIMIT", "1536MiB")
     try:
         result = subprocess.run(
             cmd,
@@ -1569,6 +1571,7 @@ def _shell_go(cmd: str, timeout: int = 700) -> Tuple[str, str, int]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=_env,
             preexec_fn=_go_mem_limit_preexec if not IS_WINDOWS else None,
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )

@@ -893,7 +893,7 @@
     },
     {
       "id": "OSIFT-013",
-      "title": "GitHub Secret / API Key Exposed",
+      "title": "Information Disclosure: Github Secret / API Key",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1120,7 +1120,7 @@
       "qualys_qids": [
         70001
       ],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.PS-01",
@@ -1300,7 +1300,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         }
       ],
       "description": "An employee email address was discovered via theHarvester, Hunter.io, LinkedIn, or public sources. Collected addresses support phishing and credential spray attacks.",
@@ -1370,7 +1370,7 @@
       "id": "OSIFT-020",
       "title": "Wayback Machine URL with Sensitive Path",
       "aliases": [
-        "Internal Server Directory Structure Revealed",
+        "Information Disclosure: Internal Server Directory Structure",
         "Wayback Machine URL with Sensitive Path"
       ],
       "source_tools": [
@@ -1386,7 +1386,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -1449,7 +1449,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Shodan Exposure \u2014 Open Service",
+      "title": "Shodan Exposure — Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1496,7 +1496,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Shodan Exposure \u2014 Known CVE on Service",
+      "title": "Shodan Exposure — Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1721,7 +1721,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2035,8 +2035,8 @@
         150100,
         150101
       ],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
-      "owasp_api": "API2:2023 \u2013 Broken Authentication",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_api": "API2:2023 – Broken Authentication",
       "nist_csf2": [
         "PR.AA-01",
         "DE.CM-01"
@@ -2331,7 +2331,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2430,7 +2430,7 @@
       "cvss_vector": "N/A",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A08:2021 \u2013 Software and Data Integrity Failures",
+      "owasp_web": "A08:2021 – Software and Data Integrity Failures",
       "owasp_api": "",
       "nist_csf2": [
         "ID.SC-01",
@@ -2504,7 +2504,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         }
       ],
       "description": "Enumeration revealed domains or subdomains associated with third-party services, SaaS providers, or supply chain vendors (identified via CNAME targets, MX records, or certificate SANs).",
@@ -2690,9 +2690,9 @@
     },
     {
       "id": "OSIFT-039",
-      "title": "Internal Server Directory Structure Revealed",
+      "title": "Information Disclosure: Internal Server Directory Structure",
       "aliases": [
-        "Internal Server Directory Structure Revealed",
+        "Information Disclosure: Internal Server Directory Structure",
         "Wayback Machine URL with Sensitive Path"
       ],
       "source_tools": [
@@ -2708,7 +2708,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -2856,10 +2856,10 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Potential PII Pattern \u2014 Social Security Number Format Detected",
+      "title": "Potential PII Pattern — Social Security Number Format Detected",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+        "Potential PII Pattern — Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -2983,7 +2983,7 @@
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
       "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
@@ -3060,7 +3060,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles \u2014 only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
+      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles — only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
       "remediation_component": "People / Process",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Low",
@@ -3092,7 +3092,7 @@
       "title": "Social Security pattern detected:",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+        "Potential PII Pattern — Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"

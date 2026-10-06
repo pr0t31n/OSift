@@ -9451,6 +9451,7 @@ class WhoisCollector:
             )
             if _privacy_emails:
                 _detail += f" Privacy proxy contacts: {', '.join(_privacy_emails)}."
+            _whois_out = self.output_dir / f"{_safe_filename(domain)}_whois.json"
             add_finding(
                 self.data,
                 tool="whois",
@@ -9464,6 +9465,7 @@ class WhoisCollector:
                 remediation="Informational — privacy registration is a legitimate "
                             "security practice. Note that direct registrant contact "
                             "requires going through the privacy proxy service.",
+                output_file=str(_whois_out),
             )
             self.log.info(
                 f"[WHOIS] Privacy proxy detected for {domain}: {_privacy_service}"

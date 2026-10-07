@@ -9482,7 +9482,7 @@ class WhoisCollector:
                 detail=_detail,
                 domain=domain,
                 host=domain,
-                title="WHOIS Privacy Service Detected",
+                title="Discovery: WHOIS Privacy Service Detected",
                 remediation="Informational — privacy registration is a legitimate "
                             "security practice. Note that direct registrant contact "
                             "requires going through the privacy proxy service.",

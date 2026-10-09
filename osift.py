@@ -710,6 +710,7 @@ class ProgressManager:
 # Module-level singleton console; ProgressManager is created in main()
 _vc: VantageConsole = VantageConsole()
 _pm: "ProgressManager | None" = None
+_PAUSE: "_pp.PauseManager | None" = None  # type: ignore[name-defined]
 # Optional Vantage project root; when set, evidence output_file paths are stored
 # relative to this directory instead of output_dir (so Vantage can serve them).
 _project_dir: Optional[Path] = None
@@ -723,8 +724,15 @@ try:
     if "/opt/pr0t31n/shared" not in _s14j.path:
         _s14j.path.insert(0, "/opt/pr0t31n/shared")
     import pr0t31n_event_log as _el
+    import pr0t31n_pause as _pp
 except ImportError:
     _el = None
+    _pp = None
+
+
+def _check_pause():
+    if _PAUSE is not None and _PAUSE.check_and_pause():
+        sys.exit(_pp.EXIT_PAUSED)
 _RUNLOG = None
 
 # Timeout/error action items accumulated during the scan and merged into
@@ -22088,6 +22096,15 @@ API key sources (all free tiers available):
         except Exception:
             _RUNLOG = None
 
+    global _PAUSE
+    if _pp is not None:
+        _PAUSE = _pp.PauseManager(str(output_dir), "osift")
+        _PAUSE.start_watcher(grace_period=60)
+        _resumed = os.environ.get("CRUCIBLE_RESUME") == "1"
+        _PAUSE.log_run_type(resumed=_resumed)
+        if _resumed:
+            _PAUSE.cleanup_incomplete()
+
     # Start adaptive concurrency monitor (adjusts _SCAN_SEM based on CPU/RAM)
     _start_concurrency_monitor(_SCAN_SEM)
     _start_oom_watchdog()
@@ -22382,6 +22399,8 @@ API key sources (all free tiers available):
         _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
         write_targets_snapshot(output_dir, data)
 
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
     # ── Phase 4: IP Intelligence ───────────────────────────────────────────
     if _pm.is_phase_complete("phase4_ip"):
         _vc.log("Phase 4 IP Intelligence already complete — resuming from checkpoint.", "INFO")
@@ -22418,6 +22437,8 @@ API key sources (all free tiers available):
     else:
         _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
 
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
     # ── Phase 5: WHOIS ─────────────────────────────────────────────────────
     if _pm.is_phase_complete("phase5_whois"):
         _vc.log("Phase 5 WHOIS already complete — resuming from checkpoint.", "INFO")
@@ -22430,6 +22451,8 @@ API key sources (all free tiers available):
         WhoisCollector(output_dir, log, data, args.domains[0]).run()
         _pm.set_phase_status("phase5_whois", "complete", label="Phase 5: WHOIS")
         _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 6: Company Intelligence ─────────────────────────────────────
     if _pm.is_phase_complete("phase6_company"):
@@ -22447,6 +22470,8 @@ API key sources (all free tiers available):
         passive.run_maltego_export()
         _pm.set_phase_status("phase6_company", "complete", label="Phase 6: Company Intelligence")
         _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 7: Email & People OSINT ─────────────────────────────────────
     if _pm.is_phase_complete("phase7_email"):
@@ -22489,6 +22514,8 @@ API key sources (all free tiers available):
         passive.run_wave_c()
         _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: cloud_enum")
         _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 10: OSINT API Intelligence Engine ────────────────────────────
     if args.skip_api:
@@ -22564,6 +22591,8 @@ API key sources (all free tiers available):
     # ── PD summary (all waves complete) ───────────────────────────────────
     pd._write_summary()
 
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
     # ── Phase 11: DNS Enrichment (dig + dnsx against all collected FQDNs) ─
     if getattr(args, "skip_dns_enrich", False):
         log.info("[DNS Enrich] Phase 11 skipped (--skip-dns-enrich)")
@@ -22582,6 +22611,8 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase11_dns_enrich", "complete", label="Phase 11: DNS Enrichment")
         _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
         write_targets_snapshot(output_dir, data)
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 13: GitDorker — GitHub secret scanning ───────────────────────
     if getattr(args, "no_gitdorker", False):
@@ -22607,6 +22638,8 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase13_gitdorker", "complete", label="Phase 13: GitDorker")
         _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
         write_targets_snapshot(output_dir, data)
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 14: People Dorking ───────────────────────────────────────────
     if getattr(args, "no_dork", False):
@@ -22654,6 +22687,8 @@ API key sources (all free tiers available):
         _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
         write_targets_snapshot(output_dir, data)
 
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+
     # ── Phase 15: dnstwist — Typosquatting & Brand Impersonation ─────────
     _dnstwist_live: list = []
     if getattr(args, "no_dnstwist", False):
@@ -22676,6 +22711,8 @@ API key sources (all free tiers available):
         ).run()
         _pm.set_phase_status("phase15_dnstwist", "complete", label="Phase 15: dnstwist")
         _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 16: VT Reputation Sweep — subdomain + dnstwist domain check ──
     if getattr(args, "no_vt_sweep", False) or args.skip_api:
@@ -22704,6 +22741,8 @@ API key sources (all free tiers available):
         ).run()
         _pm.set_phase_status("phase16_vt_sweep", "complete", label="Phase 16: VT Reputation Sweep")
         _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
+
+    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
 
     # ── Phase 9: Aggregation & Report ─────────────────────────────────────
     _pm.set_phase_status("phase9_report", "running", label="Phase 9: Aggregation & Report")
@@ -22748,6 +22787,8 @@ API key sources (all free tiers available):
     _pm.set_phase_status("phase9_report", "complete", label="Phase 9: Aggregation & Report")
     _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="complete")
 
+    if _PAUSE: _PAUSE.write_stop_reason("completed", "all_phases_done")
+
     log.flush_all()
 
     # ── Final banner ───────────────────────────────────────────────────────
@@ -22781,6 +22822,9 @@ API key sources (all free tiers available):
         print(f"  Action items      : {_ai_count:>6}")
     print(f"{sep}")
 
+    if _PAUSE is not None:
+        _PAUSE.write_stop_reason("completed", "all_phases_done")
+
 
 def _section(log: ReconLogger, title: str):
     """Print a visual section separator."""
@@ -22795,6 +22839,11 @@ def _section(log: ReconLogger, title: str):
 if __name__ == "__main__":
     def _sigint(sig, frame):
         BANNER_MGR.restore()
+        if _PAUSE is not None:
+            _action = "killed_user" if sig == signal.SIGINT else "killed_crucible"
+            _reason = "KeyboardInterrupt" if sig == signal.SIGINT else "SIGTERM"
+            _PAUSE.write_stop_reason(_action, _reason,
+                                     initiated_by="user" if sig == signal.SIGINT else "external")
         print("\n\n[!] Interrupted — exiting gracefully.\n")
         sys.exit(0)
 

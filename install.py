@@ -70,10 +70,8 @@ PIP_PKGS = [
     "openpyxl>=3.1.0",
     "pandas>=2.1.0",
     "jinja2>=3.1.0",
-    "edgartools>=2.0.0",
     "selenium>=4.15.0",
     "webdriver-manager>=4.0.0",
-    "maigret",
     "cloud-enum",
     "EmailHarvester",
     "playwright",
@@ -465,30 +463,31 @@ def install_pip_packages(args):
         except RuntimeError as exc:
             warn(f"pip install failed for {pkg}: {exc}")
 
-    # maigret has complex deps that commonly conflict with other OSINT
-    # packages in the same environment.  If pip install left it missing
-    # from PATH, force-reinstall it (resolves partially-installed state),
-    # then try pipx as an isolated fallback.
-    if not shutil.which("maigret"):
-        info("maigret not on PATH — attempting force reinstall …")
-        try:
-            subprocess.run(
-                pip + ["install", "--break-system-packages",
-                       "--force-reinstall", "--no-deps", "maigret"],
-                check=True, timeout=120,
-            )
-            # Now install maigret's own deps without --no-deps so its
-            # entry point is in place
-            subprocess.run(
-                pip + ["install", "--break-system-packages", "maigret"],
-                check=True, timeout=120,
-            )
-            if shutil.which("maigret"):
-                info("  ✓ maigret installed via pip force-reinstall")
-        except Exception:
-            pass
-    if not shutil.which("maigret"):
-        # Try pipx — provides an isolated venv so dep conflicts vanish
+    # edgartools (SEC EDGAR) — optional; its pyarrow transitive dep has
+    # no pre-built wheel on ARM, so source-building it hangs or OOMs.
+    # Use --only-binary to install only if wheels exist for this platform.
+    if not _pip_installed("edgartools>=2.0.0"):
+        info("pip install edgartools (optional — SEC EDGAR support) …")
+        rc = subprocess.run(
+            pip + ["install", "--break-system-packages",
+                   "--only-binary", ":all:", "edgartools>=2.0.0"],
+            timeout=120,
+        ).returncode
+        if rc != 0:
+            warn("edgartools skipped — no pre-built wheel for this platform.")
+            warn("SEC EDGAR lookups will be unavailable (Phase 6 EDGAR).")
+        else:
+            info("  ✓ edgartools installed")
+    else:
+        info("  ✓ edgartools>=2.0.0 already installed")
+
+    # maigret — install separately because its deps (networkx, etc.)
+    # commonly conflict with system-managed packages.  pipx first
+    # (isolated venv, no conflicts), then pip with --ignore-installed
+    # as fallback (avoids trying to uninstall system-managed packages).
+    if shutil.which("maigret"):
+        info("  ✓ maigret already installed")
+    else:
         pipx = shutil.which("pipx")
         if not pipx:
             info("Installing pipx for isolated tool installs …")
@@ -509,12 +508,22 @@ def install_pip_packages(args):
                                     "PIPX_BIN_DIR": "/usr/local/bin"})
                 if shutil.which("maigret"):
                     info("  ✓ maigret installed via pipx")
-                else:
-                    warn("pipx installed maigret but binary not on PATH")
             except Exception as exc:
                 warn(f"pipx install maigret failed: {exc}")
-        else:
-            err("maigret install failed — neither pip nor pipx succeeded")
+        if not shutil.which("maigret"):
+            info("maigret: falling back to pip with --ignore-installed …")
+            try:
+                subprocess.run(
+                    pip + ["install", "--break-system-packages",
+                           "--ignore-installed", "maigret"],
+                    check=True, timeout=120,
+                )
+                if shutil.which("maigret"):
+                    info("  ✓ maigret installed via pip")
+                else:
+                    warn("pip installed maigret package but binary not on PATH")
+            except Exception:
+                err("maigret install failed — neither pipx nor pip succeeded")
 
     # Playwright browser + driver (required by python-wappalyzer, maigret).
     # The Python playwright package bundles its own Node.js driver; we just

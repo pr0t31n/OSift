@@ -11330,6 +11330,7 @@ class XurlFind3rRunner:
                 type_="passive_url_discovery",
                 category=CAT_RECON,
                 severity="info",
+                title=f"Discovery: Passive URL Sources - {count} Archived URLs",
                 detail=(
                     f"xurlfind3r discovered {count} archived/indexed URLs "
                     f"from passive sources (Wayback, CommonCrawl, OTX…)"
@@ -11797,6 +11798,7 @@ class WaybackURLsRunner:
                 type_="historical_url_discovery",
                 category=CAT_RECON,
                 severity="info",
+                title=f"Discovery: Wayback Machine CDX - {count} Historical URLs",
                 detail=(
                     f"Wayback Machine CDX returned {count} historical URLs — "
                     f"review for legacy endpoints and exposed params"

@@ -3067,7 +3067,7 @@ class ShodanAPI:
          "WHM provides root-level server management. If externally reachable, "
          "attackers can attempt authentication brute-force or exploit known cPanel vulnerabilities."),
         (r"^ldap\d*$",
-         "LDAP Service Publicly Resolvable", "MEDIUM",
+         "Discovery: LDAP Service Publicly Resolvable", "MEDIUM",
          "An LDAP directory service has a public DNS entry. "
          "If ports 389/636 are externally reachable, the directory may be enumerable "
          "or susceptible to anonymous bind, exposing user accounts and organizational structure."),
@@ -11330,7 +11330,6 @@ class XurlFind3rRunner:
                 type_="passive_url_discovery",
                 category=CAT_RECON,
                 severity="info",
-                title=f"Discovery: Passive URL Sources - {count} Archived URLs",
                 detail=(
                     f"xurlfind3r discovered {count} archived/indexed URLs "
                     f"from passive sources (Wayback, CommonCrawl, OTX…)"
@@ -11798,7 +11797,6 @@ class WaybackURLsRunner:
                 type_="historical_url_discovery",
                 category=CAT_RECON,
                 severity="info",
-                title=f"Discovery: Wayback Machine CDX - {count} Historical URLs",
                 detail=(
                     f"Wayback Machine CDX returned {count} historical URLs — "
                     f"review for legacy endpoints and exposed params"
@@ -19128,7 +19126,7 @@ class IntelAggregator:
                     f"or misconfigured CA-issued certificate.",
                     domain=data.domain, affected=_host or cn, timestamp=ts,
                     output_file=_cert_file,
-                    title=f"Certificate: Self-Signed ({_host or cn})",
+                    title=f"SSL/TLS Certificate:Self-Signed ({_host or cn})",
                 )
 
             # ── Expired / near-expiry ──────────────────────────────────────
@@ -19147,7 +19145,7 @@ class IntelAggregator:
                             f"abandoned infrastructure.",
                             domain=data.domain, affected=_host or cn, timestamp=ts,
                             output_file=_cert_file,
-                            title=f"Certificate: Expired ({_host or cn})",
+                            title=f"SSL/TLS Certificate:Expired ({_host or cn})",
                         )
                     elif _na - _now < _30d:
                         _days = (_na - _now).days
@@ -19157,7 +19155,7 @@ class IntelAggregator:
                             f"({_na.date()}). Plan renewal to avoid outage.",
                             domain=data.domain, affected=_host or cn, timestamp=ts,
                             output_file=_cert_file,
-                            title=f"Certificate: Near Expiry ({_host or cn})",
+                            title=f"SSL/TLS Certificate:Near Expiry ({_host or cn})",
                         )
                 except (ValueError, TypeError):
                     pass
@@ -19180,7 +19178,7 @@ class IntelAggregator:
                         f"This causes TLS warnings and may indicate a misconfigured vhost.",
                         domain=data.domain, affected=_host, timestamp=ts,
                         output_file=_cert_file,
-                        title=f"Certificate: Hostname Mismatch ({_host})",
+                        title=f"SSL/TLS Certificate:Hostname Mismatch ({_host})",
                     )
 
             # ── Internal / private IPs in SANs ─────────────────────────────
@@ -19200,7 +19198,7 @@ class IntelAggregator:
                     f"in SANs: {', '.join(_internal_ips)}. This reveals internal infrastructure.",
                     domain=data.domain, affected=_host or cn, timestamp=ts,
                     output_file=_cert_file,
-                    title=f"Certificate: Internal IP in SAN ({_host or cn})",
+                    title=f"SSL/TLS Certificate:Internal IP in SAN ({_host or cn})",
                 )
 
             # ── Wildcard certificate ───────────────────────────────────────
@@ -19212,7 +19210,7 @@ class IntelAggregator:
                     f"the private key is compromised.",
                     domain=data.domain, affected=_host or cn, timestamp=ts,
                     output_file=_cert_file,
-                    title=f"Certificate: Wildcard ({_host or cn})",
+                    title=f"SSL/TLS Certificate:Wildcard ({_host or cn})",
                 )
 
     def _emit_dns_security_findings(self, ts: str) -> None:
@@ -19836,7 +19834,7 @@ class IntelAggregator:
             if self_signed: desc += " | SELF-SIGNED"
             hostname = subj.lstrip("*.") if subj else ""
             rows.append(_row(
-                f"TLS Certificate: {subj}", desc,
+                f"SSL/TLS Certificate: {subj}", desc,
                 hostname=hostname,
                 risk="low" if self_signed else "info",
                 command="osift/certs",

@@ -192,6 +192,7 @@ def banner():
 
 def info(msg):  print(f"{G}[+]{W} {msg}")
 def warn(msg):  print(f"{Y}[!]{W} {msg}")
+def note(msg):  print(f"{Y}[i]{W} {msg}")
 def err(msg):   print(f"{R}[✗]{W} {msg}")
 def step(msg):  print(f"\n{B}━━ {msg} ━━{W}")
 
@@ -378,7 +379,7 @@ def _brew_installed_set():
 def _brew_install(pkgs):
     brew_path = shutil.which("brew")
     if not brew_path:
-        warn("Homebrew not found; skipping brew installs.")
+        note("Homebrew not found; skipping brew installs.")
         return
     installed = _brew_installed_set()
     SUDO_USER = os.environ.get("SUDO_USER", "")
@@ -388,7 +389,7 @@ def _brew_install(pkgs):
             continue
         if os.getuid() == 0:
             if not SUDO_USER:
-                warn(f"Running as root with no SUDO_USER — cannot brew install {pkg}; skipping.")
+                note(f"Running as root with no SUDO_USER — cannot brew install {pkg}; skipping.")
                 continue
             run(["sudo", "-u", SUDO_USER, brew_path, "install", pkg])
         else:
@@ -418,7 +419,7 @@ def _clone_or_update(url, dest):
 def install_system_packages(os_type, args):
     step("Phase 1 — System Packages")
     if args.skip_apt:
-        warn("--skip-system set; skipping.")
+        note("--skip-system set; skipping.")
         return
 
     if os_type == "windows":
@@ -450,7 +451,7 @@ def install_system_packages(os_type, args):
 def install_pip_packages(args):
     step("Phase 2 — Pip Packages")
     if args.skip_pip:
-        warn("--skip-pip set; skipping.")
+        note("--skip-pip set; skipping.")
         return
     pip = _pip_cmd()
     for pkg in PIP_PKGS:
@@ -600,14 +601,14 @@ def install_pip_packages(args):
 def install_go_tools(args):
     step("Phase 3 — Go Tools (go install)")
     if args.skip_go:
-        warn("--skip-go set; skipping.")
+        note("--skip-go set; skipping.")
         return
 
     _ensure_modern_go()
 
     gb = _go_bin()
     if not shutil.which(gb) and not Path(gb).exists():
-        warn(f"go binary not found ({gb}); skipping Go tool installs.")
+        note(f"go binary not found ({gb}); skipping Go tool installs.")
         return
 
     env = _go_env()
@@ -708,7 +709,7 @@ def install_trufflehog():
 def install_git_tools(args):
     step("Phase 4 — Git Tools")
     if args.skip_git:
-        warn("--skip-git set; skipping.")
+        note("--skip-git set; skipping.")
         return
 
     pip = _pip_cmd()
@@ -780,7 +781,7 @@ def _create_tool_symlinks():
     for link_name, target in symlinks.items():
         link_path = BIN_DIR / link_name
         if not target.exists():
-            warn(f"Target {target} not found; skipping symlink {link_name}.")
+            note(f"Target {target} not found; skipping symlink {link_name}.")
             continue
         # Ensure executable
         target.chmod(target.stat().st_mode | 0o755)
@@ -804,7 +805,7 @@ def _fix_emailharvester_plugins():
     eh_bin = BIN_DIR / "EmailHarvester"
     src_plugins = OPT_DIR / "EmailHarvester" / "plugins"
     if not src_plugins.is_dir():
-        warn("EmailHarvester plugins/ not found in /opt/EmailHarvester/; skipping fix.")
+        note("EmailHarvester plugins/ not found in /opt/EmailHarvester/; skipping fix.")
         return
 
     if eh_bin.exists() or eh_bin.is_symlink():
@@ -831,7 +832,7 @@ def install_symlinks():
     for link_name, target in SYMLINKS.items():
         link_path = BIN_DIR / link_name
         if not target.exists():
-            warn(f"Target {target} not found; skipping symlink {link_name}.")
+            note(f"Target {target} not found; skipping symlink {link_name}.")
             continue
         if link_path.is_symlink() or link_path.exists():
             link_path.unlink()

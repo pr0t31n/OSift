@@ -35,6 +35,7 @@ APT_PKGS = [
     "git", "curl", "wget", "dnsutils", "whois", "amass",
     "golang-go", "python3-pip", "python3-venv", "nmap", "jq",
     "ca-certificates", "build-essential", "whatweb",
+    "libimage-exiftool-perl",
 ]
 DNF_PKGS = [
     "git", "curl", "wget", "bind-utils", "whois", "golang",
@@ -48,7 +49,7 @@ ZYPPER_PKGS = [
 ]
 BREW_PKGS = [
     "git", "curl", "wget", "amass", "go", "jq",
-    "nmap", "theharvester", "whatweb", "whois",
+    "nmap", "theharvester", "whatweb", "whois", "exiftool",
 ]
 
 # pip packages ----------------------------------------------------------------
@@ -75,6 +76,8 @@ PIP_PKGS = [
     "cloud-enum",
     "EmailHarvester",
     "playwright",
+    "waymore",
+    "gato-cli",
 ]
 
 # Go tools (go install) -------------------------------------------------------
@@ -95,6 +98,7 @@ GO_INSTALL_TOOLS = [
     "github.com/ffuf/ffuf/v2@latest",
     "github.com/d3mondev/puredns/v2@latest",
     "github.com/zricethezav/gitleaks/v8@latest",
+    "github.com/hakluke/hakoriginfinder@latest",
 ]
 
 # Git tools -------------------------------------------------------------------
@@ -167,6 +171,7 @@ VERIFY_BINS = [
     "nuclei", "waybackurls", "ffuf",
     "maigret", "trufflehog", "cloud_enum", "puredns",
     "gitleaks", "o365spray",
+    "waymore", "gato", "hakoriginfinder", "exiftool",
 ]
 VERIFY_MODS = [
     "requests", "dns", "whois", "bs4",

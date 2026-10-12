@@ -7085,7 +7085,14 @@ _SOURCE_TO_TOOL: Dict[str, str] = {
     "dnsdumpster":       "dnsdumpster",
     # URL mining tools
     "waybackurls":       "waybackurls",
+    "waymore":           "waymore",
     "xurlfind3r":        "xurlfind3r",
+    # CDN bypass / origin discovery
+    "hakoriginfinder":   "hakoriginfinder",
+    # GitHub Actions audit
+    "gato":              "gato",
+    # Document metadata
+    "exiftool":          "exiftool",
     # Internet-wide search / cloud enumeration
     "amass":             "amass",
     "uncover":           "uncover",
@@ -13262,6 +13269,927 @@ On Person entities:
         )
 
 
+# ─── GatoRunner ──────────────────────────────────────────────────────────────
+
+class GatoRunner:
+    """
+    gato — GitHub Actions security audit tool.
+    gato by Praetorian (https://github.com/praetorian-inc/gato)
+
+    Enumerates GitHub Actions workflows for a given org/user and identifies
+    workflow injection vulnerabilities, secret exfiltration paths, self-hosted
+    runner risks, and overly permissive permissions.
+
+    CLI usage:
+      gato enum -t ORG_NAME -o output.json
+
+    Output:
+      company/tools/gato/
+        gato_output.json  — raw JSON output
+        gato_summary.json — parsed findings summary
+
+    Placement: Phase 7 tools — alongside EmailHarvester, maigret, TruffleHog.
+    Gating: Only runs when a GitHub org/user is identified.
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+        github_org: str = "",
+        github_token: str = "",
+    ):
+        self.domain       = domain
+        self.company      = company
+        self.out          = output_dir / "company" / "tools" / "gato"
+        self.log          = log
+        self.data         = data
+        self.github_org   = github_org.strip()
+        self.github_token = github_token.strip()
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        p = shutil.which("gato")
+        if p:
+            return p
+        for candidate in (
+            os.path.join(
+                os.environ.get("GOPATH", os.path.expanduser("~/go")),
+                "bin", "gato",
+            ),
+            "/usr/local/bin/gato",
+            os.path.expanduser("~/.local/bin/gato"),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def _resolve_org(self) -> Optional[str]:
+        if self.github_org:
+            return self.github_org
+        gh_re = re.compile(r"https?://github\.com/([^/\s?#]+)", re.I)
+        org_candidates: Dict[str, int] = {}
+        for url in self.data.crawled_urls:
+            m = gh_re.match(url)
+            if m:
+                org = m.group(1).lower()
+                if org not in ("orgs", "repos", "trending", "topics", "explore"):
+                    org_candidates[org] = org_candidates.get(org, 0) + 1
+        if org_candidates:
+            return max(org_candidates, key=org_candidates.get)  # type: ignore
+        slug = re.sub(r"[^a-z0-9\-]", "", self.company.lower().replace(" ", "-"))
+        return slug if slug else None
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[gato] Binary not found — skipping.\n"
+                "        Install: pip3 install --break-system-packages gato-cli"
+            )
+            return 0
+
+        org = self._resolve_org()
+        if not org:
+            self.log.info("[gato] No GitHub org resolved — skipping")
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "gato")
+        self.log.set_tool_context("gato")
+        _vc.status("tool_gato",
+                   label="gato (GitHub Actions security audit)",
+                   status="running", active_tool="tools/gato")
+
+        self.log.info(f"[gato] Auditing GitHub Actions for org: {org}")
+        out_file = self.out / "gato_output.json"
+
+        env = os.environ.copy()
+        if self.github_token:
+            env["GH_TOKEN"] = self.github_token
+
+        cmd = [binary, "enum", "-t", org, "-o", str(out_file)]
+        cmd_str = " ".join(cmd)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600, env=env,
+            )
+            stdout, stderr, rc = result.stdout, result.stderr, result.returncode
+        except subprocess.TimeoutExpired:
+            stdout, stderr, rc = "", "Command timed out", -1
+        except Exception as exc:
+            stdout, stderr, rc = "", str(exc), -1
+        self.log.log_command(cmd_str, stdout, stderr, rc)
+
+        combined = ""
+        if out_file.exists():
+            combined = out_file.read_text(encoding="utf-8", errors="replace")
+        if not combined.strip():
+            combined = stdout
+
+        count = self._parse(combined, out_file)
+
+        self.log.success(f"[gato] Complete — {count} GitHub Actions findings")
+        _vc.status("tool_gato",
+                   label="gato (GitHub Actions security audit)",
+                   status="complete", active_tool="tools/gato")
+        return count
+
+    def _parse(self, output: str, out_file: Path) -> int:
+        count = 0
+        try:
+            data = json.loads(output) if output.strip() else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        if not data:
+            if not out_file.exists() or not out_file.stat().st_size:
+                add_finding(
+                    self.data, tool="gato",
+                    type_="github_actions_audit_clean",
+                    category=CAT_CLOUD, severity="info",
+                    detail="GitHub Actions: Audit Complete — No Issues",
+                    domain=self.domain, affected=self.github_org or self.domain,
+                    output_file=str(out_file),
+                )
+            return 0
+
+        repos = data if isinstance(data, list) else data.get("repos", data.get("repositories", [data]))
+        if not isinstance(repos, list):
+            repos = [repos]
+
+        for repo in repos:
+            if not isinstance(repo, dict):
+                continue
+            repo_name = repo.get("full_name", repo.get("name", "unknown"))
+
+            # Workflow injection
+            injections = repo.get("workflow_injections", repo.get("injections", []))
+            if isinstance(injections, list):
+                for inj in injections:
+                    detail_parts = [f"Workflow injection in {repo_name}"]
+                    if isinstance(inj, dict):
+                        wf = inj.get("workflow", inj.get("file", ""))
+                        trigger = inj.get("trigger", "")
+                        context = inj.get("context", inj.get("expression", ""))
+                        if wf:
+                            detail_parts.append(f"workflow: {wf}")
+                        if trigger:
+                            detail_parts.append(f"trigger: {trigger}")
+                        if context:
+                            detail_parts.append(f"injectable context: {context}")
+                    add_finding(
+                        self.data, tool="gato",
+                        type_="github_actions_injection",
+                        category=CAT_CLOUD, severity="high",
+                        detail=("GitHub Actions: Workflow Injection Vulnerability — "
+                                + "; ".join(detail_parts)),
+                        domain=self.domain,
+                        affected=repo_name,
+                        output_file=str(out_file),
+                        cwe="CWE-94",
+                    )
+                    count += 1
+
+            # Secret exfiltration paths
+            secret_paths = repo.get("secret_exfiltration", repo.get("exfiltration_paths", []))
+            if isinstance(secret_paths, list):
+                for sp in secret_paths:
+                    detail = f"GitHub Actions: Secret Exfiltration Path in {repo_name}"
+                    if isinstance(sp, dict):
+                        detail += f" — {sp.get('description', sp.get('workflow', ''))}"
+                    add_finding(
+                        self.data, tool="gato",
+                        type_="github_actions_secret_exfil",
+                        category=CAT_CLOUD, severity="high",
+                        detail=detail,
+                        domain=self.domain,
+                        affected=repo_name,
+                        output_file=str(out_file),
+                        cwe="CWE-200",
+                    )
+                    count += 1
+
+            # Overly permissive permissions
+            permissions = repo.get("permissions", repo.get("dangerous_permissions", []))
+            if isinstance(permissions, list):
+                for perm in permissions:
+                    detail = f"GitHub Actions: Overly Permissive Permissions in {repo_name}"
+                    if isinstance(perm, dict):
+                        detail += f" — {perm.get('permission', perm.get('level', ''))}"
+                    elif isinstance(perm, str):
+                        detail += f" — {perm}"
+                    add_finding(
+                        self.data, tool="gato",
+                        type_="github_actions_permissions",
+                        category=CAT_CLOUD, severity="medium",
+                        detail=detail,
+                        domain=self.domain,
+                        affected=repo_name,
+                        output_file=str(out_file),
+                        cwe="CWE-269",
+                    )
+                    count += 1
+
+            # Self-hosted runners
+            runners = repo.get("self_hosted_runners", repo.get("runners", []))
+            if isinstance(runners, list) and runners:
+                for runner in runners:
+                    detail = f"GitHub Actions: Self-Hosted Runner Risk in {repo_name}"
+                    if isinstance(runner, dict):
+                        detail += f" — {runner.get('name', runner.get('label', ''))}"
+                    add_finding(
+                        self.data, tool="gato",
+                        type_="github_actions_selfhosted_runner",
+                        category=CAT_CLOUD, severity="medium",
+                        detail=detail,
+                        domain=self.domain,
+                        affected=repo_name,
+                        output_file=str(out_file),
+                        cwe="CWE-269",
+                    )
+                    count += 1
+
+        summary = {"org": self.github_org or self._resolve_org(), "finding_count": count}
+        (self.out / "gato_summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        return count
+
+
+# ─── HakOriginFinderRunner ───────────────────────────────────────────────────
+
+class HakOriginFinderRunner:
+    """
+    hakoriginfinder — find origin servers behind CDN/WAF.
+    hakoriginfinder by hakluke (https://github.com/hakluke/hakoriginfinder)
+
+    Attempts to bypass CDN/WAF protections by discovering the origin IP
+    that responds to the target domain's content.
+
+    CLI usage:
+      echo "example.com" | hakoriginfinder
+
+    Output:
+      osint/hakoriginfinder/
+        hakoriginfinder_output.txt — raw output lines
+        hakoriginfinder_findings.json — parsed origin candidates
+
+    Placement: Phase 1.5 Wave C — after CDN/WAF detection.
+    Gating: Only runs when CDN/WAF is detected (cdncheck or header analysis).
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = _domain_path(output_dir, domain) / "tools" / "hakoriginfinder"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        p = shutil.which("hakoriginfinder")
+        if p:
+            return p
+        gobin = os.path.join(
+            os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin"
+        )
+        candidate = os.path.join(gobin, "hakoriginfinder")
+        return candidate if os.path.isfile(candidate) else None
+
+    def _has_cdn_waf(self) -> bool:
+        cdn_indicators = {"cloudflare", "akamai", "fastly", "sucuri", "incapsula",
+                          "edgecast", "stackpath", "cloudfront", "azure front door",
+                          "imperva"}
+        for ip, rec in self.data.ip_addresses.items():
+            provider = str(rec.get("cdn_provider", "")).lower()
+            cdn_type = str(rec.get("cdn_type", "")).lower()
+            if provider and any(ci in provider for ci in cdn_indicators):
+                return True
+            if cdn_type in ("cdn", "waf"):
+                return True
+        for sub, rec in self.data.subdomains.items():
+            provider = str(rec.get("cdn_provider", "")).lower()
+            cdn_type = str(rec.get("cdn_type", "")).lower()
+            if provider and any(ci in provider for ci in cdn_indicators):
+                return True
+            if cdn_type in ("cdn", "waf"):
+                return True
+        for finding in self.data.findings.as_legacy_list():
+            if finding.get("type") == "waf_detected":
+                return True
+        return False
+
+    def run(self) -> int:
+        if not self._has_cdn_waf():
+            self.log.info("[hakoriginfinder] No CDN/WAF detected — skipping")
+            return 0
+
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[hakoriginfinder] Binary not found — skipping.\n"
+                "        Install: go install github.com/hakluke/hakoriginfinder@latest"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "hakoriginfinder")
+        self.log.set_tool_context("hakoriginfinder")
+        _vc.status("tool_hakoriginfinder",
+                   label="hakoriginfinder (CDN/WAF origin bypass)",
+                   status="running", active_tool="tools/hakoriginfinder")
+
+        _safe_dom = _safe_filename(self.domain)
+        out_file  = self.out / f"hakoriginfinder_{_safe_dom}.txt"
+
+        cmd = f'echo "{self.domain}" | "{binary}"'
+        self.log.info(f"[hakoriginfinder] Searching for origin IP behind CDN/WAF for {self.domain}")
+        stdout, stderr, rc = _shell_go(cmd)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if stdout.strip():
+            out_file.write_text(stdout, encoding="utf-8")
+        elif rc != 0:
+            _write_placeholder(
+                self.out, f"hakoriginfinder_{_safe_dom}.txt", cmd,
+                f"(hakoriginfinder exited with code {rc})"
+            )
+
+        count = self._parse(stdout, out_file)
+
+        self.log.success(f"[hakoriginfinder] Complete — {count} origin IP candidates found")
+        _vc.status("tool_hakoriginfinder",
+                   label="hakoriginfinder (CDN/WAF origin bypass)",
+                   status="complete", active_tool="tools/hakoriginfinder")
+        return count
+
+    _LINE_RE = re.compile(
+        r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d+))?\s+(\d{3})\s+(.+)$"
+    )
+
+    def _parse(self, output: str, out_file: Path) -> int:
+        count = 0
+        findings: List[Dict] = []
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = self._LINE_RE.match(line)
+            if not m:
+                continue
+
+            ip, port, status_code, host = m.group(1), m.group(2) or "80", m.group(3), m.group(4).strip()
+            status_int = int(status_code)
+            findings.append({
+                "ip": ip, "port": port, "status": status_int, "host": host,
+            })
+
+            if status_int == 200:
+                add_finding(
+                    self.data, tool="hakoriginfinder",
+                    type_="cdn_bypass_origin_exposed",
+                    category=CAT_INFRA, severity="high",
+                    detail=(f"CDN/WAF Bypass: Origin IP Exposed — {ip}:{port} "
+                            f"responds with HTTP {status_code} for {host}"),
+                    ip=ip, host=self.domain, affected=f"{ip}:{port}",
+                    domain=self.domain,
+                    output_file=str(out_file),
+                    cwe="CWE-693",
+                )
+                count += 1
+            elif status_int in range(200, 400):
+                add_finding(
+                    self.data, tool="hakoriginfinder",
+                    type_="cdn_bypass_potential_origin",
+                    category=CAT_INFRA, severity="medium",
+                    detail=(f"CDN/WAF Bypass: Potential Origin IP — {ip}:{port} "
+                            f"responds with HTTP {status_code} for {host}"),
+                    ip=ip, host=self.domain, affected=f"{ip}:{port}",
+                    domain=self.domain,
+                    output_file=str(out_file),
+                )
+                count += 1
+
+        if not count:
+            add_finding(
+                self.data, tool="hakoriginfinder",
+                type_="cdn_bypass_no_exposure",
+                category=CAT_INFRA, severity="info",
+                detail="CDN/WAF Bypass: No Origin Exposure — CDN properly protects origin",
+                host=self.domain, affected=self.domain,
+                domain=self.domain,
+                output_file=str(out_file),
+            )
+
+        out_json = self.out / "hakoriginfinder_findings.json"
+        out_json.write_text(json.dumps(findings, indent=2), encoding="utf-8")
+        return count
+
+
+# ─── WaymoreRunner ───────────────────────────────────────────────────────────
+
+class WaymoreRunner:
+    """
+    waymore — comprehensive historical endpoint discovery.
+    waymore by xnl-h4ck3r (https://github.com/xnl-h4ck3r/waymore)
+
+    Queries Wayback Machine, Common Crawl, VirusTotal URL submissions,
+    URLScan, and AlienVault OTX for historical URLs — significantly more
+    comprehensive than waybackurls (which queries Wayback CDX API only).
+
+    CLI usage:
+      waymore -i DOMAIN -mode U -oU output.txt
+
+    Output:
+      osint/waymore/
+        waymore_urls_{domain}.txt         — all unique historical URLs
+        waymore_sensitive_{domain}.json   — URLs matching sensitive patterns
+        waymore_api_{domain}.json         — API endpoint URLs
+
+    Placement: Phase 1.5 Wave B — alongside waybackurls.
+    Gating: Always runs (domain-based).
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = _domain_path(output_dir, domain) / "tools" / "waymore"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        for name in ("waymore", "waymore.py"):
+            p = shutil.which(name)
+            if p:
+                return p
+        for explicit in (
+            os.path.expanduser("~/.local/bin/waymore"),
+            "/usr/local/bin/waymore",
+        ):
+            if os.path.isfile(explicit):
+                return explicit
+        return None
+
+    _SENSITIVE_PATH_RE = re.compile(
+        r"(?i)(?:/admin|/config|/debug|/backup|/test(?:ing)?|/internal|"
+        r"/\.env|/\.git|/wp-admin|/wp-config|/phpinfo|/phpmyadmin|"
+        r"/server-status|/server-info|/web\.config|/\.htpasswd|"
+        r"/\.htaccess|/cgi-bin|/manager|/console|/actuator|"
+        r"/swagger|/graphiql|/playground|/dump|/export|/import|"
+        r"/install|/setup|/login|/register|/password|/reset|"
+        r"/upload|/file|\.bak|\.backup|\.sql|\.db|\.env|\.log|\.old)"
+    )
+    _API_PATH_RE = re.compile(
+        r"(?i)(?:/api/|/v[0-9]+/|/graphql|/rest/|/jsonrpc|/xmlrpc|"
+        r"/soap|/wsdl|/grpc|/odata|/webhook)"
+    )
+
+    def run(self) -> int:
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[waymore] Binary not found — skipping.\n"
+                "        Install: pip3 install --break-system-packages waymore"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "waymore")
+        self.log.set_tool_context("waymore")
+        _vc.status("tool_waymore",
+                   label="waymore (historical endpoint discovery)",
+                   status="running", active_tool="tools/waymore")
+
+        _safe_dom = _safe_filename(self.domain)
+        out_file  = self.out / f"waymore_urls_{_safe_dom}.txt"
+
+        cmd = f'"{binary}" -i "{self.domain}" -mode U -oU "{out_file}"'
+        self.log.info(f"[waymore] Mining Wayback+CommonCrawl+VT+URLScan+OTX for {self.domain}")
+        stdout, stderr, rc = _shell(cmd, timeout=1800)
+        self.log.log_command(cmd, stdout, stderr, rc)
+
+        if not out_file.exists() or not out_file.stat().st_size:
+            if stdout.strip():
+                out_file.write_text(stdout, encoding="utf-8")
+            else:
+                _write_placeholder(
+                    self.out, f"waymore_urls_{_safe_dom}.txt", cmd,
+                    f"(waymore returned no results for {self.domain})"
+                )
+                if rc != 0:
+                    _record_timeout_action_item(
+                        "waymore", self.domain,
+                        f"waymore {'timed out' if rc == -1 else f'failed (exit {rc})'} "
+                        f"for {self.domain}. Re-run waymore manually.",
+                        hostname=self.domain, priority="MEDIUM",
+                    )
+
+        count = self._ingest(out_file)
+
+        self.log.success(f"[waymore] Complete — {count} new URLs ingested")
+        _vc.status("tool_waymore",
+                   label="waymore (historical endpoint discovery)",
+                   status="complete", active_tool="tools/waymore")
+        return count
+
+    def _ingest(self, file_path: Path) -> int:
+        if not file_path.exists():
+            return 0
+
+        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        count = 0
+        sensitive_hits: List[Dict] = []
+        api_hits: List[Dict] = []
+
+        for raw in lines:
+            url = raw.strip()
+            if not url or not url.startswith(("http://", "https://")):
+                continue
+
+            if url not in self.data.crawled_urls:
+                self.data.crawled_urls[url] = {"status": None, "source": "waymore"}
+                count += 1
+
+            try:
+                parsed = urllib.parse.urlparse(url)
+                host   = (parsed.hostname or "").lower().rstrip(".")
+                path   = parsed.path or ""
+
+                # Subdomain extraction
+                if host and host.endswith(self.domain) and host != self.domain:
+                    rec = self.data.subdomains.setdefault(
+                        host, {"sources": [], "ips": [], "ports": [], "http_status": None}
+                    )
+                    if "waymore" not in rec["sources"]:
+                        rec["sources"].append("waymore")
+
+                # Sensitive path detection
+                if self._SENSITIVE_PATH_RE.search(path):
+                    sensitive_hits.append({"url": url, "path": path})
+
+                # API endpoint detection
+                if self._API_PATH_RE.search(path):
+                    api_hits.append({"url": url, "path": path})
+
+            except Exception:
+                continue
+
+        _safe_dom = _safe_filename(self.domain)
+
+        if count:
+            add_finding(
+                self.data, tool="waymore",
+                type_="historical_url_discovery",
+                category=CAT_RECON, severity="info",
+                detail=(f"Historical Endpoints Discovered — waymore returned {count} "
+                        f"unique URLs from Wayback Machine, Common Crawl, VirusTotal, "
+                        f"URLScan, and AlienVault OTX"),
+                domain=self.domain, affected=self.domain,
+                output_file=str(file_path),
+            )
+
+        if sensitive_hits:
+            sample = "; ".join(h["url"] for h in sensitive_hits[:5])
+            add_finding(
+                self.data, tool="waymore",
+                type_="sensitive_historical_url",
+                category=CAT_SENSITIVE, severity="medium",
+                detail=(f"Sensitive Historical URL Discovered — {len(sensitive_hits)} "
+                        f"URL(s) matching admin/config/backup/debug patterns. "
+                        f"Sample: {sample}"),
+                domain=self.domain, affected=self.domain,
+                output_file=str(self.out / f"waymore_sensitive_{_safe_dom}.json"),
+            )
+            (self.out / f"waymore_sensitive_{_safe_dom}.json").write_text(
+                json.dumps(sensitive_hits[:100], indent=2), encoding="utf-8"
+            )
+
+        if api_hits:
+            sample = "; ".join(h["url"] for h in api_hits[:5])
+            add_finding(
+                self.data, tool="waymore",
+                type_="historical_api_endpoint",
+                category=CAT_RECON, severity="low",
+                detail=(f"Historical API Endpoint — {len(api_hits)} API endpoint(s) "
+                        f"found in historical archives. Sample: {sample}"),
+                domain=self.domain, affected=self.domain,
+                output_file=str(self.out / f"waymore_api_{_safe_dom}.json"),
+            )
+            (self.out / f"waymore_api_{_safe_dom}.json").write_text(
+                json.dumps(api_hits[:200], indent=2), encoding="utf-8"
+            )
+
+        return count
+
+
+# ─── ExiftoolRunner ──────────────────────────────────────────────────────────
+
+class ExiftoolRunner:
+    """
+    exiftool — document metadata OSINT via ExifTool.
+    ExifTool by Phil Harvey (https://exiftool.org/)
+
+    Downloads discovered documents (PDF, DOCX, XLSX, PPTX, images) and
+    extracts metadata: author names, software versions, internal file paths,
+    email addresses, and GPS coordinates.
+
+    Output:
+      osint/exiftool/
+        exiftool_metadata.json   — aggregated metadata per document
+        exiftool_findings.json   — parsed findings summary
+
+    Placement: Phase 7 tools — after web crawling has found document URLs.
+    Gating: Only runs when downloadable documents are found in crawl data.
+    """
+
+    _DOC_EXT_RE = re.compile(
+        r"(?i)\.(?:pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|"
+        r"jpg|jpeg|png|gif|tiff?|bmp|svg|webp|heic)(?:[?#]|$)"
+    )
+    _USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._\- ]{1,60}$")
+    _INTERNAL_PATH_RE = re.compile(
+        r"(?:C:\\|/home/|/Users/|/var/|/opt/|/tmp/|\\\\[A-Za-z])"
+    )
+    _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+    _GPS_FIELDS = ("GPSLatitude", "GPSLongitude", "GPSPosition", "GPSCoordinates")
+
+    def __init__(
+        self,
+        domain: str,
+        company: str,
+        output_dir: Path,
+        log: "ReconLogger",
+        data: "ReconData",
+    ):
+        self.domain  = domain
+        self.company = company
+        self.out     = _domain_path(output_dir, domain) / "tools" / "exiftool"
+        self.log     = log
+        self.data    = data
+        self.out.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _find_binary() -> Optional[str]:
+        for name in ("exiftool",):
+            p = shutil.which(name)
+            if p:
+                return p
+        for explicit in ("/usr/local/bin/exiftool", "/usr/bin/exiftool"):
+            if os.path.isfile(explicit):
+                return explicit
+        return None
+
+    def _discover_document_urls(self) -> List[str]:
+        urls: List[str] = []
+        for url in self.data.crawled_urls:
+            if self._DOC_EXT_RE.search(url):
+                urls.append(url)
+        return urls[:50]
+
+    def run(self) -> int:
+        doc_urls = self._discover_document_urls()
+        if not doc_urls:
+            self.log.info("[exiftool] No downloadable documents found — skipping")
+            return 0
+
+        binary = self._find_binary()
+        if not binary:
+            self.log.warning(
+                "[exiftool] Binary not found — skipping.\n"
+                "        Install: apt install libimage-exiftool-perl (Linux)\n"
+                "        Install: brew install exiftool (macOS)"
+            )
+            return 0
+
+        TOOL_REGISTRY.query_and_register(binary, "exiftool")
+        self.log.set_tool_context("exiftool")
+        _vc.status("tool_exiftool",
+                   label="exiftool (document metadata OSINT)",
+                   status="running", active_tool="tools/exiftool")
+
+        self.log.info(f"[exiftool] Analyzing metadata from {len(doc_urls)} documents")
+
+        import tempfile
+        all_metadata: List[Dict] = []
+        count = 0
+
+        with tempfile.TemporaryDirectory(prefix="osift_exiftool_") as tmpdir:
+            for url in doc_urls:
+                try:
+                    meta = self._process_document(binary, url, Path(tmpdir))
+                    if meta:
+                        all_metadata.append(meta)
+                        count += self._generate_findings(meta, url)
+                except Exception as exc:
+                    self.log.warning(f"[exiftool] Error processing {url}: {exc}")
+
+        (self.out / "exiftool_metadata.json").write_text(
+            json.dumps(all_metadata, indent=2, default=str), encoding="utf-8"
+        )
+
+        usernames = set()
+        for meta in all_metadata:
+            for field in ("Author", "Creator", "LastModifiedBy"):
+                val = meta.get("metadata", {}).get(field, "")
+                if val and self._USERNAME_RE.match(val):
+                    usernames.add(val)
+
+        if usernames:
+            for uname in usernames:
+                already = any(
+                    e.get("name", "").lower() == uname.lower()
+                    for e in self.data.employees
+                )
+                if not already:
+                    self.data.employees.append({
+                        "name": uname,
+                        "source": "exiftool",
+                        "title": "",
+                        "email": "",
+                    })
+
+        add_finding(
+            self.data, tool="exiftool",
+            type_="document_metadata_audit",
+            category=CAT_RECON, severity="info",
+            detail=(f"Document Metadata: Audit Summary — analyzed {len(all_metadata)} "
+                    f"documents, extracted {len(usernames)} unique usernames"),
+            domain=self.domain, affected=self.domain,
+            output_file=str(self.out / "exiftool_metadata.json"),
+        )
+
+        self.log.success(f"[exiftool] Complete — {count} metadata findings from {len(all_metadata)} documents")
+        _vc.status("tool_exiftool",
+                   label="exiftool (document metadata OSINT)",
+                   status="complete", active_tool="tools/exiftool")
+        return count
+
+    def _process_document(self, binary: str, url: str, tmpdir: Path) -> Optional[Dict]:
+        import requests as _rq
+        try:
+            parsed = urllib.parse.urlparse(url)
+            filename = os.path.basename(parsed.path) or "document"
+            filename = re.sub(r"[^a-zA-Z0-9._\-]", "_", filename)[:100]
+            local_path = tmpdir / filename
+
+            resp = _rq.get(url, timeout=30, stream=True, verify=False,
+                           allow_redirects=True,
+                           headers={"User-Agent": "Mozilla/5.0 (compatible; OSINT-scan)"})
+            if resp.status_code != 200:
+                return None
+            content_len = int(resp.headers.get("content-length", 0))
+            if content_len > 50 * 1024 * 1024:
+                return None
+
+            with open(local_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    if f.tell() > 50 * 1024 * 1024:
+                        return None
+
+            cmd = [binary, "-json", str(local_path)]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            self.log.log_command(" ".join(cmd), result.stdout, result.stderr, result.returncode)
+
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+
+            data = json.loads(result.stdout)
+            if isinstance(data, list) and data:
+                data = data[0]
+            return {"url": url, "filename": filename, "metadata": data}
+
+        except Exception:
+            return None
+
+    def _generate_findings(self, meta: Dict, url: str) -> int:
+        count = 0
+        md = meta.get("metadata", {})
+
+        # Internal username leaked
+        for field in ("Author", "Creator", "LastModifiedBy"):
+            val = md.get(field, "")
+            if val and self._USERNAME_RE.match(val) and len(val) > 2:
+                if val.lower() not in ("admin", "user", "root", "system", "test",
+                                        "unknown", "default", "microsoft", "adobe"):
+                    add_finding(
+                        self.data, tool="exiftool",
+                        type_="document_metadata_username",
+                        category=CAT_SENSITIVE, severity="low",
+                        detail=(f"Document Metadata: Internal Username Leaked — "
+                                f"'{val}' found in {field} field of {url}"),
+                        domain=self.domain, affected=url,
+                        output_file=str(self.out / "exiftool_metadata.json"),
+                        cwe="CWE-200",
+                    )
+                    count += 1
+                    break
+
+        # Software version disclosed
+        for field in ("Creator", "Producer", "Application"):
+            val = md.get(field, "")
+            if val and len(val) > 3:
+                add_finding(
+                    self.data, tool="exiftool",
+                    type_="document_metadata_software",
+                    category=CAT_RECON, severity="info",
+                    detail=(f"Document Metadata: Software Version Disclosed — "
+                            f"'{val}' in {field} field of {url}"),
+                    domain=self.domain, affected=url,
+                    output_file=str(self.out / "exiftool_metadata.json"),
+                )
+                count += 1
+                break
+
+        # Internal file path leaked
+        for field in ("Subject", "Description", "Comment", "Keywords",
+                      "DocumentName", "FileName"):
+            val = str(md.get(field, ""))
+            if self._INTERNAL_PATH_RE.search(val):
+                add_finding(
+                    self.data, tool="exiftool",
+                    type_="document_metadata_path",
+                    category=CAT_SENSITIVE, severity="low",
+                    detail=(f"Document Metadata: Internal File Path Leaked — "
+                            f"'{val[:120]}' in {field} field of {url}"),
+                    domain=self.domain, affected=url,
+                    output_file=str(self.out / "exiftool_metadata.json"),
+                    cwe="CWE-200",
+                )
+                count += 1
+                break
+
+        # Email address leaked
+        for field in ("Author", "Creator", "Subject", "Description", "Comment"):
+            val = str(md.get(field, ""))
+            emails = self._EMAIL_RE.findall(val)
+            for email in emails:
+                email_lower = email.lower()
+                if email_lower.split("@")[1] not in ("example.com", "example.org",
+                                                      "w3.org", "schema.org"):
+                    add_finding(
+                        self.data, tool="exiftool",
+                        type_="document_metadata_email",
+                        category=CAT_RECON, severity="info",
+                        detail=(f"Document Metadata: Email Address Leaked — "
+                                f"'{email}' in {field} field of {url}"),
+                        email=email,
+                        domain=self.domain, affected=url,
+                        output_file=str(self.out / "exiftool_metadata.json"),
+                    )
+                    if email_lower not in self.data.email_addresses:
+                        self.data.email_addresses[email_lower] = {
+                            "source": "exiftool", "verified": False,
+                        }
+                    count += 1
+                    break
+            if emails:
+                break
+
+        # GPS coordinates leaked
+        has_gps = False
+        gps_parts = []
+        for gps_field in self._GPS_FIELDS:
+            val = md.get(gps_field)
+            if val:
+                has_gps = True
+                gps_parts.append(f"{gps_field}={val}")
+        if has_gps:
+            add_finding(
+                self.data, tool="exiftool",
+                type_="document_metadata_gps",
+                category=CAT_SENSITIVE, severity="medium",
+                detail=(f"Document Metadata: GPS Coordinates Leaked — "
+                        f"{'; '.join(gps_parts)} in {url}"),
+                domain=self.domain, affected=url,
+                output_file=str(self.out / "exiftool_metadata.json"),
+                cwe="CWE-200",
+            )
+            count += 1
+
+        return count
+
+
 # ─── Phase 1.5 Orchestrator ───────────────────────────────────────────────────
 
 class PassiveOSINTOrchestrator:
@@ -13272,16 +14200,18 @@ class PassiveOSINTOrchestrator:
       Run immediately after Phase 1 DNS enumeration while PD Wave A is also
       running.  All tools are domain-only; no live host data needed.
 
-    Wave B (concurrent) — puredns + waybackurls
+    Wave B (concurrent) — puredns + waybackurls + waymore
       Run after passive subdomain collection (Wave A + pd_wave_a + pd_wave_b).
       puredns validates and extends subdomain coverage; waybackurls mines the
-      Wayback Machine CDX for historical URLs and additional subdomains.
+      Wayback Machine CDX; waymore covers Wayback+CommonCrawl+VT+URLScan+OTX.
 
-    Phase 7 tools (concurrent) — EmailHarvester + maigret + TruffleHog
+    Phase 7 tools (concurrent) — EmailHarvester + maigret + TruffleHog + gato + exiftool
       Runs alongside Phase 7 EmailAndPeopleOSINT for social and secret intelligence.
+      gato audits GitHub Actions; exiftool extracts document metadata.
 
-    Wave C (concurrent) — CloudEnumRunner
+    Wave C (concurrent) — CloudEnumRunner + hakoriginfinder
       Run after web crawl so the full set of live hosts is known.
+      hakoriginfinder discovers origin IPs behind CDN/WAF (gated on CDN detection).
 
     Results flow into ReconData and are available to all subsequent phases.
     """
@@ -13300,6 +14230,10 @@ class PassiveOSINTOrchestrator:
         github_token: str = "",
         skip_wayback: bool = False,
         skip_cloud_enum: bool = False,
+        skip_waymore: bool = False,
+        skip_hakoriginfinder: bool = False,
+        skip_exiftool: bool = False,
+        skip_gato: bool = False,
     ):
         self.domain             = domain
         self.company            = company
@@ -13313,6 +14247,10 @@ class PassiveOSINTOrchestrator:
         self.github_token       = github_token
         self.skip_wayback       = skip_wayback
         self.skip_cloud_enum    = skip_cloud_enum
+        self.skip_waymore       = skip_waymore
+        self.skip_hakoriginfinder = skip_hakoriginfinder
+        self.skip_exiftool      = skip_exiftool
+        self.skip_gato          = skip_gato
 
     def run_wave_a(self) -> None:
         """
@@ -13368,6 +14306,13 @@ class PassiveOSINTOrchestrator:
                 )
             )
 
+        if not self.skip_waymore:
+            tasks.append(
+                WaymoreRunner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                )
+            )
+
         tasks.append(
             PureDNSRunner(
                 self.domain, self.company, self.output_dir, self.log, self.data,
@@ -13405,6 +14350,13 @@ class PassiveOSINTOrchestrator:
                 )
             )
 
+        if not self.skip_hakoriginfinder:
+            tasks.append(
+                HakOriginFinderRunner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                )
+            )
+
         if not tasks:
             return
 
@@ -13429,10 +14381,6 @@ class PassiveOSINTOrchestrator:
         if self.skip_passive:
             return
 
-        self.log.info(
-            "[PassiveOSINT] Phase 7 tools — EmailHarvester + maigret + TruffleHog (concurrent)"
-        )
-
         tasks: List[Any] = [
             EmailHarvesterRunner(
                 self.domain, self.company, self.output_dir, self.log, self.data,
@@ -13446,6 +14394,27 @@ class PassiveOSINTOrchestrator:
                 github_token=self.github_token,
             ),
         ]
+
+        if not self.skip_gato:
+            tasks.append(
+                GatoRunner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                    github_org=self.github_org,
+                    github_token=self.github_token,
+                )
+            )
+
+        if not self.skip_exiftool:
+            tasks.append(
+                ExiftoolRunner(
+                    self.domain, self.company, self.output_dir, self.log, self.data,
+                )
+            )
+
+        tool_names = ", ".join(t.__class__.__name__ for t in tasks)
+        self.log.info(
+            f"[PassiveOSINT] Phase 7 tools — {tool_names} (concurrent)"
+        )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), _SCAN_SEM.limit)) as ex:
             futures = {ex.submit(t.run): t.__class__.__name__ for t in tasks}

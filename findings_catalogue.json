@@ -2,7 +2,7 @@
   "version": "1.6.0",
   "tool": "osift",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 55,
+  "total": 72,
   "from_existing": 42,
   "newly_scaffolded": 2,
   "findings": [
@@ -3748,6 +3748,1102 @@
         "nslookup",
         "dig",
         "dnsx"
+      ]
+    },
+    {
+      "id": "OSIFT-054",
+      "title": "GitHub Actions: Workflow Injection Vulnerability",
+      "aliases": [
+        "GitHub Actions Script Injection",
+        "Workflow Expression Injection"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "gato identified a GitHub Actions workflow that uses unsanitized expression substitution (${{ }}) with attacker-controlled input (such as issue titles, PR bodies, or commit messages). This allows an attacker to inject arbitrary code that executes in the workflow runner context.",
+      "impact": "Workflow injection allows an attacker to execute arbitrary code in the CI/CD environment. This can lead to secret exfiltration (GitHub tokens, deployment keys, API credentials), supply chain compromise (modifying build artifacts), lateral movement to other repositories, and persistent access via self-hosted runner compromise.",
+      "cwe": [
+        "CWE-94"
+      ],
+      "cve_examples": [
+        "CVE-2022-27228"
+      ],
+      "cvss_v3_base": 8.1,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-06"
+      ],
+      "nist_800_53": [
+        "SA-11",
+        "SI-7"
+      ],
+      "nist_800_171": [
+        "3.14.1",
+        "3.14.2"
+      ],
+      "pci_dss_4": [
+        "6.2.4",
+        "6.3.2"
+      ],
+      "iso_27001": [
+        "A.8.25",
+        "A.8.28"
+      ],
+      "iso_27002": [
+        "8.25",
+        "8.28"
+      ],
+      "soc2": [
+        "CC7.1",
+        "CC8.1"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1195.002",
+          "tactic": "Initial Access",
+          "name": "Supply Chain Compromise: Compromise Software Supply Chain"
+        },
+        {
+          "technique": "T1059",
+          "tactic": "Execution",
+          "name": "Command and Scripting Interpreter"
+        }
+      ],
+      "searchsploit_terms": [
+        "github actions injection"
+      ],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Use intermediate environment variables instead of direct expression substitution in workflow run steps. Replace ${{ github.event.issue.title }} with an env: block that assigns the value to an environment variable, then reference the variable in the script. Use actions/github-script with the github context object instead of shell interpolation.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Input Validation",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "gato",
+        "actionlint"
+      ]
+    },
+    {
+      "id": "OSIFT-055",
+      "title": "GitHub Actions: Secret Exfiltration Path",
+      "aliases": [
+        "GitHub Actions Secret Leak",
+        "CI/CD Secret Exposure"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "gato identified a workflow configuration where secrets are accessible to jobs or steps that process untrusted input. An attacker who can trigger the workflow (via PR, issue, or fork) may be able to exfiltrate secrets through environment variables, workflow artifacts, or out-of-band channels.",
+      "impact": "Secret exfiltration from CI/CD pipelines can expose deployment credentials, cloud provider keys, signing certificates, and API tokens. Compromised secrets enable lateral movement to production environments, supply chain attacks via signed releases, and persistent access to organizational infrastructure.",
+      "cwe": [
+        "CWE-200",
+        "CWE-522"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 7.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01",
+        "PR.AC-04"
+      ],
+      "nist_800_53": [
+        "SC-28",
+        "AC-6"
+      ],
+      "nist_800_171": [
+        "3.13.16"
+      ],
+      "pci_dss_4": [
+        "3.5.1",
+        "8.3.1"
+      ],
+      "iso_27001": [
+        "A.8.11"
+      ],
+      "iso_27002": [
+        "8.11"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1552.001",
+          "tactic": "Credential Access",
+          "name": "Unsecured Credentials: Credentials In Files"
+        },
+        {
+          "technique": "T1195.002",
+          "tactic": "Initial Access",
+          "name": "Supply Chain Compromise: Compromise Software Supply Chain"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Restrict secrets to specific jobs using environment-level scoping. Use OIDC tokens instead of long-lived credentials for cloud authentication. Require approval for workflows triggered by external contributors. Avoid passing secrets to steps that handle untrusted input.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "gato",
+        "actionlint"
+      ]
+    },
+    {
+      "id": "OSIFT-056",
+      "title": "GitHub Actions: Overly Permissive Permissions",
+      "aliases": [
+        "Workflow Excessive Permissions",
+        "GitHub Actions write-all"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "gato identified a GitHub Actions workflow with overly permissive GITHUB_TOKEN permissions (such as write-all, admin, or contents: write). Workflows should follow the principle of least privilege and request only the minimum permissions required for their function.",
+      "impact": "Overly permissive workflow tokens increase the blast radius if the workflow is compromised. A write-all token can modify repository contents, create releases, manage issues/PRs, push to protected branches, and modify repository settings. If combined with a workflow injection, an attacker gains full repository control.",
+      "cwe": [
+        "CWE-269",
+        "CWE-250"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:L",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-01"
+      ],
+      "nist_800_53": [
+        "AC-6"
+      ],
+      "nist_800_171": [
+        "3.1.5"
+      ],
+      "pci_dss_4": [
+        "7.2.1"
+      ],
+      "iso_27001": [
+        "A.8.3"
+      ],
+      "iso_27002": [
+        "8.3"
+      ],
+      "soc2": [
+        "CC6.3"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1078.004",
+          "tactic": "Persistence",
+          "name": "Valid Accounts: Cloud Accounts"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Apply least-privilege permissions to all workflows. Use the permissions: key at the workflow or job level to request only required scopes (e.g., contents: read, issues: write). Avoid write-all or admin permissions.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "gato",
+        "actionlint"
+      ]
+    },
+    {
+      "id": "OSIFT-057",
+      "title": "GitHub Actions: Self-Hosted Runner Risk",
+      "aliases": [
+        "Self-Hosted Runner Exposure",
+        "GitHub Actions Runner on Public Repo"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "gato identified self-hosted GitHub Actions runners configured on a public repository. Self-hosted runners in public repos are dangerous because any user can submit a pull request that triggers a workflow run on the runner, potentially executing arbitrary code in the organization's infrastructure.",
+      "impact": "Self-hosted runners on public repos allow any GitHub user to execute code on the organization's infrastructure by submitting a crafted pull request. This can lead to lateral movement into internal networks, credential theft from the runner environment, persistence via runner modification, and access to other repositories that share the same runner group.",
+      "cwe": [
+        "CWE-269"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 6.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-03"
+      ],
+      "nist_800_53": [
+        "AC-6",
+        "SC-7"
+      ],
+      "nist_800_171": [
+        "3.1.5",
+        "3.13.1"
+      ],
+      "pci_dss_4": [
+        "7.2.1"
+      ],
+      "iso_27001": [
+        "A.8.3"
+      ],
+      "iso_27002": [
+        "8.3"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1195.002",
+          "tactic": "Initial Access",
+          "name": "Supply Chain Compromise: Compromise Software Supply Chain"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Use ephemeral/disposable runners for public repositories. Restrict self-hosted runners to private repos only. If self-hosted runners must be used on public repos, enable the 'Require approval for all outside collaborators' setting and use separate runner groups with restricted repository access.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "gato"
+      ]
+    },
+    {
+      "id": "OSIFT-058",
+      "title": "GitHub Actions: Audit Complete \u2014 No Issues",
+      "aliases": [
+        "GitHub Actions Security Audit Clean"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "gato completed a security audit of the target organization's GitHub Actions workflows and found no injection vulnerabilities, secret exfiltration paths, excessive permissions, or self-hosted runner risks.",
+      "impact": "No security issues were identified in the GitHub Actions configuration. This is a positive finding indicating that CI/CD workflows follow security best practices for the areas audited.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [
+        "SA-11"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "No remediation required. Continue to audit workflows periodically, especially when new workflows are added or existing ones are modified.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "gato",
+        "actionlint"
+      ]
+    },
+    {
+      "id": "OSIFT-059",
+      "title": "CDN/WAF Bypass: Origin IP Exposed",
+      "aliases": [
+        "Origin IP Behind CDN",
+        "CDN Bypass Direct IP",
+        "WAF Bypass Origin"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "hakoriginfinder discovered the origin server IP address behind the CDN/WAF. The origin IP responds to HTTP requests directly, bypassing all CDN/WAF protections (rate limiting, DDoS mitigation, WAF rules, geo-blocking, bot detection). The origin was confirmed by matching response characteristics to the target domain.",
+      "impact": "Direct access to the origin server bypasses all CDN/WAF security controls. An attacker can launch DDoS attacks directly against the origin, exploit web application vulnerabilities without WAF interference, bypass rate limiting and bot detection, and circumvent geo-blocking or IP-based access controls. The origin server may also expose internal services or management interfaces not intended to be publicly accessible.",
+      "cwe": [
+        "CWE-693",
+        "CWE-16"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 7.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2025 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01",
+        "PR.IR-01"
+      ],
+      "nist_800_53": [
+        "SC-7",
+        "SC-5"
+      ],
+      "nist_800_171": [
+        "3.13.1",
+        "3.13.6"
+      ],
+      "pci_dss_4": [
+        "1.3.1",
+        "6.4.1"
+      ],
+      "iso_27001": [
+        "A.8.20",
+        "A.8.22"
+      ],
+      "iso_27002": [
+        "8.20",
+        "8.22"
+      ],
+      "soc2": [
+        "CC6.6"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.005",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: IP Addresses"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Restrict the origin server firewall to accept connections only from CDN/WAF edge IP ranges. Use the CDN provider's published IP lists (e.g., Cloudflare IPs, AWS CloudFront IPs) in firewall rules. Block all direct access to the origin from non-CDN sources. Consider using authenticated origin pulls (mTLS between CDN and origin).",
+      "remediation_component": "Network",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "hakoriginfinder",
+        "censys",
+        "shodan"
+      ]
+    },
+    {
+      "id": "OSIFT-060",
+      "title": "CDN/WAF Bypass: Potential Origin IP",
+      "aliases": [
+        "Possible Origin IP",
+        "CDN Bypass Candidate"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "hakoriginfinder identified an IP address that may be the origin server behind the CDN/WAF. The IP responded to HTTP requests with content that partially matches the target domain (e.g., 2xx/3xx status code with related content). Further verification is needed to confirm this is the actual origin.",
+      "impact": "If this IP is confirmed as the origin server, an attacker can bypass all CDN/WAF protections. Even as a candidate, it reveals infrastructure information that narrows the attack surface and may identify related services, staging environments, or development servers.",
+      "cwe": [
+        "CWE-693"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2025 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "SC-7"
+      ],
+      "nist_800_171": [
+        "3.13.1"
+      ],
+      "pci_dss_4": [
+        "1.3.1"
+      ],
+      "iso_27001": [
+        "A.8.20"
+      ],
+      "iso_27002": [
+        "8.20"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1590.005",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Network Information: IP Addresses"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Verify whether this IP is the actual origin server. If confirmed, restrict its firewall to accept connections only from CDN edge IPs. If it is a staging or development server, ensure it is not publicly accessible.",
+      "remediation_component": "Network",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "hakoriginfinder",
+        "censys",
+        "shodan"
+      ]
+    },
+    {
+      "id": "OSIFT-061",
+      "title": "CDN/WAF Bypass: No Origin Exposure",
+      "aliases": [
+        "CDN Origin Protected",
+        "No CDN Bypass Found"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "hakoriginfinder scanned for the origin server IP behind the CDN/WAF and found no exposed origin IPs. The CDN/WAF appears to properly protect the origin server from direct access.",
+      "impact": "The CDN/WAF is correctly protecting the origin server. No direct access paths were discovered during the scan.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "SC-7"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "No remediation required. Continue to ensure origin server firewall restricts access to CDN edge IPs only.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "hakoriginfinder"
+      ]
+    },
+    {
+      "id": "OSIFT-062",
+      "title": "Historical Endpoints Discovered",
+      "aliases": [
+        "Wayback URLs",
+        "Archived Endpoints",
+        "Historical URL Discovery"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "waymore discovered historical endpoints for the target domain across multiple web archive sources (Wayback Machine, Common Crawl, VirusTotal, URLScan.io, AlienVault OTX). These URLs represent the domain's historical web presence and may include endpoints that are no longer publicly linked but still accessible.",
+      "impact": "Historical endpoints can reveal previously accessible admin panels, configuration pages, backup files, development endpoints, and API routes. Even if removed from the current site, these endpoints may still respond to requests. Archived URLs also reveal the application's evolution, naming conventions, and internal structure.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "API9:2023 Improper Inventory Management",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [
+        "A.8.9"
+      ],
+      "iso_27002": [
+        "8.9"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.005",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: Scan Databases"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review discovered endpoints and remove or restrict access to any that should not be publicly accessible. Implement proper authentication and authorization controls on all endpoints.",
+      "remediation_component": "Application",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "waymore",
+        "waybackurls",
+        "gau"
+      ]
+    },
+    {
+      "id": "OSIFT-063",
+      "title": "Sensitive Historical URL Discovered",
+      "aliases": [
+        "Archived Admin URL",
+        "Historical Config Endpoint",
+        "Archived Backup File"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "waymore discovered historical URLs matching security-sensitive patterns (admin, config, debug, backup, test, internal, setup, install, phpinfo, .env, wp-admin, phpmyadmin) in web archive data. These URLs may indicate administrative interfaces, configuration files, or backup resources that were previously accessible and may still respond to requests.",
+      "impact": "Sensitive historical URLs may reveal admin panels that still respond, configuration files with credentials, database backups, installation wizards that can be replayed, debug pages with verbose error output, and internal API documentation. These represent high-value targets for an attacker who can access them directly.",
+      "cwe": [
+        "CWE-200",
+        "CWE-538"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A01:2025 Broken Access Control",
+      "owasp_api": "API9:2023 Improper Inventory Management",
+      "nist_csf2": [
+        "PR.AC-04"
+      ],
+      "nist_800_53": [
+        "AC-6",
+        "CM-7"
+      ],
+      "nist_800_171": [
+        "3.1.5",
+        "3.4.6"
+      ],
+      "pci_dss_4": [
+        "6.2.4",
+        "6.4.1"
+      ],
+      "iso_27001": [
+        "A.8.9",
+        "A.8.3"
+      ],
+      "iso_27002": [
+        "8.9",
+        "8.3"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.005",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: Scan Databases"
+        },
+        {
+          "technique": "T1190",
+          "tactic": "Initial Access",
+          "name": "Exploit Public-Facing Application"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Remove sensitive endpoints from production. Add authentication to admin panels. Delete backup and configuration files from web-accessible directories. Disable debug/install/setup endpoints in production. Request removal of sensitive cached pages from web archives where possible.",
+      "remediation_component": "Application",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "waymore",
+        "waybackurls",
+        "httpx"
+      ]
+    },
+    {
+      "id": "OSIFT-064",
+      "title": "Historical API Endpoint",
+      "aliases": [
+        "Archived API Route",
+        "Historical REST Endpoint"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "description": "waymore discovered API endpoints in web archive data (/api/, /v1/, /v2/, /graphql, /rest/, /ws/, /webhook). These endpoints may represent current or deprecated API surfaces that can be probed for authentication bypasses, information disclosure, or injection vulnerabilities.",
+      "impact": "Historical API endpoints reveal the application's API structure, versioning scheme, and endpoint naming conventions. Deprecated API versions may lack security controls applied to current versions. API endpoints are high-value targets for authentication bypass, injection, and data exfiltration.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "API9:2023 Improper Inventory Management",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "6.3.2"
+      ],
+      "iso_27001": [
+        "A.8.9"
+      ],
+      "iso_27002": [
+        "8.9"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1596.005",
+          "tactic": "Reconnaissance",
+          "name": "Search Open Technical Databases: Scan Databases"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Decommission deprecated API versions. Ensure all API endpoints require proper authentication and authorization. Maintain an up-to-date API inventory and remove endpoints that are no longer needed.",
+      "remediation_component": "Application",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "waymore",
+        "waybackurls",
+        "httpx"
+      ]
+    },
+    {
+      "id": "OSIFT-065",
+      "title": "Document Metadata: Internal Username Leaked",
+      "aliases": [
+        "Document Author Exposed",
+        "PDF Author Metadata",
+        "EXIF Username"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "description": "exiftool extracted an internal username from the Author or Creator metadata field of a publicly accessible document. This username may correspond to an internal Active Directory account, email address, or application login credential.",
+      "impact": "Leaked usernames enable targeted phishing, credential stuffing, and password spraying attacks. Internal usernames often follow predictable patterns (first.last, flast) that allow enumeration of additional accounts. Combined with other OSINT, usernames can be used for social engineering or to identify high-value targets (executives, administrators).",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "SI-12",
+        "AC-6"
+      ],
+      "nist_800_171": [
+        "3.8.1"
+      ],
+      "pci_dss_4": [
+        "3.4.1"
+      ],
+      "iso_27001": [
+        "A.5.33"
+      ],
+      "iso_27002": [
+        "5.33"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 5(1)(f)"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1589.003",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Employee Names"
+        },
+        {
+          "technique": "T1592.004",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Host Information: Client Configurations"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Strip metadata from all documents before publishing. Use document management policies that automatically remove Author, Creator, and other identifying metadata fields. Configure document creation tools to use generic or organizational names instead of personal usernames.",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "exiftool",
+        "mat2",
+        "pdfid"
+      ]
+    },
+    {
+      "id": "OSIFT-066",
+      "title": "Document Metadata: Software Version Disclosed",
+      "aliases": [
+        "PDF Creator Software",
+        "Document Producer Version",
+        "EXIF Software"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "exiftool extracted the software name and version from the Creator or Producer metadata field of a publicly accessible document. This reveals the specific applications used to create or modify the document, including version numbers that may be checked against known vulnerability databases.",
+      "impact": "Software version disclosure enables targeted vulnerability research. An attacker who knows the exact version of Microsoft Office, Adobe Acrobat, or other document creation tools can search for version-specific CVEs, craft targeted exploits, and identify outdated software that may be vulnerable to known attacks.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [
+        "A.8.9"
+      ],
+      "iso_27002": [
+        "8.9"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1592.004",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Host Information: Client Configurations"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Strip metadata from documents before publishing. This is informational and does not require urgent remediation.",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "exiftool",
+        "mat2"
+      ]
+    },
+    {
+      "id": "OSIFT-067",
+      "title": "Document Metadata: Internal File Path Leaked",
+      "aliases": [
+        "Document File Path Exposed",
+        "Internal Path in Metadata"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "description": "exiftool extracted an internal file system path (such as C:\\Users\\jsmith\\Documents\\... or /home/admin/reports/...) from a publicly accessible document's metadata. This reveals the internal directory structure, operating system, and potentially the username of the document creator.",
+      "impact": "Internal file paths reveal the organization's operating system, directory structure, username conventions, and internal project names. This information assists in crafting targeted phishing payloads, identifying high-value targets, and planning post-exploitation activities. Path structures can also reveal development vs. production environments.",
+      "cwe": [
+        "CWE-200",
+        "CWE-538"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "SI-12"
+      ],
+      "nist_800_171": [
+        "3.8.1"
+      ],
+      "pci_dss_4": [
+        "3.4.1"
+      ],
+      "iso_27001": [
+        "A.5.33"
+      ],
+      "iso_27002": [
+        "5.33"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1592.004",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Host Information: Client Configurations"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Strip metadata from all documents before publishing. Use metadata removal tools (exiftool -all=, mat2) as part of the document publishing workflow. Configure document templates to avoid embedding local file paths.",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "exiftool",
+        "mat2"
+      ]
+    },
+    {
+      "id": "OSIFT-068",
+      "title": "Document Metadata: Email Address Leaked",
+      "aliases": [
+        "Email in Document Metadata",
+        "EXIF Email"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "exiftool extracted an email address from the metadata of a publicly accessible document. This email may belong to the document's author, reviewer, or the organization's document management system.",
+      "impact": "Email addresses extracted from document metadata can be used for targeted phishing, social engineering, and email-based attacks. They may also reveal internal email naming conventions that allow enumeration of additional email addresses across the organization.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "SI-12"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [
+        "A.5.33"
+      ],
+      "iso_27002": [
+        "5.33"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 5(1)(f)"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1589.002",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Email Addresses"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Strip metadata from documents before publishing. This is informational \u2014 email addresses may already be publicly available through other channels.",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "exiftool",
+        "mat2"
+      ]
+    },
+    {
+      "id": "OSIFT-069",
+      "title": "Document Metadata: GPS Coordinates Leaked",
+      "aliases": [
+        "EXIF GPS Data",
+        "Photo Location Metadata",
+        "Geotagged Document"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "exiftool extracted GPS coordinates from the EXIF metadata of a publicly accessible image or document. This reveals the physical location where the photo was taken or the document was created, which may include office locations, employee residences, or sensitive facility coordinates.",
+      "impact": "GPS coordinates in publicly accessible documents can reveal office locations, data center addresses, employee home locations, and other sensitive physical locations. This information enables physical surveillance, social engineering, and targeted attacks against specific facilities. For individuals, leaked GPS data from personal photos represents a privacy violation.",
+      "cwe": [
+        "CWE-200",
+        "CWE-359"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-01"
+      ],
+      "nist_800_53": [
+        "SI-12",
+        "MP-5"
+      ],
+      "nist_800_171": [
+        "3.8.1",
+        "3.8.3"
+      ],
+      "pci_dss_4": [
+        "3.4.1"
+      ],
+      "iso_27001": [
+        "A.5.33"
+      ],
+      "iso_27002": [
+        "5.33"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 5(1)(f)",
+        "Art. 9"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1591.001",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Org Information: Determine Physical Locations"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Strip EXIF GPS data from all images and documents before publishing. Configure mobile devices and cameras to disable GPS tagging. Use metadata removal tools (exiftool -gps:all=, mat2) as part of the content publishing workflow.",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "exiftool",
+        "mat2"
+      ]
+    },
+    {
+      "id": "OSIFT-070",
+      "title": "Document Metadata: Audit Summary",
+      "aliases": [
+        "Document Metadata Scan Summary",
+        "EXIF Audit Report"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "exiftool completed a metadata audit of publicly accessible documents found during reconnaissance. This finding summarizes the total number of documents analyzed, metadata fields extracted, and categories of information discovered across all scanned documents.",
+      "impact": "This is a summary finding providing an overview of the document metadata analysis. Individual findings for specific metadata disclosures (usernames, software versions, file paths, GPS data) are reported separately.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [
+        "SI-12"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review individual document metadata findings for specific remediation actions. Implement organization-wide metadata stripping policies for all publicly published documents.",
+      "remediation_component": "Application",
+      "remediation_category": "Information Disclosure",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "exiftool",
+        "mat2"
       ]
     }
   ]

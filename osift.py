@@ -6127,7 +6127,7 @@ class CrtShAPI:
         url = f"https://crt.sh/?q=%25.{self.domain}&output=json"
         self.log.info(f"[crt.sh] Query: {url}")
         try:
-            r = _rq.get(url, timeout=30,
+            r = _rq.get(url, timeout=120,
                          headers={"User-Agent": "OSift/CrtShAPI"})
             if r.status_code != 200:
                 self.log.warning(f"[crt.sh] HTTP {r.status_code}")
@@ -7042,6 +7042,7 @@ CAT_RECON            = "Reconnaissance"
 CAT_DNS              = "DNS"
 CAT_APPLIANCE        = "Known-Vulnerable Appliance"
 CAT_BRAND            = "Brand Protection"
+CAT_CLOUD            = "Cloud / Identity"
 
 # Map legacy 'source' strings → canonical tool names
 _SOURCE_TO_TOOL: Dict[str, str] = {
@@ -9553,6 +9554,10 @@ class EmailAndPeopleOSINT:
             self._check_dehashed()
         else:
             self.log.info("[EMAIL] Dehashed/HIBP skipped — no API keys. Use --hibp-key / --dehashed-user / --dehashed-key")
+        self._derive_employees_from_emails()
+        self._linkedin_enrich_employees()
+        self._github_author_search()
+        self._conference_speaker_search()
         self._save_emails()
         self.log.success(f"[EMAIL] Found {len(self.data.email_addresses)} unique email addresses")
 
@@ -9713,13 +9718,14 @@ class EmailAndPeopleOSINT:
                     if not entries:
                         break
                     for entry in entries:
-                        em_raw = entry.get("email", [])
-                        if isinstance(em_raw, list):
-                            for em in em_raw:
-                                if em:
-                                    self._add_email(em, "dehashed")
-                        elif em_raw:
-                            self._add_email(em_raw, "dehashed")
+                        for _ef in ("email", "username"):
+                            em_raw = entry.get(_ef, [])
+                            if isinstance(em_raw, list):
+                                for em in em_raw:
+                                    if em and "@" in str(em):
+                                        self._add_email(str(em), "dehashed", breach=True)
+                            elif em_raw and "@" in str(em_raw):
+                                self._add_email(str(em_raw), "dehashed", breach=True)
                         self.data.breach_data.append({
                             **entry,
                             "source":       "dehashed",
@@ -9744,7 +9750,7 @@ class EmailAndPeopleOSINT:
         dh  = [b for b in self.data.breach_data if b.get("source") == "dehashed"]
         out.write_text(json.dumps(dh, indent=2), encoding="utf-8")
 
-    def _add_email(self, email: str, source: str):
+    def _add_email(self, email: str, source: str, breach: bool = False):
         email = email.lower().strip()
         if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
             return
@@ -9756,12 +9762,338 @@ class EmailAndPeopleOSINT:
         rec = self.data.email_addresses.setdefault(email, {"sources": [], "context": "", "breach": False})
         if source not in rec["sources"]:
             rec["sources"].append(source)
+        if breach:
+            rec["breach"] = True
 
     def _add_employee(self, emp: Dict):
         for existing in self.data.employees:
             if existing.get("first_name") == emp.get("first_name") and existing.get("last_name") == emp.get("last_name"):
                 return
         self.data.employees.append(emp)
+
+    # Common email format patterns — regex + name extraction
+    _EMAIL_PATTERNS = [
+        # (label, regex-over-local-part, extractor → (first, last))
+        ("first.last",    re.compile(r'^([a-z]{2,})\.([a-z]{2,})$'),
+         lambda m: (m.group(1).title(), m.group(2).title())),
+        ("first_last",    re.compile(r'^([a-z]{2,})_([a-z]{2,})$'),
+         lambda m: (m.group(1).title(), m.group(2).title())),
+        ("first-last",    re.compile(r'^([a-z]{2,})-([a-z]{2,})$'),
+         lambda m: (m.group(1).title(), m.group(2).title())),
+        ("last.first",    re.compile(r'^([a-z]{2,})\.([a-z]{2,})$'),
+         None),  # same regex as first.last — disambiguated by known names
+        ("flast",         re.compile(r'^([a-z])([a-z]{2,})$'),
+         lambda m: (m.group(1).upper() + ".", m.group(2).title())),
+        ("firstl",        re.compile(r'^([a-z]{2,})([a-z])$'),
+         lambda m: (m.group(1).title(), m.group(2).upper() + ".")),
+        ("first.m.last",  re.compile(r'^([a-z]{2,})\.([a-z])\.([a-z]{2,})$'),
+         lambda m: (m.group(1).title(), m.group(3).title())),
+    ]
+
+    # Service/role addresses to exclude from name derivation
+    _ROLE_PREFIXES = frozenset({
+        "admin", "administrator", "info", "it", "helpdesk", "support",
+        "hr", "finance", "accounting", "sales", "marketing", "security",
+        "noreply", "no-reply", "postmaster", "webmaster", "abuse",
+        "contact", "reception", "office", "operations", "billing",
+        "legal", "compliance", "press", "media", "newsletter", "team",
+        "dev", "engineering", "feedback", "careers", "jobs", "events",
+        "notifications", "alerts", "service", "services", "system",
+        "daemon", "mailer-daemon", "root", "sysadmin", "hostmaster",
+        "privacy", "security-team", "customer-service",
+    })
+
+    def _derive_employees_from_emails(self):
+        """Detect email naming pattern and derive employee names from addresses."""
+        domain_emails = {
+            addr: meta
+            for addr, meta in self.data.email_addresses.items()
+            if addr.endswith(f"@{self.domain}")
+        }
+        if len(domain_emails) < 3:
+            return
+
+        # Count matches per pattern to find the dominant format
+        pattern_hits: dict = {}
+        for label, regex, extractor in self._EMAIL_PATTERNS:
+            if extractor is None:
+                continue
+            count = 0
+            for addr in domain_emails:
+                local = addr.split("@")[0].lower()
+                if local in self._ROLE_PREFIXES:
+                    continue
+                if regex.match(local):
+                    count += 1
+            if count > 0:
+                pattern_hits[label] = count
+
+        if not pattern_hits:
+            return
+
+        best_label = max(pattern_hits, key=pattern_hits.get)
+        best_count = pattern_hits[best_label]
+
+        # Need at least 3 matching emails or 40% of domain emails
+        if best_count < 3 and best_count / max(len(domain_emails), 1) < 0.4:
+            return
+
+        # Find the matching regex+extractor
+        best_regex = None
+        best_extractor = None
+        for label, regex, extractor in self._EMAIL_PATTERNS:
+            if label == best_label and extractor is not None:
+                best_regex = regex
+                best_extractor = extractor
+                break
+
+        if not best_regex or not best_extractor:
+            return
+
+        self.log.info(
+            f"[EMAIL] Detected email format: {best_label}@{self.domain} "
+            f"({best_count} matches)"
+        )
+
+        derived_count = 0
+        for addr, meta in domain_emails.items():
+            local = addr.split("@")[0].lower()
+            if local in self._ROLE_PREFIXES:
+                continue
+            m = best_regex.match(local)
+            if not m:
+                continue
+            first, last = best_extractor(m)
+            if len(first.rstrip(".")) < 2 and not first.endswith("."):
+                continue
+            self._add_employee({
+                "first_name": first,
+                "last_name": last,
+                "email": addr,
+                "source": "email_pattern_derivation",
+                "derivation_method": f"Email format: {best_label}@{self.domain}",
+            })
+            derived_count += 1
+
+        if derived_count > 0:
+            self.log.success(
+                f"[EMAIL] Derived {derived_count} employee name(s) from "
+                f"email pattern ({best_label})"
+            )
+            # Record the detected format for intelligence consumers
+            _fmt_file = self.output_dir / "company" / "emails" / "email_format.json"
+            _fmt_file.parent.mkdir(parents=True, exist_ok=True)
+            _fmt_file.write_text(json.dumps({
+                "domain": self.domain,
+                "detected_format": best_label,
+                "example": f"{best_label}@{self.domain}",
+                "matching_addresses": best_count,
+                "total_domain_addresses": len(domain_emails),
+                "derived_employees": derived_count,
+                "confidence": "high" if best_count >= 10 else
+                              "medium" if best_count >= 5 else "low",
+            }, indent=2), encoding="utf-8")
+
+            add_finding(
+                self.data, "OSift-Email", "email_intelligence", CAT_RECON,
+                "INFO",
+                f"Email Naming Convention Identified: {best_label}@{self.domain}\n"
+                f"{best_count} of {len(domain_emails)} addresses match the "
+                f"'{best_label}' pattern. {derived_count} employee name(s) "
+                f"derived from this format.\n"
+                f"This naming convention can be used to generate targeted "
+                f"email addresses for phishing and social engineering attacks "
+                f"given any known employee name.",
+                domain=self.domain, affected=self.domain,
+                output_file=str(_fmt_file),
+                title="Email Naming Convention Identified",
+            )
+
+    def _linkedin_enrich_employees(self):
+        if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+            return
+        candidates = [
+            e for e in self.data.employees
+            if not e.get("position") and e.get("first_name") and e.get("last_name")
+        ]
+        if not candidates:
+            return
+        self.log.info(f"[LINKEDIN] Enriching {min(len(candidates), 30)} employee(s) via LinkedIn search")
+        session = make_session()
+        enriched = 0
+        for emp in candidates[:30]:
+            first = emp["first_name"]
+            last = emp["last_name"]
+            query = f'"{first} {last}" site:linkedin.com "{self.company}"'
+            try:
+                resp = session.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query}, timeout=15,
+                )
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    for result in soup.find_all("a", class_="result__a"):
+                        title_text = result.get_text(strip=True)
+                        href = result.get("href", "")
+                        if "linkedin.com/in/" not in href:
+                            continue
+                        parts = title_text.split(" - ")
+                        if len(parts) >= 2:
+                            position = parts[1].strip()
+                            if len(position) > 3 and len(position) < 120:
+                                emp["position"] = position
+                                emp["linkedin_url"] = href
+                                enriched += 1
+                        if len(parts) >= 3:
+                            dept_candidate = parts[2].strip()
+                            if len(dept_candidate) > 2 and len(dept_candidate) < 80:
+                                emp["department"] = dept_candidate
+                        break
+                time.sleep(2)
+            except Exception as e:
+                self.log.debug(f"[LINKEDIN] Enrichment error for {first} {last}: {e}")
+        if enriched:
+            self.log.success(f"[LINKEDIN] Enriched {enriched} employee(s) with position/department data")
+
+    def _github_author_search(self):
+        if not REQUESTS_AVAILABLE:
+            return
+        candidates = [
+            e for e in self.data.employees
+            if e.get("first_name") and e.get("last_name") and not e.get("github_username")
+        ]
+        if not candidates:
+            return
+        self.log.info(f"[GITHUB] Searching GitHub for {min(len(candidates), 20)} employee(s)")
+        session = make_session()
+        session.headers["Accept"] = "application/vnd.github.v3+json"
+        profiles_found = []
+        company_lower = self.company.lower()
+        for emp in candidates[:20]:
+            full_name = f"{emp['first_name']} {emp['last_name']}"
+            try:
+                resp = session.get(
+                    "https://api.github.com/search/users",
+                    params={"q": f"{full_name} in:name"},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    items = resp.json().get("items", [])
+                    for user in items[:5]:
+                        user_resp = session.get(user["url"], timeout=10)
+                        if user_resp.status_code != 200:
+                            continue
+                        profile = user_resp.json()
+                        user_company = (profile.get("company") or "").lower().strip().lstrip("@")
+                        user_name = (profile.get("name") or "").lower()
+                        if company_lower in user_company or full_name.lower() in user_name:
+                            emp["github_username"] = profile.get("login", "")
+                            emp["github_repos"] = profile.get("public_repos", 0)
+                            emp["github_bio"] = profile.get("bio", "")
+                            gh_email = profile.get("email")
+                            if gh_email and "@" in str(gh_email):
+                                self._add_email(str(gh_email), "github_profile")
+                            profiles_found.append({
+                                "employee": full_name,
+                                "username": profile.get("login"),
+                                "public_repos": profile.get("public_repos"),
+                                "bio": profile.get("bio"),
+                                "company": profile.get("company"),
+                                "email": gh_email,
+                                "url": profile.get("html_url"),
+                            })
+                            break
+                time.sleep(3)
+            except Exception as e:
+                self.log.debug(f"[GITHUB] Search error for {full_name}: {e}")
+        if profiles_found:
+            self.log.success(f"[GITHUB] Found {len(profiles_found)} GitHub profile(s)")
+            gh_dir = self.output_dir / "company" / "github"
+            gh_dir.mkdir(parents=True, exist_ok=True)
+            (gh_dir / "github_profiles.json").write_text(
+                json.dumps(profiles_found, indent=2), encoding="utf-8",
+            )
+
+    def _conference_speaker_search(self):
+        if not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+            return
+        candidates = [
+            e for e in self.data.employees
+            if e.get("first_name") and e.get("last_name")
+        ]
+        if not candidates:
+            return
+        self.log.info(f"[CONFERENCE] Searching for public appearances of {min(len(candidates), 20)} employee(s)")
+        session = make_session()
+        public_employees = 0
+        for emp in candidates[:20]:
+            first = emp["first_name"]
+            last = emp["last_name"]
+            full_name = f"{first} {last}"
+            query = (
+                f'"{full_name}" "{self.company}" '
+                f"(conference OR speaker OR presentation OR published OR webinar)"
+            )
+            try:
+                resp = session.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query}, timeout=15,
+                )
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    appearances = []
+                    for result in soup.find_all("a", class_="result__a"):
+                        title_text = result.get_text(strip=True)
+                        href = result.get("href", "")
+                        if not title_text or len(title_text) < 10:
+                            continue
+                        name_lower = full_name.lower()
+                        if name_lower not in title_text.lower():
+                            snippet_el = result.find_next("a", class_="result__snippet")
+                            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                            if name_lower not in snippet.lower():
+                                continue
+                        appearances.append({
+                            "title": title_text[:200],
+                            "url": href,
+                        })
+                        if len(appearances) >= 5:
+                            break
+                    if appearances:
+                        emp.setdefault("public_appearances", []).extend(appearances)
+                        if len(emp.get("public_appearances", [])) >= 2:
+                            public_employees += 1
+                            conf_file = self.output_dir / "company" / "employees" / "conference_speakers.json"
+                            conf_file.parent.mkdir(parents=True, exist_ok=True)
+                            add_finding(
+                                self.data, "OSift-Email", "people_intelligence",
+                                CAT_RECON, "INFO",
+                                f"Public-Facing Employee Identified: {full_name}\n"
+                                f"{len(emp['public_appearances'])} public appearance(s) found "
+                                f"(conferences, publications, webinars).\n"
+                                f"Public-facing employees are high-value targets for "
+                                f"social engineering and spear-phishing campaigns.",
+                                domain=self.domain, affected=full_name,
+                                output_file=str(conf_file),
+                                title="Public-Facing Employee Identified",
+                            )
+                time.sleep(2)
+            except Exception as e:
+                self.log.debug(f"[CONFERENCE] Search error for {full_name}: {e}")
+        if public_employees:
+            self.log.success(f"[CONFERENCE] Identified {public_employees} public-facing employee(s)")
+            speakers = [
+                {
+                    "name": f"{e.get('first_name', '')} {e.get('last_name', '')}",
+                    "appearances": e.get("public_appearances", []),
+                    "email": e.get("email", ""),
+                    "position": e.get("position", ""),
+                }
+                for e in self.data.employees if e.get("public_appearances")
+            ]
+            conf_file = self.output_dir / "company" / "employees" / "conference_speakers.json"
+            conf_file.parent.mkdir(parents=True, exist_ok=True)
+            conf_file.write_text(json.dumps(speakers, indent=2), encoding="utf-8")
 
     def _save_emails(self):
         emails_dir = self.output_dir / "company" / "emails"
@@ -11484,8 +11816,8 @@ class EmailHarvesterRunner:
             _eh_err = ""
             if stderr:
                 _eh_lines = [l for l in _strip_ansi(stderr).splitlines()
-                             if l.strip() and not l.strip().startswith(("Traceback", "File ", "  File", "    "))]
-                _eh_err = ": " + _eh_lines[0][:200] if _eh_lines else ""
+                             if l.strip() and not l.strip().startswith(("Traceback", "File ", "  File"))]
+                _eh_err = ": " + _eh_lines[-1][:200] if _eh_lines else ""
             self.log.error(f"[EmailHarvester] Command exited with code {rc}{_eh_err}")
             _write_placeholder(self.out, "emails.txt",
                                cmd, f"(EmailHarvester exited with code {rc})")
@@ -16394,6 +16726,65 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
              metadata={"source_category": "app_store_url",
                         "store_url": url})
 
+    # ── O365 tenant detected + harvested emails → Scattershot3 o365spray ─
+    _o365_domains_seen: set = set()
+    _all_domains = list(data.domains) if data.domains else ([data.domain] if data.domain else [])
+    for _dom in _all_domains:
+        dns_rec = data.dns_records.get(_dom, {})
+        mx_list = dns_rec.get("MX", [])
+        _is_o365 = any(
+            "protection.outlook.com" in (mx.get("exchange", "") or "").lower()
+            for mx in mx_list
+        )
+        if not _is_o365:
+            continue
+        if _dom in _o365_domains_seen:
+            continue
+        _o365_domains_seen.add(_dom)
+
+        _dom_emails = sorted(
+            addr for addr in data.email_addresses
+            if addr.endswith(f"@{_dom}")
+        )
+        _email_count = len(_dom_emails)
+        _email_note = (
+            f"{_email_count} harvested email(s) available for enumeration"
+            if _email_count > 0
+            else "No harvested emails — o365spray will use common prefix list"
+        )
+        _tenant = data.dns_records.get(_dom, {}).get("_azure_tenant", {})
+        _tid = _tenant.get("tenant_id", "")
+        _fed_type = _tenant.get("federation_type", "")
+        _fed_prov = _tenant.get("federation_provider", "")
+        _tenant_desc = ""
+        if _tid:
+            _tenant_desc += f" Tenant ID: {_tid}."
+        if _fed_type == "Federated" and _fed_prov:
+            _tenant_desc += f" Auth: Federated ({_fed_prov})."
+        elif _fed_type:
+            _tenant_desc += f" Auth: {_fed_type}."
+        if _tenant.get("desktop_sso"):
+            _tenant_desc += " Desktop SSO enabled."
+
+        _add("o365_enum", "Scattershot3", _dom, "", 0, _dom,
+             f"O365 Account Enumeration: {_dom}",
+             f"MX records for {_dom} point to *.protection.outlook.com, "
+             f"confirming a Microsoft 365 / Azure AD tenant.{_tenant_desc} "
+             f"{_email_note}. "
+             f"Run o365spray to enumerate valid accounts and identify "
+             f"targets for password spray attacks.",
+             priority="HIGH",
+             metadata={
+                 "source_category": "o365_tenant",
+                 "tenant_id": _tid,
+                 "federation_type": _fed_type,
+                 "federation_provider": _fed_prov,
+                 "desktop_sso": _tenant.get("desktop_sso", False),
+                 "harvested_email_count": _email_count,
+                 "harvested_emails": _dom_emails[:100],
+                 "command": f"o365spray --enum -U emails.txt --domain {_dom} --output <output_dir>",
+             })
+
     # ── Merge timeout/error action items accumulated during the scan ─────
     if _timeout_action_items:
         _to_seen = set(seen)
@@ -21257,8 +21648,11 @@ class DnsTwistRunner:
         all_live: list = []
 
         for domain in self.domains:
-            live = self._scan_domain(binary, domain)
-            all_live.extend(live)
+            try:
+                live = self._scan_domain(binary, domain)
+                all_live.extend(live)
+            except Exception as e:
+                self.log.error(f"[dnstwist] Error scanning {domain}: {e}", exc=e)
 
         self.log.reset_tool_context()
         self.log.success(f"[dnstwist] Complete — {len(all_live)} live typosquatting domain(s) found")
@@ -21272,13 +21666,19 @@ class DnsTwistRunner:
         safe = _safe_filename(domain)
         out_file = out_dir / f"dnstwist_{safe}.json"
 
-        cmd = [binary, "--registered", "--format", "json", "--threads", "10", domain]
+        cmd = [binary, "--registered", "--format", "json",
+               "--threads", "50",
+               "--nameservers", "1.1.1.1,8.8.8.8,9.9.9.9",
+               "--output", str(out_file),
+               domain]
         self.log.info(f"[dnstwist] Scanning domain: {domain}")
 
+        _dnstwist_timeout = 3600
         started = datetime.datetime.now(_UTC).isoformat()
+        _timed_out = False
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=1200,
+                cmd, capture_output=True, text=True, timeout=_dnstwist_timeout,
             )
             ended = datetime.datetime.now(_UTC).isoformat()
 
@@ -21292,7 +21692,7 @@ class DnsTwistRunner:
                 started=started, ended=ended,
             )
 
-            if result.returncode != 0:
+            if result.returncode != 0 and not out_file.exists():
                 self.log.error(
                     f"[dnstwist] Exit code {result.returncode} for {domain}: "
                     f"{(result.stderr or '')[:200]}"
@@ -21302,113 +21702,138 @@ class DnsTwistRunner:
                                    f"(dnstwist exited {result.returncode})")
                 return []
 
-            # Parse JSON output
-            try:
-                entries = json.loads(result.stdout)
-            except (json.JSONDecodeError, ValueError) as e:
-                self.log.error(f"[dnstwist] JSON parse error for {domain}: {e}")
-                _write_placeholder(out_dir, out_file.name,
-                                   " ".join(cmd),
-                                   f"(dnstwist JSON parse error: {e})")
-                return []
-
-            if not isinstance(entries, list):
-                entries = []
-
-            # Save raw output
-            out_file.write_text(
-                json.dumps(entries, indent=2, default=str),
-                encoding="utf-8",
-            )
-
-            # Process results
-            live_domains: list = []
-            total_registered = 0
-
-            for entry in entries:
-                fuzzer = entry.get("fuzzer", "")
-                perm_domain = entry.get("domain", "").strip().lower()
-
-                # Skip the *original entry (target domain itself) and
-                # any permutation that exactly matches the target domain
-                if not perm_domain or "original" in fuzzer.lower() or perm_domain == domain:
-                    continue
-
-                total_registered += 1
-
-                dns_a = [a for a in (entry.get("dns_a") or []) if isinstance(a, str) and not a.startswith("!")]
-                dns_aaaa = [a for a in (entry.get("dns_aaaa") or []) if isinstance(a, str) and not a.startswith("!")]
-                dns_mx = [m for m in (entry.get("dns_mx") or []) if not (isinstance(m, str) and m.startswith("!"))]
-                dns_ns = entry.get("dns_ns") or []
-                has_ip = bool(dns_a or dns_aaaa)
-                has_mx = bool(dns_mx)
-                whois_reg = entry.get("whois_registrar", "")
-                whois_created = entry.get("whois_created", "")
-
-                # Severity escalation
-                if has_mx:
-                    severity = "high"
-                    detail_suffix = " — has MX records (phishing-ready: can receive email)"
-                elif has_ip:
-                    severity = "medium"
-                    detail_suffix = " — resolves to IP (active web presence)"
-                else:
-                    severity = "info"
-                    detail_suffix = " — registered but not resolving"
-
-                detail = f"Typosquatting Domain Detected: {perm_domain}"
-                detail += f" (fuzzer: {fuzzer}){detail_suffix}"
-                typo_title = "Typosquatting Domain Detected"
-                if whois_reg:
-                    detail += f"\nRegistrar: {whois_reg}"
-                if whois_created:
-                    detail += f"\nCreated: {whois_created}"
-                if dns_a:
-                    detail += f"\nA records: {', '.join(dns_a[:5])}"
-                if dns_mx:
-                    detail += f"\nMX records: {', '.join(str(m) for m in dns_mx[:5])}"
-
-                add_finding(
-                    self.data, "dnstwist", "typosquatting", CAT_BRAND,
-                    severity, detail,
-                    domain=perm_domain, affected=perm_domain,
-                    output_file=str(out_file),
-                    fuzzer=fuzzer,
-                    title=typo_title,
-                )
-
-                if has_ip:
-                    live_domains.append(perm_domain)
-
-            self.log.success(
-                f"[dnstwist] {domain}: {total_registered} registered permutations, "
-                f"{len(live_domains)} live"
-            )
-            return live_domains
-
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as _te:
             ended = datetime.datetime.now(_UTC).isoformat()
-            self.log.warning(f"[dnstwist] Timeout (1200s) scanning {domain}")
+            _timed_out = True
+            self.log.warning(f"[dnstwist] Timeout ({_dnstwist_timeout}s) scanning {domain} — reading partial results from output file")
             self.log.log_command(
                 cmd=" ".join(cmd),
-                stdout="", stderr="(timeout after 1200s)",
+                stdout=(_te.stdout or "")[:8192] if hasattr(_te, "stdout") else "",
+                stderr=f"(timeout after {_dnstwist_timeout}s)",
                 returncode=-1,
                 tool="dnstwist", tool_path=binary,
                 output_file=str(out_file),
                 started=started, ended=ended,
             )
-            _write_placeholder(out_dir, out_file.name,
-                               " ".join(cmd), "(dnstwist timed out after 1200s)")
+            if not out_file.exists() or out_file.stat().st_size == 0:
+                _write_placeholder(out_dir, out_file.name,
+                                   " ".join(cmd),
+                                   f"(dnstwist timed out after {_dnstwist_timeout}s — no partial output)")
+                _record_timeout_action_item(
+                    "dnstwist", domain,
+                    f"dnstwist timed out ({_dnstwist_timeout}s) scanning {domain} for "
+                    f"typosquatting domains. Re-run dnstwist manually to complete the scan.",
+                    hostname=domain,
+                )
+                return []
+
+        # Parse JSON output — from the --output file (survives timeout)
+        entries = []
+        if out_file.exists() and out_file.stat().st_size > 0:
+            raw = out_file.read_text(encoding="utf-8", errors="replace")
+            try:
+                entries = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                # dnstwist may have been killed mid-write; try fixing truncated JSON
+                raw_stripped = raw.rstrip().rstrip(",")
+                if not raw_stripped.endswith("]"):
+                    raw_stripped += "]"
+                try:
+                    entries = json.loads(raw_stripped)
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.log.error(f"[dnstwist] JSON parse error for {domain}: {e}")
+                    if not _timed_out:
+                        return []
+
+        if not isinstance(entries, list):
+            entries = []
+
+        # Re-save cleaned output
+        if entries:
+            out_file.write_text(
+                json.dumps(entries, indent=2, default=str),
+                encoding="utf-8",
+            )
+
+        # Process results
+        live_domains: list = []
+        total_registered = 0
+
+        for entry in entries:
+            fuzzer = entry.get("fuzzer", "")
+            perm_domain = entry.get("domain", "").strip().lower()
+
+            # Skip the *original entry (target domain itself) and
+            # any permutation that exactly matches the target domain
+            if not perm_domain or "original" in fuzzer.lower() or perm_domain == domain:
+                continue
+
+            total_registered += 1
+
+            dns_a = [a for a in (entry.get("dns_a") or []) if isinstance(a, str) and not a.startswith("!")]
+            dns_aaaa = [a for a in (entry.get("dns_aaaa") or []) if isinstance(a, str) and not a.startswith("!")]
+            dns_mx = [m for m in (entry.get("dns_mx") or []) if not (isinstance(m, str) and m.startswith("!"))]
+            dns_ns = entry.get("dns_ns") or []
+            has_ip = bool(dns_a or dns_aaaa)
+            has_mx = bool(dns_mx)
+            whois_reg = entry.get("whois_registrar", "")
+            whois_created = entry.get("whois_created", "")
+
+            # Severity escalation
+            if has_mx:
+                severity = "high"
+                detail_suffix = " — has MX records (phishing-ready: can receive email)"
+            elif has_ip:
+                severity = "medium"
+                detail_suffix = " — resolves to IP (active web presence)"
+            else:
+                severity = "info"
+                detail_suffix = " — registered but not resolving"
+
+            detail = f"Typosquatting Domain Detected: {perm_domain}"
+            detail += f" (fuzzer: {fuzzer}){detail_suffix}"
+            typo_title = "Typosquatting Domain Detected"
+            if whois_reg:
+                detail += f"\nRegistrar: {whois_reg}"
+            if whois_created:
+                detail += f"\nCreated: {whois_created}"
+            if dns_a:
+                detail += f"\nA records: {', '.join(dns_a[:5])}"
+            if dns_mx:
+                detail += f"\nMX records: {', '.join(str(m) for m in dns_mx[:5])}"
+
+            add_finding(
+                self.data, "dnstwist", "typosquatting", CAT_BRAND,
+                severity, detail,
+                domain=perm_domain, affected=perm_domain,
+                output_file=str(out_file),
+                fuzzer=fuzzer,
+                title=typo_title,
+            )
+
+            if has_ip:
+                live_domains.append(perm_domain)
+
+        _partial_tag = " (PARTIAL — scan timed out)" if _timed_out else ""
+        self.log.success(
+            f"[dnstwist] {domain}: {total_registered} registered permutations, "
+            f"{len(live_domains)} live{_partial_tag}"
+        )
+        if _timed_out and total_registered > 0:
             _record_timeout_action_item(
                 "dnstwist", domain,
-                f"dnstwist timed out (1200s) scanning {domain} for typosquatting "
-                f"domains. Re-run dnstwist manually to complete the scan.",
+                f"dnstwist timed out ({_dnstwist_timeout}s) scanning {domain} but "
+                f"{total_registered} partial results were captured. Re-run to complete.",
                 hostname=domain,
             )
-            return []
-        except Exception as e:
-            self.log.error(f"[dnstwist] Error scanning {domain}: {e}", exc=e)
-            return []
+        elif _timed_out:
+            _record_timeout_action_item(
+                "dnstwist", domain,
+                f"dnstwist timed out ({_dnstwist_timeout}s) scanning {domain} with "
+                f"no results captured. Re-run dnstwist manually.",
+                hostname=domain,
+            )
+        return live_domains
 
 
 # ─── VT Reputation Sweep — subdomain + typosquatting domain check ─────────────
@@ -21678,6 +22103,323 @@ class VTReputationSweep:
         )
 
 
+# ─── Azure AD Tenant Reconnaissance ───────────────────────────────────────────
+
+class AzureTenantRecon:
+    """
+    Passive Azure AD / Entra ID tenant reconnaissance using public endpoints.
+    Runs when MX records indicate a Microsoft 365 tenant for any target domain.
+    No authentication required — all endpoints are unauthenticated and public.
+    """
+
+    _OPENID_URL = "https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
+    _REALM_URL = "https://login.microsoftonline.com/getuserrealm.srf"
+    _AUTODISCOVER_URL = "https://outlook.office365.com/autodiscover/autodiscover.json/v1.0/{email}?Protocol=Autodiscoverv1"
+    _TENANT_DOMAINS_URL = "https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc"
+
+    def __init__(self, domains: list, output_dir: Path, log: "ReconLogger",
+                 data: "ReconData"):
+        self.domains = domains
+        self.output_dir = output_dir
+        self.log = log
+        self.data = data
+
+    def run(self):
+        if not REQUESTS_AVAILABLE:
+            self.log.warning("[AzureTenantRecon] requests not available — skipping")
+            return
+
+        o365_domains = []
+        for domain in self.domains:
+            dns_rec = self.data.dns_records.get(domain, {})
+            mx_list = dns_rec.get("MX", [])
+            if any("protection.outlook.com" in (mx.get("exchange", "") or "").lower()
+                   for mx in mx_list):
+                o365_domains.append(domain)
+
+        if not o365_domains:
+            self.log.info("[AzureTenantRecon] No O365 domains detected — skipping")
+            return
+
+        self.log.set_tool_context("azure-tenant-recon")
+        self.log.info(f"[AzureTenantRecon] Probing {len(o365_domains)} O365 domain(s)")
+        session = make_session()
+        session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
+        for domain in o365_domains:
+            self._recon_domain(session, domain)
+
+        self.log.reset_tool_context()
+        self.log.success(f"[AzureTenantRecon] Complete — {len(o365_domains)} domain(s) probed")
+
+    def _recon_domain(self, session, domain: str):
+        out_dir = _domain_path(self.output_dir, domain) / "tools" / "azure_tenant"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"tenant_recon_{_safe_filename(domain)}.json"
+
+        result = {
+            "domain": domain,
+            "tenant_id": "",
+            "tenant_brand_name": "",
+            "federation": {},
+            "openid_config": {},
+            "verified_domains": [],
+            "auth_endpoints": {},
+            "autodiscover": {},
+        }
+
+        # 1. OpenID Configuration — tenant ID, token endpoints, issuer
+        try:
+            resp = session.get(
+                self._OPENID_URL.format(domain=domain), timeout=15,
+            )
+            if resp.status_code == 200:
+                oidc = resp.json()
+                result["openid_config"] = {
+                    "issuer": oidc.get("issuer", ""),
+                    "authorization_endpoint": oidc.get("authorization_endpoint", ""),
+                    "token_endpoint": oidc.get("token_endpoint", ""),
+                    "userinfo_endpoint": oidc.get("userinfo_endpoint", ""),
+                    "tenant_region_scope": oidc.get("tenant_region_scope", ""),
+                    "cloud_instance_name": oidc.get("cloud_instance_name", ""),
+                }
+                issuer = oidc.get("issuer", "")
+                tid_match = re.search(
+                    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                    issuer, re.I,
+                )
+                if tid_match:
+                    result["tenant_id"] = tid_match.group(0)
+                result["auth_endpoints"] = {
+                    "authorize": oidc.get("authorization_endpoint", ""),
+                    "token": oidc.get("token_endpoint", ""),
+                    "device_authorization": oidc.get("device_authorization_endpoint", ""),
+                }
+                self.log.info(f"[AzureTenantRecon] {domain}: tenant ID = {result['tenant_id']}")
+        except Exception as e:
+            self.log.debug(f"[AzureTenantRecon] OpenID config failed for {domain}: {e}")
+
+        # 2. GetUserRealm — federation type, auth URL, cloud vs federated
+        try:
+            resp = session.get(
+                self._REALM_URL,
+                params={"login": f"user@{domain}", "xml": "1"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                body = resp.text
+                ns_type_m = re.search(r'<NameSpaceType>(\w+)</NameSpaceType>', body)
+                fed_url_m = re.search(r'<AuthURL>(.*?)</AuthURL>', body)
+                brand_m = re.search(r'<FederationBrandName>(.*?)</FederationBrandName>', body)
+                domain_m = re.search(r'<DomainName>(.*?)</DomainName>', body)
+                cloud_inst_m = re.search(r'<CloudInstanceName>(.*?)</CloudInstanceName>', body)
+
+                ns_type = ns_type_m.group(1) if ns_type_m else ""
+                result["federation"] = {
+                    "namespace_type": ns_type,
+                    "auth_url": fed_url_m.group(1) if fed_url_m else "",
+                    "domain_name": domain_m.group(1) if domain_m else "",
+                    "cloud_instance": cloud_inst_m.group(1) if cloud_inst_m else "",
+                }
+                if brand_m:
+                    result["tenant_brand_name"] = brand_m.group(1)
+
+                if ns_type == "Federated":
+                    fed_url = fed_url_m.group(1) if fed_url_m else ""
+                    _fed_provider = "Unknown"
+                    if "adfs" in fed_url.lower():
+                        _fed_provider = "ADFS"
+                    elif "okta" in fed_url.lower():
+                        _fed_provider = "Okta"
+                    elif "pingfederate" in fed_url.lower() or "pingone" in fed_url.lower():
+                        _fed_provider = "PingFederate"
+                    elif "duo" in fed_url.lower():
+                        _fed_provider = "Duo"
+                    elif "shibboleth" in fed_url.lower():
+                        _fed_provider = "Shibboleth"
+                    result["federation"]["provider"] = _fed_provider
+                    self.log.info(
+                        f"[AzureTenantRecon] {domain}: Federated auth "
+                        f"({_fed_provider}) → {fed_url}"
+                    )
+                    add_finding(
+                        self.data, "OSift-AzureRecon", "azure_tenant", CAT_CLOUD,
+                        "INFO",
+                        f"Azure AD Federated Authentication Detected: {domain}\n"
+                        f"Federation provider: {_fed_provider}\n"
+                        f"Auth URL: {fed_url}",
+                        domain=domain, affected=domain,
+                        output_file=str(out_file),
+                        title="Azure AD Federated Authentication Detected",
+                    )
+                    if _fed_provider == "ADFS" and fed_url:
+                        self._probe_adfs(session, domain, fed_url, out_dir, out_file)
+                else:
+                    self.log.info(f"[AzureTenantRecon] {domain}: Managed (cloud-only) auth")
+        except Exception as e:
+            self.log.debug(f"[AzureTenantRecon] GetUserRealm failed for {domain}: {e}")
+
+        # 3. Tenant ID cross-query — use tenant ID to find other verified domains
+        if result["tenant_id"]:
+            try:
+                oidc2 = session.get(
+                    self._OPENID_URL.format(domain=result["tenant_id"]),
+                    timeout=15,
+                )
+                if oidc2.status_code == 200:
+                    oidc2_data = oidc2.json()
+                    tid2 = ""
+                    issuer2 = oidc2_data.get("issuer", "")
+                    tid2_m = re.search(
+                        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+                        issuer2, re.I,
+                    )
+                    if tid2_m:
+                        tid2 = tid2_m.group(0)
+                    if tid2 and tid2 == result["tenant_id"]:
+                        self.log.info(f"[AzureTenantRecon] Tenant ID confirmed: {tid2}")
+            except Exception:
+                pass
+
+        # 4. GetCredentialType — probe for additional tenant metadata
+        try:
+            resp = session.post(
+                "https://login.microsoftonline.com/common/GetCredentialType",
+                json={"Username": f"doesnotexist@{domain}"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                gct = resp.json()
+                ests = gct.get("EstsProperties", {})
+                if ests:
+                    result["ests_properties"] = {
+                        "user_tenant_branding": ests.get("UserTenantBranding"),
+                        "domain_type": ests.get("DomainType"),
+                    }
+                    desktop_sso = ests.get("DesktopSsoEnabled")
+                    if desktop_sso:
+                        result["desktop_sso_enabled"] = True
+                        self.log.info(
+                            f"[AzureTenantRecon] {domain}: Desktop SSO (Seamless SSO) enabled"
+                        )
+        except Exception as e:
+            self.log.debug(f"[AzureTenantRecon] GetCredentialType probe failed for {domain}: {e}")
+
+        # 5. ADFS secondary probes are run inline via _probe_adfs() above
+
+        # Write results
+        out_file.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+
+        # Generate tenant info finding
+        _detail_parts = [f"Azure AD Tenant Information: {domain}"]
+        if result["tenant_id"]:
+            _detail_parts.append(f"Tenant ID: {result['tenant_id']}")
+        if result["tenant_brand_name"]:
+            _detail_parts.append(f"Brand Name: {result['tenant_brand_name']}")
+        ns_type = result.get("federation", {}).get("namespace_type", "")
+        if ns_type:
+            _detail_parts.append(f"Auth Type: {ns_type}")
+        if result.get("desktop_sso_enabled"):
+            _detail_parts.append("Desktop SSO (Seamless SSO): Enabled")
+        region = result.get("openid_config", {}).get("tenant_region_scope", "")
+        if region:
+            _detail_parts.append(f"Tenant Region: {region}")
+
+        add_finding(
+            self.data, "OSift-AzureRecon", "azure_tenant", CAT_CLOUD,
+            "INFO",
+            "\n".join(_detail_parts),
+            domain=domain, affected=domain,
+            output_file=str(out_file),
+            title="Azure AD Tenant Information Disclosure",
+        )
+
+        self._enrich_action_item_data(domain, result)
+
+    def _probe_adfs(self, session, domain: str, adfs_url: str, out_dir: Path,
+                    parent_out: Path):
+        """Probe an ADFS server for MEX endpoint and internal hostname leak."""
+        try:
+            from urllib.parse import urlparse as _urlparse
+            parsed = _urlparse(adfs_url)
+            adfs_base = f"{parsed.scheme}://{parsed.hostname}"
+        except Exception:
+            return
+
+        adfs_findings = []
+
+        # MEX endpoint — lists federation endpoints
+        try:
+            resp = session.get(f"{adfs_base}/adfs/services/trust/mex", timeout=10)
+            if resp.status_code == 200 and "wsdl" in resp.text.lower():
+                mex_file = out_dir / f"adfs_mex_{_safe_filename(domain)}.xml"
+                mex_file.write_text(resp.text[:50000], encoding="utf-8")
+                self.log.info(f"[AzureTenantRecon] {domain}: ADFS MEX endpoint exposed")
+                adfs_findings.append(("ADFS MEX Endpoint Exposed", str(mex_file)))
+        except Exception:
+            pass
+
+        # WindowsTransport — NTLM challenge can leak internal hostname
+        try:
+            resp = session.get(
+                f"{adfs_base}/adfs/services/trust/2005/windowstransport",
+                timeout=10,
+            )
+            www_auth = resp.headers.get("WWW-Authenticate", "")
+            if "NTLM" in www_auth or "Negotiate" in www_auth:
+                self.log.info(
+                    f"[AzureTenantRecon] {domain}: ADFS WindowsTransport "
+                    f"accepts NTLM — internal hostname may be extractable"
+                )
+                adfs_findings.append(
+                    ("ADFS WindowsTransport NTLM Enabled", str(parent_out))
+                )
+        except Exception:
+            pass
+
+        # IdP-Initiated Sign-On page — may list relying parties
+        try:
+            resp = session.get(
+                f"{adfs_base}/adfs/ls/idpinitiatedsignon.aspx", timeout=10,
+            )
+            if resp.status_code == 200 and ("sign in" in resp.text.lower()
+                                             or "relying" in resp.text.lower()):
+                sso_file = out_dir / f"adfs_signon_{_safe_filename(domain)}.html"
+                sso_file.write_text(resp.text[:50000], encoding="utf-8")
+                self.log.info(
+                    f"[AzureTenantRecon] {domain}: ADFS IdP-Initiated "
+                    f"Sign-On page accessible"
+                )
+                adfs_findings.append(
+                    ("ADFS IdP-Initiated Sign-On Page Exposed", str(sso_file))
+                )
+        except Exception:
+            pass
+
+        for title, of in adfs_findings:
+            add_finding(
+                self.data, "OSift-AzureRecon", "azure_tenant", CAT_CLOUD,
+                "LOW",
+                f"{title}: {domain}\n"
+                f"ADFS server: {adfs_base}\n"
+                f"Federation endpoints and internal infrastructure details "
+                f"may be exposed to unauthenticated users.",
+                domain=domain, affected=domain,
+                output_file=of,
+                title=title,
+            )
+
+    def _enrich_action_item_data(self, domain, result):
+        # Store tenant data on the domain record for action item generation
+        self.data.dns_records.setdefault(domain, {})["_azure_tenant"] = {
+            "tenant_id": result["tenant_id"],
+            "brand_name": result["tenant_brand_name"],
+            "federation_type": ns_type,
+            "federation_provider": result.get("federation", {}).get("provider", ""),
+            "desktop_sso": result.get("desktop_sso_enabled", False),
+        }
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -21809,6 +22551,26 @@ API key sources (all free tiers available):
     if _settings_path is not None:
         print(f"[SETTINGS] Loading settings from: {_settings_path}")
         _loaded_settings = load_settings(_settings_path)
+
+    # When a project-specific settings file is used, backfill API keys from the
+    # default osift_settings.json so engagements inherit configured credentials.
+    if (_settings_path is not None
+            and _settings_path.resolve() != SETTINGS_FILE_DEFAULT.resolve()
+            and SETTINGS_FILE_DEFAULT.exists()):
+        _default_settings = load_settings(SETTINGS_FILE_DEFAULT)
+        _api_key_fields = {
+            meta["dest"]
+            for meta in _FLAT_SCHEMA.values()
+            if meta.get("dest") and meta.get("secret")
+        }
+        _backfilled = []
+        for _key in _api_key_fields:
+            if not _loaded_settings.get(_key) and _default_settings.get(_key):
+                _loaded_settings[_key] = _default_settings[_key]
+                _backfilled.append(_key)
+        if _backfilled:
+            print(f"[SETTINGS] Backfilled {len(_backfilled)} API key(s) from default settings: "
+                  + ", ".join(sorted(_backfilled)))
 
     # Determine whether --company / --domain are satisfied by the settings file
     # so we can set required=True only when they are genuinely missing.
@@ -22766,6 +23528,26 @@ API key sources (all free tiers available):
         ).run()
         _pm.set_phase_status("phase16_vt_sweep", "complete", label="Phase 16: VT Reputation Sweep")
         _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
+
+    _check_pause()
+
+    # ── Phase 17: Azure AD Tenant Reconnaissance ─────────────────────────
+    if _pm.is_phase_complete("phase17_azure_tenant"):
+        _vc.log("Phase 17 Azure Tenant Recon already complete — resuming from checkpoint.", "INFO")
+        _vc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="complete")
+    else:
+        _pm.set_phase_status("phase17_azure_tenant", "running", label="Phase 17: Azure Tenant Recon")
+        _vc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="running",
+                   active_tool="domains/tools/azure_tenant")
+        _section(log, "PHASE 17: Azure AD Tenant Reconnaissance")
+        AzureTenantRecon(
+            domains=args.domains,
+            output_dir=output_dir,
+            log=log,
+            data=data,
+        ).run()
+        _pm.set_phase_status("phase17_azure_tenant", "complete", label="Phase 17: Azure Tenant Recon")
+        _vc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="complete")
 
     _check_pause()
 

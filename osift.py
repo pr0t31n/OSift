@@ -715,6 +715,13 @@ _PAUSE: "_pp.PauseManager | None" = None  # type: ignore[name-defined]
 # relative to this directory instead of output_dir (so Vantage can serve them).
 _project_dir: Optional[Path] = None
 _OSIFT_PHASE = ["recon"]   # §14h: current phase label for per-request HTTP evidence
+# §14i: registry of all HttpEvidenceRecorder instances so FindingStore.add() can
+# automatically attach per-request evidence triplet paths to each finding's
+# output_file without requiring changes to individual callsites.
+_evidence_recorders: list = []
+# Set of evidence .log paths already consumed by a finding, so a single triplet
+# is attached to at most one finding (the one emitted right after the request).
+_consumed_evidence: set = set()
 
 # §14j: run-dir audit logger (scan.log + scan.log.json + errors.log), set in
 # main() once the run directory is known. Phase transitions persist here so the
@@ -2387,6 +2394,39 @@ class FindingStore:
         # §13c: store evidence paths relative to the run directory root.
         if extra.get("output_file") and _project_dir is not None:
             extra["output_file"] = _rel_output_file(str(extra["output_file"]), _project_dir)
+
+        # §14i: append HTTP evidence triplet paths from the most recent
+        # request on this thread.  Each recorder stores per-thread
+        # last_paths() so we collect evidence from whichever session made
+        # the triggering API call.  _consumed_evidence tracks paths already
+        # attached so a stale triplet is never reused for an unrelated finding.
+        if _evidence_recorders:
+            _ev_parts: list = []
+            for _evrec in _evidence_recorders:
+                try:
+                    _ep = _evrec.last_paths()
+                    if _ep:
+                        _ev_key = _ep.get("log", "")
+                        if _ev_key and _ev_key not in _consumed_evidence:
+                            _consumed_evidence.add(_ev_key)
+                            for _ek in ("request", "response", "log"):
+                                _ev = _ep.get(_ek, "")
+                                if _ev:
+                                    _ev_parts.append(_ev)
+                except Exception:
+                    pass
+            if _ev_parts:
+                _existing_of = extra.get("output_file", "") or ""
+                _all_parts = ([p.strip() for p in _existing_of.split(",") if p.strip()]
+                              + _ev_parts)
+                # deduplicate while preserving order
+                _seen_of: set = set()
+                _deduped: list = []
+                for _p in _all_parts:
+                    if _p not in _seen_of:
+                        _seen_of.add(_p)
+                        _deduped.append(_p)
+                extra["output_file"] = ",".join(_deduped)
 
         validation = {
             "tool":      tool,
@@ -7009,8 +7049,10 @@ def make_session() -> "requests.Session":
             if "/opt/pr0t31n/shared" not in _sys.path:
                 _sys.path.insert(0, "/opt/pr0t31n/shared")
             import pr0t31n_http_evidence as _he
-            _he.attach_http_evidence(session, _project_dir,
-                                     phase_getter=lambda: _OSIFT_PHASE[0])
+            _rec = _he.attach_http_evidence(session, _project_dir,
+                                            phase_getter=lambda: _OSIFT_PHASE[0])
+            session._evidence_rec = _rec
+            _evidence_recorders.append(_rec)
         except Exception:
             pass
     return session
@@ -21075,6 +21117,89 @@ class IntelAggregator:
         """
         ts   = intel["meta"].get("generated_at", datetime.datetime.now(_UTC).isoformat())
         rows: List[Dict] = []
+        _od  = self.output_dir
+        _ev  = _od / "evidence"
+        _ip_dir = _od / "ip_addresses"
+        _dom_dir = _od / "domains"
+
+        def _ip_evidence(ip: str) -> str:
+            safe = ip.replace(".", "_").replace(":", "_")
+            parts: List[str] = []
+            ip_file = _ip_dir / f"{safe}.json"
+            if ip_file.is_file():
+                parts.append(str(ip_file.relative_to(_od)))
+            p4 = _ev / "phase4_ip"
+            if p4.is_dir():
+                for d in sorted(p4.iterdir()):
+                    if d.is_dir() and ip in d.name:
+                        for f in sorted(d.iterdir()):
+                            if f.name.endswith("_response.txt"):
+                                parts.append(str(f.relative_to(_od)))
+                                break
+                        for f in sorted(d.iterdir()):
+                            if f.name.endswith(".log") and not f.name.endswith("_request.txt"):
+                                parts.append(str(f.relative_to(_od)))
+                                break
+                        break
+            return ",".join(parts)
+
+        def _domain_evidence(domain: str) -> str:
+            parts: List[str] = []
+            dd = _dom_dir / domain
+            if dd.is_dir():
+                dns_rec = dd / "dns" / "records" / f"{domain}_records.json"
+                if dns_rec.is_file():
+                    parts.append(str(dns_rec.relative_to(_od)))
+                whois_f = dd / "whois" / f"{domain}_whois.json"
+                if whois_f.is_file():
+                    parts.append(str(whois_f.relative_to(_od)))
+            return ",".join(parts)
+
+        _email_cache: Dict[str, str] = {}
+
+        def _email_evidence(email: str) -> str:
+            if email in _email_cache:
+                return _email_cache[email]
+            parts: List[str] = []
+            p7 = _ev / "phase7_email"
+            if p7.is_dir():
+                for d in sorted(p7.iterdir()):
+                    if d.is_dir():
+                        for f in sorted(d.iterdir()):
+                            if f.name.endswith("_response.txt"):
+                                parts.append(str(f.relative_to(_od)))
+                                break
+                        if parts:
+                            break
+            reports_emails = _od / "reports" / "emails_primary.txt"
+            if reports_emails.is_file():
+                parts.append(str(reports_emails.relative_to(_od)))
+            result = ",".join(parts)
+            _email_cache[email] = result
+            return result
+
+        def _phase_evidence(phase_name: str) -> str:
+            parts: List[str] = []
+            pd = _ev / phase_name
+            if pd.is_dir():
+                for d in sorted(pd.iterdir()):
+                    if d.is_dir():
+                        for f in sorted(d.iterdir()):
+                            if f.name.endswith("_response.txt"):
+                                parts.append(str(f.relative_to(_od)))
+                                break
+                        if parts:
+                            break
+            return ",".join(parts)
+
+        def _asn_evidence() -> str:
+            parts: List[str] = []
+            if _ip_dir.is_dir():
+                for f in sorted(_ip_dir.iterdir()):
+                    if f.name.startswith("asnmap_") and f.name.endswith(".json"):
+                        parts.append(str(f.relative_to(_od)))
+                        break
+            return ",".join(parts)
 
         def _row(title: str, description: str, *,
                  ip: str = "", port: str = "", hostname: str = "",
@@ -21116,11 +21241,13 @@ class IntelAggregator:
                 if sources: desc += f" | Sources: {sources}"
                 if tech:    desc += f" | Tech: {tech}"
                 if ports:   desc += f" | Ports: {ports}"
+                _sub_ev = _ip_evidence(ips[0]) if ips else ""
                 rows.append(_row(
                     f"Subdomain: {fqdn}", desc,
                     ip=ips[0] if ips else "",
                     hostname=fqdn,
                     command="osift/amass",
+                    output_file=_sub_ev,
                 ))
 
         # ── Domains (primary only — secondary are out-of-scope) ────────────
@@ -21136,6 +21263,7 @@ class IntelAggregator:
                     f"Domain: {dom}", desc,
                     hostname=dom,
                     command="osift",
+                    output_file=_domain_evidence(dom),
                 ))
 
         # ── Email Addresses (primary only — secondary are out-of-scope) ─────
@@ -21156,6 +21284,7 @@ class IntelAggregator:
                     hostname=email.split("@")[-1] if "@" in email else "",
                     risk="medium" if breach else "info",
                     command="osift/theHarvester",
+                    output_file=_email_evidence(email),
                 ))
 
         # ── Phone Numbers — intelligence-only, not emitted as findings ──────
@@ -21182,7 +21311,8 @@ class IntelAggregator:
             if ports:   desc += f" | Open ports: {ports}"
             if cdn:     desc += f" | CDN: {cdn}"
             if cloud:   desc += f" | Cloud: {cloud}"
-            rows.append(_row(f"IP Address: {ip}", desc, ip=ip, command="osift"))
+            rows.append(_row(f"IP Address: {ip}", desc, ip=ip, command="osift",
+                             output_file=_ip_evidence(ip)))
 
         # ── Employees — intelligence-only, not emitted as findings ─────────
 
@@ -21202,11 +21332,13 @@ class IntelAggregator:
             if wildcard:   desc += " | WILDCARD"
             if self_signed: desc += " | SELF-SIGNED"
             hostname = subj.lstrip("*.") if subj else ""
+            _cert_ev = _phase_evidence("phase1_dns")
             rows.append(_row(
                 f"SSL/TLS Certificate: {subj}", desc,
                 hostname=hostname,
                 risk="low" if self_signed else "info",
                 command="osift/certs",
+                output_file=_cert_ev,
             ))
 
         # ── Technologies ──────────────────────────────────────────────────────
@@ -21220,6 +21352,7 @@ class IntelAggregator:
                 f"Technology: {tech}", desc,
                 hostname=seen_on[0] if seen_on else "",
                 command="osift/technology_detection",
+                output_file=_phase_evidence("phase1_dns"),
             ))
 
         # ── ASN Networks ─────────────────────────────────────────────────────
@@ -21235,6 +21368,7 @@ class IntelAggregator:
             rows.append(_row(
                 f"ASN: {asn} — {org}", desc,
                 command="osift/asnmap",
+                output_file=_asn_evidence(),
             ))
 
         # ── Open Ports ────────────────────────────────────────────────────────
@@ -21247,6 +21381,7 @@ class IntelAggregator:
                     f"Port {port} open on {ip}",
                     ip=ip, port=str(port),
                     command="osift/nmap",
+                    output_file=_ip_evidence(ip),
                 ))
 
         # ── DNS Records ───────────────────────────────────────────────────────
@@ -21262,6 +21397,7 @@ class IntelAggregator:
                 desc,
                 hostname=domain,
                 command="osift/dns",
+                output_file=_domain_evidence(domain),
             ))
 
         # ── WHOIS Data ────────────────────────────────────────────────────────
@@ -21276,10 +21412,12 @@ class IntelAggregator:
             if registrant: desc += f" | Registrant: {registrant}"
             if created:    desc += f" | Created: {created}"
             if expires:    desc += f" | Expires: {expires}"
+            _whois_ev = _domain_evidence(domain)
             rows.append(_row(
                 f"WHOIS: {domain}", desc,
                 hostname=domain,
                 command="osift/whois",
+                output_file=_whois_ev,
             ))
 
         # ── Physical Addresses — intelligence-only, not emitted as findings ─
@@ -21299,6 +21437,7 @@ class IntelAggregator:
                 hostname=email.split("@")[-1] if "@" in email else "",
                 risk="high",
                 command=f"osift/{tool}",
+                output_file=_email_evidence(email),
             ))
 
         # Write the flat file Vantage polls

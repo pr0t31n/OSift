@@ -475,8 +475,8 @@ def install_pip_packages(args):
             timeout=120,
         ).returncode
         if rc != 0:
-            warn("edgartools skipped — no pre-built wheel for this platform.")
-            warn("SEC EDGAR lookups will be unavailable (Phase 6 EDGAR).")
+            note("edgartools skipped — no pre-built wheel for this platform.")
+            note("SEC EDGAR lookups will be unavailable (Phase 6 EDGAR).")
         else:
             info("  ✓ edgartools installed")
     else:
@@ -541,7 +541,7 @@ def install_pip_packages(args):
         )
         info("  ✓ Playwright chromium installed")
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        warn(f"playwright install --with-deps chromium failed: {exc}")
+        note(f"playwright install --with-deps chromium failed: {exc}")
         # Fallback: try install-deps then install separately
         try:
             subprocess.run(pw_cmd + ["install-deps"],
@@ -551,7 +551,7 @@ def install_pip_packages(args):
                            env=_env, timeout=180, check=True)
             info("  ✓ Playwright chromium installed (fallback)")
         except Exception as exc2:
-            warn(f"Playwright fallback install also failed: {exc2}")
+            note(f"Playwright fallback install also failed: {exc2}")
 
     # On Debian/Kali apt-installed playwright, the Python package references
     # the system Node.js driver at /usr/share/nodejs/playwright/cli.js.
@@ -564,7 +564,7 @@ def install_pip_packages(args):
     except Exception:
         pass
     if not _pw_driver_ok:
-        warn("Playwright driver not found — attempting to fix …")
+        info("Playwright driver not found — attempting to fix …")
         if sys.platform.startswith("linux") and shutil.which("apt-get"):
             try:
                 subprocess.run(
@@ -593,7 +593,7 @@ def install_pip_packages(args):
         except Exception:
             pass
         if not _pw_driver_ok:
-            err("Playwright driver still not available — wappalyzer will be skipped at runtime")
+            note("Playwright driver still not available — wappalyzer will be skipped at runtime")
 
 
 # ─── phase 3: go tools ───────────────────────────────────────────────────────
@@ -765,7 +765,22 @@ def install_git_tools(args):
                 run([gb, "build", "-o", output] + go_args, cwd=dest, env=env)
 
         except RuntimeError as exc:
-            warn(f"Post-clone action failed for {name}: {exc}")
+            if action == "pip_install_dot" and name.lower() == "theharvester":
+                note(f"pip install . failed for {name}: {exc} — trying PyPI fallback …")
+                try:
+                    run(pip + ["install", "--break-system-packages", "theHarvester"], cwd=None)
+                    info(f"  ✓ {name} installed from PyPI")
+                except RuntimeError:
+                    req = dest / "requirements.txt"
+                    if req.exists():
+                        try:
+                            run(pip + ["install", "--break-system-packages", "-r", str(req)], cwd=dest)
+                            info(f"  ✓ {name} requirements installed")
+                        except RuntimeError:
+                            pass
+                    note(f"Post-clone action failed for {name} — tool may have reduced functionality")
+            else:
+                warn(f"Post-clone action failed for {name}: {exc}")
 
     # Create symlinks for git tools that aren't installed to PATH
     _create_tool_symlinks()

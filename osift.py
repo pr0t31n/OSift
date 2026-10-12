@@ -21278,7 +21278,7 @@ class DnsTwistRunner:
         started = datetime.datetime.now(_UTC).isoformat()
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300,
+                cmd, capture_output=True, text=True, timeout=1200,
             )
             ended = datetime.datetime.now(_UTC).isoformat()
 
@@ -21388,20 +21388,20 @@ class DnsTwistRunner:
 
         except subprocess.TimeoutExpired:
             ended = datetime.datetime.now(_UTC).isoformat()
-            self.log.warning(f"[dnstwist] Timeout (300s) scanning {domain}")
+            self.log.warning(f"[dnstwist] Timeout (1200s) scanning {domain}")
             self.log.log_command(
                 cmd=" ".join(cmd),
-                stdout="", stderr="(timeout after 300s)",
+                stdout="", stderr="(timeout after 1200s)",
                 returncode=-1,
                 tool="dnstwist", tool_path=binary,
                 output_file=str(out_file),
                 started=started, ended=ended,
             )
             _write_placeholder(out_dir, out_file.name,
-                               " ".join(cmd), "(dnstwist timed out after 300s)")
+                               " ".join(cmd), "(dnstwist timed out after 1200s)")
             _record_timeout_action_item(
                 "dnstwist", domain,
-                f"dnstwist timed out (300s) scanning {domain} for typosquatting "
+                f"dnstwist timed out (1200s) scanning {domain} for typosquatting "
                 f"domains. Re-run dnstwist manually to complete the scan.",
                 hostname=domain,
             )

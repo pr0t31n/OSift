@@ -2943,6 +2943,7 @@ class ShodanAPI:
         enriched = {}
 
         for i, ip in enumerate(ips):
+            _check_pause()
             if i and i % 10 == 0:
                 _rate_sleep(2)
             try:
@@ -3743,6 +3744,7 @@ class CensysAPI:
         enriched: Dict[str, Any] = {}
 
         for i, ip in enumerate(ips):
+            _check_pause()
             if i and i % 5 == 0:
                 _rate_sleep(3)
             try:
@@ -3976,6 +3978,7 @@ class FullHuntAPI:
         enriched: Dict[str, Any] = {}
 
         for i, host in enumerate(hosts):
+            _check_pause()
             if i and i % 5 == 0:
                 _rate_sleep(3)
             try:
@@ -4753,6 +4756,7 @@ class NetlasAPI:
         enriched: Dict[str, Any] = {}
 
         for i, ip in enumerate(ips):
+            _check_pause()
             if i and i % 5 == 0:
                 _rate_sleep(3)
             try:
@@ -5079,6 +5083,7 @@ class VirusTotalAPI:
         enriched: Dict[str, Any] = {}
 
         for i, ip in enumerate(ips):
+            _check_pause()
             if i:
                 _rate_sleep(16)
             try:
@@ -5621,6 +5626,7 @@ class AlienVaultOTXAPI:
         enriched: Dict[str, Any] = {}
 
         for i, ip in enumerate(ips):
+            _check_pause()
             if i:
                 _rate_sleep(1.5)
             try:
@@ -9330,6 +9336,7 @@ class IPIntelligence:
         # ipinfo.io free tier: ~50k req/month, no strict per-second rate limit.
         # 10 workers with 5 s timeout each is fast without triggering throttling.
         phase_timeout = max(30, min(120, len(ips) * 6 + 10))
+        _check_pause()
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, _SCAN_SEM.limit)) as ex:
             futs = {ex.submit(_enrich_one, ip): ip for ip in ips}
             done, not_done = concurrent.futures.wait(futs, timeout=phase_timeout)
@@ -14086,6 +14093,7 @@ class DNSEnrichmentRunner:
             f"-t 100 -rl 300 -silent"
         )
         self.log.info(f"[dnsx-enrich] Bulk-resolving {len(fqdns)} FQDNs (post-discovery pass)")
+        _check_pause()
         _dnsx_started = datetime.datetime.now().astimezone()
         stdout, stderr, rc = _shell_go(cmd)
         _dnsx_ended = datetime.datetime.now().astimezone()
@@ -14254,6 +14262,7 @@ class ShodanCLIRunner:
                 with _lock:
                     results[ip] = ports
 
+        _check_pause()
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=min(self._MAX_WORKERS, len(ips))
         ) as pool:
@@ -22099,7 +22108,10 @@ API key sources (all free tiers available):
     global _PAUSE
     if _pp is not None:
         _PAUSE = _pp.PauseManager(str(output_dir), "osift")
-        _PAUSE.start_watcher(grace_period=60)
+        _PAUSE.start_watcher(
+            checkpoint_callback=lambda: _pm._save() if _pm else None,
+            grace_period=30,
+        )
         _resumed = os.environ.get("CRUCIBLE_RESUME") == "1"
         _PAUSE.log_run_type(resumed=_resumed)
         if _resumed:
@@ -22270,6 +22282,8 @@ API key sources (all free tiers available):
         _amass_key = f"phase2_amass{_d_sfx}"
         _lbl       = f" ({domain})"
 
+        _check_pause()
+
         # ── Phase 1 DNS ──────────────────────────────────────────────────────
         _p1_label = f"Phase 1 DNS: {domain}"
         if _pm.is_phase_complete(_p1_key):
@@ -22291,6 +22305,8 @@ API key sources (all free tiers available):
             _vc.status(_p1_key, label=_p1_label, status="complete")
             _snap(output_dir, data)
 
+        _check_pause()
+
         # ── PD Wave A (subfinder / chaos) ────────────────────────────────────
         _pda_label = f"PD Wave A: {domain}"
         if _pm.is_phase_complete(_pda_key):
@@ -22310,6 +22326,8 @@ API key sources (all free tiers available):
             _pm.set_phase_status(_pda_key, "complete", label=_pda_label)
             _vc.status(_pda_key, label=_pda_label, status="complete")
             _snap(output_dir, data)
+
+        _check_pause()
 
         # ── Phase 1.5 Wave A (theHarvester / xurlfind3r) ─────────────────────
         _p15_label = f"Passive OSINT: {domain}"
@@ -22333,6 +22351,8 @@ API key sources (all free tiers available):
             _pm.set_phase_status(_p15_key, "complete", label=_p15_label)
             _vc.status(_p15_key, label=_p15_label, status="complete")
             _snap(output_dir, data)
+
+        _check_pause()
 
         # ── Phase 2 Amass ────────────────────────────────────────────────────
         _amass_label = f"Amass: {domain}"
@@ -22367,11 +22387,14 @@ API key sources (all free tiers available):
                 for _dom, _prim in _all_wave1
             }
             for _fut in concurrent.futures.as_completed(_w1_futs):
+                _check_pause()
                 _w_dom = _w1_futs[_fut]
                 try:
                     _fut.result()
                 except Exception as _w_ex:
                     log.error(f"Wave 1 worker failed for {_w_dom}: {_w_ex}", exc_info=True)
+
+    _check_pause()
 
     # ── PD Wave B — mass DNS resolution (all passive subs now known) ────────
     if not _pm.is_phase_complete("pd_wave_b"):
@@ -22384,6 +22407,8 @@ API key sources (all free tiers available):
         write_targets_snapshot(output_dir, data)
     else:
         _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
+
+    _check_pause()
 
     # ── Phase 1.5 Wave B — puredns + waybackurls (subdomains now collected) ─
     if _pm.is_phase_complete("phase1_5_wave_b"):
@@ -22399,7 +22424,7 @@ API key sources (all free tiers available):
         _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 4: IP Intelligence ───────────────────────────────────────────
     if _pm.is_phase_complete("phase4_ip"):
@@ -22437,7 +22462,7 @@ API key sources (all free tiers available):
     else:
         _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 5: WHOIS ─────────────────────────────────────────────────────
     if _pm.is_phase_complete("phase5_whois"):
@@ -22452,7 +22477,7 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase5_whois", "complete", label="Phase 5: WHOIS")
         _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 6: Company Intelligence ─────────────────────────────────────
     if _pm.is_phase_complete("phase6_company"):
@@ -22471,7 +22496,7 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase6_company", "complete", label="Phase 6: Company Intelligence")
         _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 7: Email & People OSINT ─────────────────────────────────────
     if _pm.is_phase_complete("phase7_email"):
@@ -22515,7 +22540,7 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: cloud_enum")
         _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 10: OSINT API Intelligence Engine ────────────────────────────
     if args.skip_api:
@@ -22591,7 +22616,7 @@ API key sources (all free tiers available):
     # ── PD summary (all waves complete) ───────────────────────────────────
     pd._write_summary()
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 11: DNS Enrichment (dig + dnsx against all collected FQDNs) ─
     if getattr(args, "skip_dns_enrich", False):
@@ -22612,7 +22637,7 @@ API key sources (all free tiers available):
         _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 13: GitDorker — GitHub secret scanning ───────────────────────
     if getattr(args, "no_gitdorker", False):
@@ -22639,7 +22664,7 @@ API key sources (all free tiers available):
         _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 14: People Dorking ───────────────────────────────────────────
     if getattr(args, "no_dork", False):
@@ -22687,7 +22712,7 @@ API key sources (all free tiers available):
         _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
         write_targets_snapshot(output_dir, data)
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 15: dnstwist — Typosquatting & Brand Impersonation ─────────
     _dnstwist_live: list = []
@@ -22712,7 +22737,7 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase15_dnstwist", "complete", label="Phase 15: dnstwist")
         _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 16: VT Reputation Sweep — subdomain + dnstwist domain check ──
     if getattr(args, "no_vt_sweep", False) or args.skip_api:
@@ -22742,7 +22767,7 @@ API key sources (all free tiers available):
         _pm.set_phase_status("phase16_vt_sweep", "complete", label="Phase 16: VT Reputation Sweep")
         _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
 
-    if _PAUSE and _PAUSE.check_and_pause(): sys.exit(_pp.EXIT_PAUSED)
+    _check_pause()
 
     # ── Phase 9: Aggregation & Report ─────────────────────────────────────
     _pm.set_phase_status("phase9_report", "running", label="Phase 9: Aggregation & Report")

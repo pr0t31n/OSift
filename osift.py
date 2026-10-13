@@ -6762,6 +6762,7 @@ def setup_directory_structure(company: str, domain: str, base_path: Optional[Pat
         base_dir / "logs",
         base_dir / "domains",
         base_dir / "company",
+        base_dir / "company" / "breach_data",
         base_dir / "ip_addresses",
         base_dir / "api_intel",
         base_dir / "reports",
@@ -9733,6 +9734,7 @@ class EmailAndPeopleOSINT:
             except Exception as e:
                 self.log.error(f"[HIBP] Per-email check error for {email}: {e}", exc=e)
         out = self.output_dir / "company" / "breach_data" / "hibp_results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(self.data.breach_data, indent=2), encoding="utf-8")
 
     def _check_dehashed(self):
@@ -9796,6 +9798,7 @@ class EmailAndPeopleOSINT:
                     break
         self.log.info(f"[DEHASHED] Ingested {total_ingested} breach entries")
         out = self.output_dir / "company" / "breach_data" / "dehashed_results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
         dh  = [b for b in self.data.breach_data if b.get("source") == "dehashed"]
         out.write_text(json.dumps(dh, indent=2), encoding="utf-8")
 

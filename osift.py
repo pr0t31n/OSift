@@ -29,7 +29,7 @@ SYSTEM = platform.system()          # 'Linux', 'Darwin', 'Windows'
 IS_WINDOWS = SYSTEM == "Windows"
 IS_MACOS   = SYSTEM == "Darwin"
 IS_LINUX   = SYSTEM == "Linux"
-_VANTAGE_MANAGED = os.environ.get("VANTAGE_MANAGED", "") == "1"
+_CRUCIBLE_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 
 
 def _clients_base() -> Path:
@@ -456,24 +456,24 @@ except ImportError:
 
 # ─── Vantage protocol tokens & dual-mode console ─────────────────────────────
 
-_VP_LOG    = "__VANTAGE_LOG__:"
-_VP_ERR    = "__VANTAGE_ERR__:"
-_VP_PROMPT = "__VANTAGE_PROMPT__:"
-_VP_STATUS = "__VANTAGE_STATUS__:"
-_VP_ACTION = "__VANTAGE_ACTION_ITEM__:"
+_CP_LOG    = "__CRUCIBLE_LOG__:"
+_CP_ERR    = "__CRUCIBLE_ERR__:"
+_CP_PROMPT = "__CRUCIBLE_PROMPT__:"
+_CP_STATUS = "__CRUCIBLE_STATUS__:"
+_CP_ACTION = "__CRUCIBLE_ACTION_ITEM__:"
 
 
 class VantageConsole:
     """Dual-mode console output.
 
-    When VANTAGE_MANAGED=1: emits protocol tokens that Vantage intercepts for
+    When CRUCIBLE_MANAGED=1: emits protocol tokens that Crucible intercepts for
     structured logs, errors, prompts, and phase-status updates.
     When running in a real terminal: falls back to plain text (OSift has its
     own ReconLogger and BannerManager for ANSI output).
     """
 
     def __init__(self) -> None:
-        self._managed = _VANTAGE_MANAGED
+        self._managed = _CRUCIBLE_MANAGED
         self._lock    = threading.Lock()
 
     @property
@@ -489,7 +489,7 @@ class VantageConsole:
                 "level":   level,
                 "message": message,
             }
-            sys.stdout.write(_VP_LOG + json.dumps(entry) + "\n")
+            sys.stdout.write(_CP_LOG + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def error(self, message: str, source: str = "osift",
@@ -505,7 +505,7 @@ class VantageConsole:
                     "detail":   detail,
                     "category": category or self._categorise(message),
                 }
-                sys.stderr.write(_VP_ERR + json.dumps(entry) + "\n")
+                sys.stderr.write(_CP_ERR + json.dumps(entry) + "\n")
                 sys.stderr.flush()
             else:
                 sys.stderr.write(f"[!] {message}\n")
@@ -544,7 +544,7 @@ class VantageConsole:
                 entry["active_tools"] = active_tools
             elif active_tool:
                 entry["active_tool"] = active_tool
-            sys.stdout.write(_VP_STATUS + json.dumps(entry) + "\n")
+            sys.stdout.write(_CP_STATUS + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def action_item(self, entry: dict) -> None:
@@ -553,7 +553,7 @@ class VantageConsole:
         if not self._managed:
             return
         with self._lock:
-            sys.stdout.write(_VP_ACTION + json.dumps(entry) + "\n")
+            sys.stdout.write(_CP_ACTION + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def prompt(self, question: str, prompt_type: str = "text",
@@ -568,7 +568,7 @@ class VantageConsole:
                 "skippable": skippable,
             }
             with self._lock:
-                sys.stdout.write(_VP_PROMPT + json.dumps(payload) + "\n")
+                sys.stdout.write(_CP_PROMPT + json.dumps(payload) + "\n")
                 sys.stdout.flush()
             try:
                 return sys.stdin.readline().rstrip("\n")
@@ -6851,7 +6851,7 @@ class ReconLogger:
             eh.setFormatter(fh_fmt)
 
             self.logger.addHandler(fh)
-            if not _VANTAGE_MANAGED:
+            if not _CRUCIBLE_MANAGED:
                 self.logger.addHandler(ch)
             self.logger.addHandler(eh)
 
@@ -6880,36 +6880,36 @@ class ReconLogger:
         return f"[{tool}/{ver}]"
 
     def info(self, msg: str, **kw):
-        if not _VANTAGE_MANAGED:
+        if not _CRUCIBLE_MANAGED:
             self.logger.info(f"{self._tag()} {msg}")
         self._log_json("INFO", msg, kw)
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             _vc.log(msg, level="INFO")
 
     def debug(self, msg: str, **kw):
         self.logger.debug(f"{self._tag()} {msg}")
 
     def warning(self, msg: str, **kw):
-        if not _VANTAGE_MANAGED:
+        if not _CRUCIBLE_MANAGED:
             self.logger.warning(f"{self._tag()} {msg}")
         self._log_json("WARNING", msg, kw)
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             _vc.log(msg, level="WARNING")
 
     def success(self, msg: str, **kw):
-        if not _VANTAGE_MANAGED:
+        if not _CRUCIBLE_MANAGED:
             self.logger.info(f"{self._tag()} [OK] {msg}")
         self._log_json("SUCCESS", msg, kw)
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             _vc.log(msg, level="INFO")
 
     def error(self, msg: str, exc: Optional[Exception] = None, **kw):
         full = msg + (f" | {type(exc).__name__}: {exc}" if exc else "")
-        if not _VANTAGE_MANAGED:
+        if not _CRUCIBLE_MANAGED:
             self.logger.error(f"{self._tag()} {full}")
         self._log_json("ERROR", full, kw)
         self._write_error(full, exc)
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             _vc.error(full, source=getattr(self._tool_local, "tool", "OSift"))
 
     def log_command(
@@ -7533,7 +7533,7 @@ def _osift_pip_install(pkg) -> tuple:
 
 def _tool_log(log: "ReconLogger", msg: str, level: str = "INFO") -> None:
     """Emit a tool-check message to VantageConsole (managed) or ReconLogger (TTY)."""
-    if _VANTAGE_MANAGED:
+    if _CRUCIBLE_MANAGED:
         _vc.log(msg, level)
     elif level in ("WARNING", "WARN"):
         log.warning(msg)
@@ -7591,9 +7591,9 @@ def check_python_deps(log: ReconLogger):
         return
 
     # ── Vantage-managed: auto-install silently without sys.exit() ────────────
-    if _VANTAGE_MANAGED:
+    if _CRUCIBLE_MANAGED:
         sys.stdout.write(
-            "__VANTAGE_LOG__:" + json.dumps({
+            "__CRUCIBLE_LOG__:" + json.dumps({
                 "ts": datetime.datetime.now().isoformat(),
                 "level": "INFO",
                 "message": f"[deps] Auto-installing missing packages: "
@@ -7626,7 +7626,7 @@ def check_python_deps(log: ReconLogger):
             level = "INFO" if installed else "WARNING"
             msg   = (f"[deps] {'Installed' if installed else 'Failed to install'}: {pip_pkg}")
             sys.stdout.write(
-                "__VANTAGE_LOG__:" + json.dumps({
+                "__CRUCIBLE_LOG__:" + json.dumps({
                     "ts": datetime.datetime.now().isoformat(),
                     "level": level,
                     "message": msg,
@@ -7832,7 +7832,7 @@ def check_amass(log: ReconLogger) -> bool:
 
     _tool_log(log, "[tools] amass auto-install failed — will skip amass phase", "WARNING")
 
-    if _VANTAGE_MANAGED:
+    if _CRUCIBLE_MANAGED:
         return False   # non-interactive: skip gracefully
 
     # TTY: show install hints and ask
@@ -8089,7 +8089,7 @@ def check_binary_tools(log: "ReconLogger") -> dict:
         _tool_log(log, f"[tools] {name} unavailable — phase will be skipped", "WARNING")
         availability[name] = False
 
-        if not _VANTAGE_MANAGED:
+        if not _CRUCIBLE_MANAGED:
             # Print manual install hints in TTY mode
             hints = []
             if apt_pkg and IS_LINUX:
@@ -14567,7 +14567,7 @@ def _ensure_go(log: "ReconLogger") -> Optional[str]:
 
     _tool_log(log, "[tools] Go (golang) not found — needed for ProjectDiscovery tools", "WARNING")
 
-    if _VANTAGE_MANAGED:
+    if _CRUCIBLE_MANAGED:
         # Attempt silent auto-install
         if IS_LINUX:
             for pkg in ("golang-go", "golang"):
@@ -14696,7 +14696,7 @@ def _ensure_pd_tools(
     go_path = _ensure_go(log)
 
     if not go_path:
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             # Non-interactive: skip all PD tools gracefully
             for t in missing:
                 availability[t] = False

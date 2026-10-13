@@ -18259,7 +18259,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     if data.breach_data:
         lines += ["", dash, "  CREDENTIAL BREACHES", dash]
         for b in data.breach_data[:30]:
-            email   = b.get("email", "?")
+            _em     = b.get("email", "?")
+            email   = ", ".join(_em) if isinstance(_em, list) else _em
             sources = ", ".join(b.get("breach_sources", [b.get("breach_name", "?")]))
             tool    = b.get("source", "?")
             ts      = b.get("timestamp", "")[:19]

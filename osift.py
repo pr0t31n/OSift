@@ -22904,7 +22904,7 @@ class DnsTwistRunner:
 
             detail = f"Typosquatting Domain Detected: {perm_domain}"
             detail += f" (fuzzer: {fuzzer}){detail_suffix}"
-            typo_title = "Typosquatting Domain Detected"
+            typo_title = "Discovery: Typosquatting Domain Detected"
             if whois_reg:
                 detail += f"\nRegistrar: {whois_reg}"
             if whois_created:
@@ -23081,32 +23081,52 @@ class VTReputationSweep:
                 is_dnstwist = dom in set(d.lower() for d in self.dnstwist_domains)
                 source_label = "typosquatting domain" if is_dnstwist else "subdomain"
 
-                if mal >= 5:
-                    add_finding(
-                        self.data, "virustotal", "malicious_subdomain_sweep",
-                        CAT_THREAT_INTEL, "critical",
-                        f"Malicious {source_label.title()}: {dom} — "
-                        f"flagged by {mal} VirusTotal vendors",
-                        domain=dom, affected=dom,
-                        output_file=str(vt_out / "subdomain_sweep.json"),
-                        vt_malicious=mal, vt_suspicious=sus,
-                    )
-                elif mal >= 1:
+                if is_dnstwist:
+                    _vt_title = "Discovery: Typosquatting Domain Detected"
+                    _vt_cat   = CAT_BRAND
+                    if mal >= 5:
+                        _vt_sev = "critical"
+                        _vt_detail = (f"{_vt_title}: {dom} — "
+                                      f"flagged by {mal} VirusTotal vendors")
+                    elif mal >= 1:
+                        _vt_sev = "high"
+                        _vt_detail = (f"{_vt_title}: {dom} — "
+                                      f"flagged by {mal} VirusTotal vendor(s)")
+                    elif sus >= 3:
+                        _vt_sev = "medium"
+                        _vt_detail = (f"{_vt_title}: {dom} — "
+                                      f"flagged suspicious by {sus} VirusTotal vendor(s)")
+                    else:
+                        _vt_sev = None
+                    if _vt_sev:
+                        add_finding(
+                            self.data, "virustotal", "typosquatting",
+                            _vt_cat, _vt_sev, _vt_detail,
+                            domain=dom, affected=dom,
+                            output_file=str(vt_out / "subdomain_sweep.json"),
+                            vt_malicious=mal, vt_suspicious=sus,
+                            title=_vt_title,
+                        )
+                elif mal >= 1 or sus >= 3:
+                    if mal >= 10:
+                        _dom_sev = "critical"
+                    elif mal >= 5:
+                        _dom_sev = "high"
+                    elif mal >= 3:
+                        _dom_sev = "medium"
+                    elif mal >= 1:
+                        _dom_sev = "low"
+                    else:
+                        _dom_sev = "low"
+                    if mal >= 1:
+                        _dom_detail = (f"Suspicious Subdomain: {dom} — "
+                                       f"flagged by {mal} VirusTotal vendor(s)")
+                    else:
+                        _dom_detail = (f"Suspicious Subdomain: {dom} — "
+                                       f"flagged suspicious by {sus} VirusTotal vendor(s)")
                     add_finding(
                         self.data, "virustotal", "suspicious_subdomain_sweep",
-                        CAT_THREAT_INTEL, "high",
-                        f"Suspicious {source_label.title()}: {dom} — "
-                        f"flagged by {mal} VirusTotal vendor(s)",
-                        domain=dom, affected=dom,
-                        output_file=str(vt_out / "subdomain_sweep.json"),
-                        vt_malicious=mal, vt_suspicious=sus,
-                    )
-                elif sus >= 3:
-                    add_finding(
-                        self.data, "virustotal", "suspicious_subdomain_sweep",
-                        CAT_THREAT_INTEL, "medium",
-                        f"Suspicious {source_label.title()}: {dom} — "
-                        f"flagged suspicious by {sus} VirusTotal vendor(s)",
+                        CAT_THREAT_INTEL, _dom_sev, _dom_detail,
                         domain=dom, affected=dom,
                         output_file=str(vt_out / "subdomain_sweep.json"),
                         vt_malicious=mal, vt_suspicious=sus,
@@ -23179,9 +23199,18 @@ class VTReputationSweep:
                             affected_subs.append(sub)
                     affected_str = ", ".join(affected_subs[:10]) or ip
 
+                    if mal >= 10:
+                        _ip_sev = "critical"
+                    elif mal >= 5:
+                        _ip_sev = "high"
+                    elif mal >= 3:
+                        _ip_sev = "medium"
+                    else:
+                        _ip_sev = "low"
+
                     add_finding(
                         self.data, "virustotal", "malicious_ip_sweep",
-                        CAT_THREAT_INTEL, "high",
+                        CAT_THREAT_INTEL, _ip_sev,
                         f"Malicious IP Hosting Subdomain: {ip} — "
                         f"flagged by {mal} VirusTotal vendor(s) "
                         f"(hosts: {affected_str})",

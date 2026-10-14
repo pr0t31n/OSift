@@ -9972,7 +9972,7 @@ class EmailAndPeopleOSINT:
                 f"Matching addresses:\n{_email_lines}",
                 domain=self.domain, affected=self.domain,
                 output_file=str(_fmt_file),
-                title="Email Naming Convention Identified",
+                title="Discovery: Email Naming Convention Identified",
             )
 
     def _linkedin_enrich_employees(self):
@@ -20446,14 +20446,19 @@ class IntelAggregator:
                 continue
             seen.add(key)
             records.append({
-                "email":        b.get("email", ""),
-                "breach_name":  b.get("breach_name", b.get("breach", "")),
-                "breach_date":  b.get("breach_date", ""),
-                "data_classes": b.get("data_classes", []),
-                "domain":       b.get("domain", ""),
-                "source_tool":  b.get("tool",    b.get("source", "")),
-                "tool_version": b.get("tool_version", ""),
-                "timestamp":    b.get("timestamp", ""),
+                "email":           b.get("email", ""),
+                "breach_name":     b.get("breach_name", b.get("breach", "")),
+                "breach_date":     b.get("breach_date", ""),
+                "data_classes":    b.get("data_classes", []),
+                "domain":          b.get("domain", ""),
+                "source_tool":     b.get("tool",    b.get("source", "")),
+                "tool_version":    b.get("tool_version", ""),
+                "timestamp":       b.get("timestamp", ""),
+                "password":        b.get("password", ""),
+                "hashed_password": b.get("hashed_password", ""),
+                "hash_type":       b.get("hash_type", ""),
+                "username":        b.get("username", ""),
+                "output_file":     b.get("output_file", ""),
             })
         return records
 
@@ -20500,17 +20505,33 @@ class IntelAggregator:
         for rec in intel["breaches"]:
             if not rec.get("email"):
                 continue
+            _breach_detail = (
+                f"Credential breach: account found in \"{rec['breach_name']}\" "
+                f"({rec.get('breach_date') or 'date unknown'})"
+            )
+            _pw = (rec.get("password") or "").strip()
+            _hpw = (rec.get("hashed_password") or "").strip()
+            _ht = (rec.get("hash_type") or "").strip()
+            _un = (rec.get("username") or "").strip()
+            if _un:
+                _breach_detail += f"\nUsername: {_un}"
+            if _pw:
+                _breach_detail += f"\nPassword: {_pw}"
+            if _hpw:
+                _breach_detail += f"\nPassword Hash: {_hpw}" + (f" ({_ht})" if _ht else "")
             add_finding(
                 data,
                 rec.get("source_tool") or "hibp",
                 "credential_breach", self.CAT_BREACH, "high",
-                f"Credential breach: account found in \"{rec['breach_name']}\" "
-                f"({rec.get('breach_date') or 'date unknown'})",
+                _breach_detail,
                 email=rec["email"], affected=rec["email"],
                 timestamp=rec.get("timestamp") or ts,
                 breach_name=rec.get("breach_name"),
                 data_classes=rec.get("data_classes", []),
                 output_file=rec.get("output_file", ""),
+                password=_pw,
+                hashed_password=_hpw,
+                hash_type=_ht,
             )
 
         # DNS security posture findings

@@ -358,6 +358,26 @@ def _ensure_modern_go():
         return False
 
 
+
+def _dpkg_installed(pkg):
+    try:
+        r = subprocess.run(["dpkg", "-s", pkg],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _rpm_installed(pkg):
+    try:
+        return subprocess.run(
+            ["rpm", "-q", pkg],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
 def _pip_installed(pkg_spec):
     import importlib.util
     name = pkg_spec.split(">=")[0].split("==")[0].split("[")[0].split("<")[0].strip()
@@ -440,15 +460,30 @@ def install_system_packages(os_type, args):
         run(["apt-get", "update", "-y"])
         run(["apt-get", "upgrade", "-y"])
         info("Installing APT packages …")
-        run(["apt-get", "install", "-y"] + APT_PKGS)
+        _needed = [p for p in APT_PKGS if not _dpkg_installed(p)]
+        _skip = len(APT_PKGS) - len(_needed)
+        if _skip:
+            info(f"  {_skip} APT package(s) already installed")
+        if _needed:
+            run(["apt-get", "install", "-y"] + _needed)
 
     elif os_type == "dnf":
         info("Installing DNF packages …")
-        run(["dnf", "install", "-y"] + DNF_PKGS)
+        _needed = [p for p in DNF_PKGS if not _rpm_installed(p)]
+        _skip = len(DNF_PKGS) - len(_needed)
+        if _skip:
+            info(f"  {_skip} DNF package(s) already installed")
+        if _needed:
+            run(["dnf", "install", "-y"] + _needed)
 
     elif os_type == "zypper":
         info("Installing zypper packages …")
-        run(["zypper", "install", "-y"] + ZYPPER_PKGS)
+        _needed = [p for p in ZYPPER_PKGS if not _rpm_installed(p)]
+        _skip = len(ZYPPER_PKGS) - len(_needed)
+        if _skip:
+            info(f"  {_skip} zypper package(s) already installed")
+        if _needed:
+            run(["zypper", "install", "-y"] + _needed)
 
 
 # ─── phase 2: pip packages ───────────────────────────────────────────────────
@@ -572,10 +607,11 @@ def install_pip_packages(args):
         info("Playwright driver not found — attempting to fix …")
         if sys.platform.startswith("linux") and shutil.which("apt-get"):
             try:
-                subprocess.run(
-                    ["apt-get", "install", "-y", "node-playwright"],
-                    env=_env, timeout=120, check=True,
-                )
+                if not _dpkg_installed("node-playwright"):
+                    subprocess.run(
+                        ["apt-get", "install", "-y", "node-playwright"],
+                        env=_env, timeout=120, check=True,
+                    )
                 info("  ✓ node-playwright installed via apt")
             except Exception as exc:
                 warn(f"apt install node-playwright failed: {exc}")

@@ -24015,6 +24015,15 @@ API key sources (all free tiers available):
             engagement_name=getattr(args, "engagement_name", "") or f"OSift on {args.company}",
             target=args.company,
         )
+        try:
+            import pr0t31n_dep_snapshot as _ds
+            _ds.write_snapshot(
+                output_dir, "osift", VERSION,
+                binaries=["amass", "subfinder", "dnsx", "dnstwist", "whois", "theHarvester", "whatweb", "nmap", "curl", "wget", "chromium", "google-chrome"],
+                pip_packages=["requests", "urllib3", "dnspython", "python-whois", "shodan", "censys", "beautifulsoup4", "lxml", "cryptography", "pyOpenSSL", "colorama", "tqdm", "paramiko", "python-docx", "openpyxl", "pandas", "jinja2", "selenium", "webdriver-manager"],
+            )
+        except Exception:
+            pass
     log          = ReconLogger(output_dir)
 
     # §14j: run-dir audit log (scan.log + scan.log.json + errors.log) at the run

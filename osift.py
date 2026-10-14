@@ -9908,6 +9908,7 @@ class EmailAndPeopleOSINT:
         )
 
         derived_count = 0
+        _matched_addrs: list = []
         for addr, meta in domain_emails.items():
             local = addr.split("@")[0].lower()
             if local in self._ROLE_PREFIXES:
@@ -9918,6 +9919,11 @@ class EmailAndPeopleOSINT:
             first, last = best_extractor(m)
             if len(first.rstrip(".")) < 2 and not first.endswith("."):
                 continue
+            _matched_addrs.append({
+                "email": addr,
+                "source": meta.get("source", "unknown"),
+                "derived_name": f"{first} {last}".strip(),
+            })
             self._add_employee({
                 "first_name": first,
                 "last_name": last,
@@ -9932,7 +9938,6 @@ class EmailAndPeopleOSINT:
                 f"[EMAIL] Derived {derived_count} employee name(s) from "
                 f"email pattern ({best_label})"
             )
-            # Record the detected format for intelligence consumers
             _fmt_file = self.output_dir / "company" / "emails" / "email_format.json"
             _fmt_file.parent.mkdir(parents=True, exist_ok=True)
             _fmt_file.write_text(json.dumps({
@@ -9944,8 +9949,15 @@ class EmailAndPeopleOSINT:
                 "derived_employees": derived_count,
                 "confidence": "high" if best_count >= 10 else
                               "medium" if best_count >= 5 else "low",
+                "matched_emails": _matched_addrs,
             }, indent=2), encoding="utf-8")
 
+            _src_set = sorted({e["source"] for e in _matched_addrs})
+            _email_lines = "\n".join(
+                f"  {e['email']}  (source: {e['source']}, "
+                f"derived: {e['derived_name']})"
+                for e in sorted(_matched_addrs, key=lambda x: x["email"])
+            )
             add_finding(
                 self.data, "OSift-Email", "email_intelligence", CAT_RECON,
                 "INFO",
@@ -9955,7 +9967,9 @@ class EmailAndPeopleOSINT:
                 f"derived from this format.\n"
                 f"This naming convention can be used to generate targeted "
                 f"email addresses for phishing and social engineering attacks "
-                f"given any known employee name.",
+                f"given any known employee name.\n\n"
+                f"Sources: {', '.join(_src_set)}\n\n"
+                f"Matching addresses:\n{_email_lines}",
                 domain=self.domain, affected=self.domain,
                 output_file=str(_fmt_file),
                 title="Email Naming Convention Identified",
@@ -17740,7 +17754,7 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
              metadata={"source_category": "app_store_url",
                         "store_url": url})
 
-    # ── O365 tenant detected + harvested emails → Scattershot3 o365spray ─
+    # ── O365 tenant detected + harvested emails → o365spray action item ──
     _o365_domains_seen: set = set()
     _all_domains = list(data.domains) if data.domains else ([data.domain] if data.domain else [])
     for _dom in _all_domains:
@@ -17761,11 +17775,6 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
             if addr.endswith(f"@{_dom}")
         )
         _email_count = len(_dom_emails)
-        _email_note = (
-            f"{_email_count} harvested email(s) available for enumeration"
-            if _email_count > 0
-            else "No harvested emails — o365spray will use common prefix list"
-        )
         _tenant = data.dns_records.get(_dom, {}).get("_azure_tenant", {})
         _tid = _tenant.get("tenant_id", "")
         _fed_type = _tenant.get("federation_type", "")
@@ -17780,13 +17789,23 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
         if _tenant.get("desktop_sso"):
             _tenant_desc += " Desktop SSO enabled."
 
-        _add("o365_enum", "Scattershot3", _dom, "", 0, _dom,
+        _email_list_str = "\n".join(f"  {e}" for e in _dom_emails[:50])
+        if _email_count > 50:
+            _email_list_str += f"\n  ... and {_email_count - 50} more"
+        _email_section = (
+            f"Harvested emails ({_email_count}):\n{_email_list_str}"
+            if _email_count > 0
+            else "No harvested emails — use common prefix list or gather emails first"
+        )
+
+        _add("o365_enum", "o365spray", _dom, "", 0, _dom,
              f"O365 Account Enumeration: {_dom}",
              f"MX records for {_dom} point to *.protection.outlook.com, "
-             f"confirming a Microsoft 365 / Azure AD tenant.{_tenant_desc} "
-             f"{_email_note}. "
-             f"Run o365spray to enumerate valid accounts and identify "
-             f"targets for password spray attacks.",
+             f"confirming a Microsoft 365 / Azure AD tenant.{_tenant_desc}\n\n"
+             f"Run o365spray to enumerate valid accounts against the Azure AD "
+             f"GetCredentialType endpoint using the emails harvested by OSift, "
+             f"then password-spray any confirmed-valid accounts.\n\n"
+             f"{_email_section}",
              priority="HIGH",
              metadata={
                  "source_category": "o365_tenant",

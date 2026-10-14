@@ -16071,7 +16071,7 @@ class PDASNmap:
             except subprocess.TimeoutExpired:
                 self.log.warning(f"[asnmap] {label} timed out after {self._QUERY_TIMEOUT}s")
                 _record_timeout_action_item(
-                    "asnmap", label,
+                    "asnmap", self.domain,
                     f"asnmap timed out after {self._QUERY_TIMEOUT}s on {label}. "
                     f"Re-run with adjusted timeout.",
                     hostname=self.domain, priority="MEDIUM",
@@ -16118,10 +16118,11 @@ class PDASNmap:
 
         if _timed_out_targets:
             _record_timeout_action_item(
-                "asnmap", ", ".join(_timed_out_targets),
+                "asnmap", self.domain,
                 f"asnmap failed or timed out on {len(_timed_out_targets)} "
-                f"target(s): {', '.join(_timed_out_targets[:5])}. Re-run "
+                f"ASN(s): {', '.join(_timed_out_targets[:5])}. Re-run "
                 f"asnmap manually to complete ASN-to-CIDR expansion.",
+                hostname=self.domain, priority="MEDIUM",
             )
         out_json = self.out / "asnmap_results.json"
         out_json.write_text(json.dumps(all_ranges, indent=2, default=str), encoding="utf-8")

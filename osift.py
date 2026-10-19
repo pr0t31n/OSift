@@ -17233,6 +17233,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
             _subs_map[_sub] = {
                 "host":         _sub,
                 "ip":           _ips[0] if _ips else "",
+                "ips":          _ips,
                 "sources":      sorted(set(_meta.get("sources") or [])),
                 "first_seen":   "",
                 "severity":     "INFO",
@@ -18610,9 +18611,11 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             _host_v = (_f.get("host") or _f.get("detail") or "").strip()
             if _host_v:
                 if _host_v not in _subs_map:
+                    _sub_rec_ips = list(data.subdomains.get(_host_v, {}).get("ips") or [])
                     _subs_map[_host_v] = {
                         "host":         _host_v,
-                        "ip":           (_f.get("ip") or "").strip(),
+                        "ip":           _sub_rec_ips[0] if _sub_rec_ips else (_f.get("ip") or "").strip(),
+                        "ips":          _sub_rec_ips if _sub_rec_ips else [x for x in [(_f.get("ip") or "").strip()] if x],
                         "sources":      [],
                         "first_seen":   _ts_v,
                         "severity":     _sev_v,
@@ -18623,6 +18626,9 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
                     _subs_map[_host_v]["sources"].append(_tool_v)
                 if _f.get("ip") and not _subs_map[_host_v]["ip"]:
                     _subs_map[_host_v]["ip"] = (_f["ip"] or "").strip()
+                _fip = (_f.get("ip") or "").strip()
+                if _fip and _fip not in _subs_map[_host_v].get("ips", []):
+                    _subs_map[_host_v].setdefault("ips", []).append(_fip)
                 if _f.get("http_status") and not _subs_map[_host_v].get("http_status"):
                     _subs_map[_host_v]["http_status"] = _f["http_status"]
 
@@ -22819,14 +22825,14 @@ class DnsTwistRunner:
         safe = _safe_filename(domain)
         out_file = out_dir / f"dnstwist_{safe}.json"
 
-        cmd = [binary, "--registered", "--format", "json",
+        cmd = [binary, "--registered", "--whois", "--format", "json",
                "--threads", "50",
                "--nameservers", "1.1.1.1,8.8.8.8,9.9.9.9",
                "--output", str(out_file),
                domain]
         self.log.info(f"[dnstwist] Scanning domain: {domain}")
 
-        _dnstwist_timeout = 3600
+        _dnstwist_timeout = 5400
         started = datetime.datetime.now(_UTC).isoformat()
         _timed_out = False
         try:

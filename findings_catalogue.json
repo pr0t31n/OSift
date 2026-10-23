@@ -3007,7 +3007,7 @@
       "source_tools": [
         "osift"
       ],
-      "risk": "",
+      "risk": "INFO",
       "cwe": [
         "CWE-359",
         "CWE-200"
@@ -3098,7 +3098,7 @@
       "source_tools": [
         "osift"
       ],
-      "risk": "",
+      "risk": "MEDIUM",
       "cwe": [
         "CWE-359",
         "CWE-200"

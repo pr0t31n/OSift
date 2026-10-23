@@ -263,7 +263,7 @@
     },
     {
       "id": "OSIFT-004",
-      "title": "SSL/TLS Certificate Expiring Soon",
+      "title": "SSL/TLS Certificate: SSL/TLS Certificate Expiring Soon",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -356,7 +356,7 @@
     },
     {
       "id": "OSIFT-006",
-      "title": "SSL/TLS Certificate Misconfiguration",
+      "title": "SSL/TLS Certificate: SSL/TLS Certificate Misconfiguration",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -407,7 +407,7 @@
     },
     {
       "id": "OSIFT-007",
-      "title": "DNS Misconfiguration",
+      "title": "DNS Information: DNS Misconfiguration",
       "aliases": [
         "DNS Misconfiguration",
         "DNSSEC Not Enabled",
@@ -488,7 +488,7 @@
     },
     {
       "id": "OSIFT-008",
-      "title": "SPF Record Missing",
+      "title": "DNS Information: SPF Record Missing",
       "aliases": [
         "DMARC Record Missing",
         "MTA-STS Not Configured",
@@ -586,7 +586,7 @@
     },
     {
       "id": "OSIFT-009",
-      "title": "DMARC Record Missing",
+      "title": "DNS Information: DMARC Record Missing",
       "aliases": [
         "DMARC Record Missing",
         "MTA-STS Not Configured",
@@ -684,7 +684,7 @@
     },
     {
       "id": "OSIFT-010",
-      "title": "DKIM Configuration Missing",
+      "title": "DNS Information: DKIM Configuration Missing",
       "aliases": [
         "DMARC Record Missing",
         "MTA-STS Not Configured",
@@ -948,7 +948,7 @@
     },
     {
       "id": "OSIFT-014",
-      "title": "M365 Valid User Enumerated",
+      "title": "Enumeration: M365 Valid User Enumerated",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1049,7 +1049,7 @@
     },
     {
       "id": "OSIFT-016",
-      "title": "Subdomain Takeover Risk",
+      "title": "DNS Vulnerability: Subdomain Takeover Risk",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1100,7 +1100,7 @@
     },
     {
       "id": "OSIFT-017",
-      "title": "DNS Zone Transfer Permitted (AXFR)",
+      "title": "DNS Information: DNS Zone Transfer Permitted (AXFR)",
       "aliases": [
         "DNS Zone Transfer Permitted (AXFR)"
       ],
@@ -1497,7 +1497,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Shodan Exposure — Known CVE on Service",
+      "title": "Software Version Detected: Shodan Exposure — Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1602,7 +1602,7 @@
     },
     {
       "id": "OSIFT-024",
-      "title": "Certificate Transparency Log Entry",
+      "title": "SSL/TLS Certificate: Certificate Transparency Log Entry",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1805,7 +1805,7 @@
     },
     {
       "id": "OSIFT-027",
-      "title": "LinkedIn Employee Profile Enumerated",
+      "title": "Enumeration: LinkedIn Employee Profile Enumerated",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1897,7 +1897,7 @@
     },
     {
       "id": "OSIFT-029",
-      "title": "Sensitive File Found via Web Crawler",
+      "title": "Sensitive File Exposed: Sensitive File Found via Web Crawler",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1950,7 +1950,7 @@
     },
     {
       "id": "OSIFT-030",
-      "title": "HTTP Security Headers Missing",
+      "title": "Missing Security Header: HTTP Security Headers Missing",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -2003,7 +2003,7 @@
     },
     {
       "id": "OSIFT-031",
-      "title": "Weak or Default Credentials Accepted",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "Default Admin Credentials",
         "Default Username and Password",
@@ -2157,7 +2157,7 @@
     },
     {
       "id": "OSIFT-033",
-      "title": "Wildcard DNS Record Detected",
+      "title": "DNS Information: Wildcard DNS Record Detected",
       "aliases": [
         "DNS Misconfiguration",
         "DNSSEC Not Enabled",
@@ -3187,7 +3187,7 @@
     },
     {
       "id": "OSIFT-043",
-      "title": "DNS: DMARC record found",
+      "title": "DNS Information: DNS: DMARC record found",
       "aliases": [
         "DMARC Record Found",
         "DMARC Policy Detected"
@@ -3231,7 +3231,7 @@
     },
     {
       "id": "OSIFT-044",
-      "title": "DNS: Missing CAA Record",
+      "title": "DNS Information: DNS: Missing CAA Record",
       "aliases": [
         "Missing CAA Record",
         "No CAA Record",
@@ -3281,7 +3281,7 @@
     },
     {
       "id": "OSIFT-045",
-      "title": "nslookup forward lookup: {record_summary}",
+      "title": "DNS Information: nslookup forward lookup: {record_summary}",
       "aliases": [
         "DNS Forward Lookup",
         "DNS Record Enumeration"
@@ -3331,7 +3331,7 @@
     },
     {
       "id": "OSIFT-046",
-      "title": "Typosquatting Domain Detected",
+      "title": "DNS Vulnerability: Typosquatting Domain Detected",
       "aliases": [
         "Typosquat Domain",
         "Domain Typosquatting",
@@ -3381,7 +3381,7 @@
     },
     {
       "id": "OSIFT-047",
-      "title": "DNS: A Record",
+      "title": "DNS Information: DNS: A Record",
       "aliases": [
         "nslookup forward lookup: A"
       ],
@@ -3434,7 +3434,7 @@
     },
     {
       "id": "OSIFT-048",
-      "title": "DNS: AAAA Record",
+      "title": "DNS Information: DNS: AAAA Record",
       "aliases": [
         "nslookup forward lookup: AAAA"
       ],
@@ -3487,7 +3487,7 @@
     },
     {
       "id": "OSIFT-049",
-      "title": "DNS: MX Record",
+      "title": "DNS Information: DNS: MX Record",
       "aliases": [
         "nslookup forward lookup: MX"
       ],
@@ -3540,7 +3540,7 @@
     },
     {
       "id": "OSIFT-050",
-      "title": "DNS: NS Record",
+      "title": "DNS Information: DNS: NS Record",
       "aliases": [
         "nslookup forward lookup: NS"
       ],
@@ -3593,7 +3593,7 @@
     },
     {
       "id": "OSIFT-051",
-      "title": "DNS: TXT Record",
+      "title": "DNS Information: DNS: TXT Record",
       "aliases": [
         "nslookup forward lookup: TXT"
       ],
@@ -3646,7 +3646,7 @@
     },
     {
       "id": "OSIFT-052",
-      "title": "DNS: SOA Record",
+      "title": "DNS Information: DNS: SOA Record",
       "aliases": [
         "nslookup forward lookup: SOA"
       ],
@@ -3699,7 +3699,7 @@
     },
     {
       "id": "OSIFT-053",
-      "title": "DNS: CNAME Record",
+      "title": "DNS Information: DNS: CNAME Record",
       "aliases": [
         "nslookup forward lookup: CNAME"
       ],
@@ -3752,7 +3752,7 @@
     },
     {
       "id": "OSIFT-054",
-      "title": "GitHub Actions: Workflow Injection Vulnerability",
+      "title": "CI/CD Security: GitHub Actions: Workflow Injection Vulnerability",
       "aliases": [
         "GitHub Actions Script Injection",
         "Workflow Expression Injection"
@@ -3832,7 +3832,7 @@
     },
     {
       "id": "OSIFT-055",
-      "title": "GitHub Actions: Secret Exfiltration Path",
+      "title": "CI/CD Security: GitHub Actions: Secret Exfiltration Path",
       "aliases": [
         "GitHub Actions Secret Leak",
         "CI/CD Secret Exposure"
@@ -3906,7 +3906,7 @@
     },
     {
       "id": "OSIFT-056",
-      "title": "GitHub Actions: Overly Permissive Permissions",
+      "title": "CI/CD Security: GitHub Actions: Overly Permissive Permissions",
       "aliases": [
         "Workflow Excessive Permissions",
         "GitHub Actions write-all"
@@ -3972,7 +3972,7 @@
     },
     {
       "id": "OSIFT-057",
-      "title": "GitHub Actions: Self-Hosted Runner Risk",
+      "title": "CI/CD Security: GitHub Actions: Self-Hosted Runner Risk",
       "aliases": [
         "Self-Hosted Runner Exposure",
         "GitHub Actions Runner on Public Repo"
@@ -4038,7 +4038,7 @@
     },
     {
       "id": "OSIFT-058",
-      "title": "GitHub Actions: Audit Complete — No Issues",
+      "title": "CI/CD Security: GitHub Actions: Audit Complete — No Issues",
       "aliases": [
         "GitHub Actions Security Audit Clean"
       ],
@@ -4084,7 +4084,7 @@
     },
     {
       "id": "OSIFT-059",
-      "title": "CDN/WAF Bypass: Origin IP Exposed",
+      "title": "Authentication Bypass: CDN/WAF Bypass: Origin IP Exposed",
       "aliases": [
         "Origin IP Behind CDN",
         "CDN Bypass Direct IP",
@@ -4158,7 +4158,7 @@
     },
     {
       "id": "OSIFT-060",
-      "title": "CDN/WAF Bypass: Potential Origin IP",
+      "title": "Authentication Bypass: CDN/WAF Bypass: Potential Origin IP",
       "aliases": [
         "Possible Origin IP",
         "CDN Bypass Candidate"
@@ -4222,7 +4222,7 @@
     },
     {
       "id": "OSIFT-061",
-      "title": "CDN/WAF Bypass: No Origin Exposure",
+      "title": "Authentication Bypass: CDN/WAF Bypass: No Origin Exposure",
       "aliases": [
         "CDN Origin Protected",
         "No CDN Bypass Found"

@@ -8519,7 +8519,7 @@ class DNSEnumerator:
         if dmarc_recs:
             records["DMARC"] = dmarc_recs
             self.log.info(f"[DNS] DMARC record found for {self.domain}")
-            _dm_detail = "DNS: DMARC record found"
+            _dm_detail = "DNS Information: DNS: DMARC record found"
             _dm_raw = dmarc_recs[0].get("dmarc_raw", "")
             add_finding(
                 self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
@@ -13470,7 +13470,7 @@ class GatoRunner:
                     self.data, tool="gato",
                     type_="github_actions_audit_clean",
                     category=CAT_CLOUD, severity="info",
-                    detail="GitHub Actions: Audit Complete — No Issues",
+                    detail="CI/CD Security: GitHub Actions: Audit Complete — No Issues",
                     domain=self.domain, affected=self.github_org or self.domain,
                     output_file=str(out_file),
                 )
@@ -20830,7 +20830,7 @@ class IntelAggregator:
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="DNS: Missing CAA Record",
+                title="DNS Information: DNS: Missing CAA Record",
             )
         else:
             issuers    = ss.get("caa_issuers", [])

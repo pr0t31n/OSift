@@ -110,7 +110,7 @@
     },
     {
       "id": "OSIFT-002",
-      "title": "Live Host Confirmed",
+      "title": "Discovery: Live Host Confirmed",
       "aliases": [
         "Subdomain Discovered",
         "Live Host Confirmed",
@@ -212,7 +212,7 @@
     },
     {
       "id": "OSIFT-003",
-      "title": "Open Port Identified on Subdomain",
+      "title": "Discovery: Open Port Identified on Subdomain",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -793,7 +793,7 @@
     },
     {
       "id": "OSIFT-011",
-      "title": "Breached Email Address Found",
+      "title": "Information Disclosure: Breached Email Address Found",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -840,7 +840,7 @@
     },
     {
       "id": "OSIFT-012",
-      "title": "Plaintext Credential Found in Breach Database",
+      "title": "Information Disclosure: Plaintext Credential Found in Breach Database",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -995,7 +995,7 @@
     },
     {
       "id": "OSIFT-015",
-      "title": "M365 Valid Credential Found (Credential Spray Success)",
+      "title": "Information Disclosure: M365 Valid Credential Found (Credential Spray Success)",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1121,7 +1121,7 @@
       "qualys_qids": [
         70001
       ],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.PS-01",
@@ -1207,7 +1207,7 @@
     },
     {
       "id": "OSIFT-018",
-      "title": "Employee Email Address Harvested",
+      "title": "Information Disclosure: Employee Email Address Harvested",
       "aliases": [
         "Email Address Identified",
         "Corporate Email Enumeration via OSINT",
@@ -1301,7 +1301,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         }
       ],
       "description": "An employee email address was discovered via theHarvester, Hunter.io, LinkedIn, or public sources. Collected addresses support phishing and credential spray attacks.",
@@ -1319,7 +1319,7 @@
     },
     {
       "id": "OSIFT-019",
-      "title": "Web Technology Fingerprint",
+      "title": "Discovery: Web Technology Fingerprint",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1369,7 +1369,7 @@
     },
     {
       "id": "OSIFT-020",
-      "title": "Wayback Machine URL with Sensitive Path",
+      "title": "Information Disclosure: Wayback Machine URL with Sensitive Path",
       "aliases": [
         "Information Disclosure: Internal Server Directory Structure",
         "Wayback Machine URL with Sensitive Path"
@@ -1387,7 +1387,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -1450,7 +1450,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Shodan Exposure \u2014 Open Service",
+      "title": "Discovery: Shodan Exposure — Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1497,7 +1497,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Shodan Exposure \u2014 Known CVE on Service",
+      "title": "Shodan Exposure — Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1548,7 +1548,7 @@
     },
     {
       "id": "OSIFT-023",
-      "title": "Cloud Storage Bucket Found",
+      "title": "Information Disclosure: Cloud Storage Bucket Found",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1648,7 +1648,7 @@
     },
     {
       "id": "OSIFT-025",
-      "title": "ASN / IP Range Identified",
+      "title": "Discovery: ASN / IP Range Identified",
       "aliases": [
         "IP Address Identified",
         "ASN / IP Range Identified",
@@ -1722,7 +1722,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -1755,7 +1755,7 @@
     },
     {
       "id": "OSIFT-026",
-      "title": "WHOIS Data Exposure",
+      "title": "Information Disclosure: WHOIS Data Exposure",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1851,7 +1851,7 @@
     },
     {
       "id": "OSIFT-028",
-      "title": "Social Media Profile Linked to Employee",
+      "title": "Discovery: Social Media Profile Linked to Employee",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -2036,8 +2036,8 @@
         150100,
         150101
       ],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
-      "owasp_api": "API2:2023 \u2013 Broken Authentication",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_api": "API2:2023 – Broken Authentication",
       "nist_csf2": [
         "PR.AA-01",
         "DE.CM-01"
@@ -2110,7 +2110,7 @@
     },
     {
       "id": "OSIFT-032",
-      "title": "Uncover / Internet-Wide Scan Engine Match",
+      "title": "Discovery: Uncover / Internet-Wide Scan Engine Match",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -2258,7 +2258,7 @@
     },
     {
       "id": "OSIFT-034",
-      "title": "Cloud Service Provider Asset Identified",
+      "title": "Discovery: Cloud Service Provider Asset Identified",
       "aliases": [
         "IP Address Identified",
         "ASN / IP Range Identified",
@@ -2332,7 +2332,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2366,7 +2366,7 @@
     },
     {
       "id": "OSIFT-035",
-      "title": "SEC EDGAR Filing Data Found",
+      "title": "Discovery: SEC EDGAR Filing Data Found",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -2412,7 +2412,7 @@
     },
     {
       "id": "OSIFT-036",
-      "title": "Third-Party / Supply Chain Domain Identified",
+      "title": "Discovery: Third-Party / Supply Chain Domain Identified",
       "aliases": [
         "Third-Party / Supply Chain Domain Identified",
         "Dependency Confusion Attack Surface"
@@ -2431,7 +2431,7 @@
       "cvss_vector": "N/A",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A08:2021 \u2013 Software and Data Integrity Failures",
+      "owasp_web": "A08:2021 – Software and Data Integrity Failures",
       "owasp_api": "",
       "nist_csf2": [
         "ID.SC-01",
@@ -2505,7 +2505,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         }
       ],
       "description": "Enumeration revealed domains or subdomains associated with third-party services, SaaS providers, or supply chain vendors (identified via CNAME targets, MX records, or certificate SANs).",
@@ -2709,7 +2709,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -2773,7 +2773,7 @@
     },
     {
       "id": "OSIFT-040",
-      "title": "Phone Number Pattern Spotted",
+      "title": "Discovery: Phone Number Pattern Spotted",
       "aliases": [
         "Phone Number Pattern Spotted",
         "Phone Number Pattern Spotted - Unconfirmed"
@@ -2857,10 +2857,10 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Potential PII Pattern \u2014 Social Security Number Format Detected",
+      "title": "Information Disclosure: Potential PII Pattern — Social Security Number Format Detected",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+        "Potential PII Pattern — Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -2984,7 +2984,7 @@
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
       "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
@@ -2999,7 +2999,7 @@
     },
     {
       "id": "OS-001",
-      "title": "Phone Number Pattern Spotted - Unconfirmed",
+      "title": "Discovery: Phone Number Pattern Spotted - Unconfirmed",
       "aliases": [
         "Phone Number Pattern Spotted",
         "Phone Number Pattern Spotted - Unconfirmed"
@@ -3061,7 +3061,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles \u2014 only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
+      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles — only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
       "remediation_component": "People / Process",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Low",
@@ -3090,10 +3090,10 @@
     },
     {
       "id": "OS-002",
-      "title": "Social Security pattern detected:",
+      "title": "Information Disclosure: Social Security pattern detected:",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+        "Potential PII Pattern — Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -4038,7 +4038,7 @@
     },
     {
       "id": "OSIFT-058",
-      "title": "GitHub Actions: Audit Complete \u2014 No Issues",
+      "title": "GitHub Actions: Audit Complete — No Issues",
       "aliases": [
         "GitHub Actions Security Audit Clean"
       ],
@@ -4268,7 +4268,7 @@
     },
     {
       "id": "OSIFT-062",
-      "title": "Historical Endpoints Discovered",
+      "title": "Discovery: Historical Endpoints Discovered",
       "aliases": [
         "Wayback URLs",
         "Archived Endpoints",
@@ -4329,7 +4329,7 @@
     },
     {
       "id": "OSIFT-063",
-      "title": "Sensitive Historical URL Discovered",
+      "title": "Information Disclosure: Sensitive Historical URL Discovered",
       "aliases": [
         "Archived Admin URL",
         "Historical Config Endpoint",
@@ -4407,7 +4407,7 @@
     },
     {
       "id": "OSIFT-064",
-      "title": "Historical API Endpoint",
+      "title": "Discovery: Historical API Endpoint",
       "aliases": [
         "Archived API Route",
         "Historical REST Endpoint"
@@ -4469,7 +4469,7 @@
     },
     {
       "id": "OSIFT-065",
-      "title": "Document Metadata: Internal Username Leaked",
+      "title": "Information Disclosure: Document Metadata: Internal Username Leaked",
       "aliases": [
         "Document Author Exposed",
         "PDF Author Metadata",
@@ -4544,7 +4544,7 @@
     },
     {
       "id": "OSIFT-066",
-      "title": "Document Metadata: Software Version Disclosed",
+      "title": "Information Disclosure: Document Metadata: Software Version Disclosed",
       "aliases": [
         "PDF Creator Software",
         "Document Producer Version",
@@ -4604,7 +4604,7 @@
     },
     {
       "id": "OSIFT-067",
-      "title": "Document Metadata: Internal File Path Leaked",
+      "title": "Information Disclosure: Document Metadata: Internal File Path Leaked",
       "aliases": [
         "Document File Path Exposed",
         "Internal Path in Metadata"
@@ -4668,7 +4668,7 @@
     },
     {
       "id": "OSIFT-068",
-      "title": "Document Metadata: Email Address Leaked",
+      "title": "Information Disclosure: Document Metadata: Email Address Leaked",
       "aliases": [
         "Email in Document Metadata",
         "EXIF Email"
@@ -4718,7 +4718,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Strip metadata from documents before publishing. This is informational \u2014 email addresses may already be publicly available through other channels.",
+      "remediation_brief": "Strip metadata from documents before publishing. This is informational — email addresses may already be publicly available through other channels.",
       "remediation_component": "Application",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Easy",
@@ -4729,7 +4729,7 @@
     },
     {
       "id": "OSIFT-069",
-      "title": "Document Metadata: GPS Coordinates Leaked",
+      "title": "Information Disclosure: Document Metadata: GPS Coordinates Leaked",
       "aliases": [
         "EXIF GPS Data",
         "Photo Location Metadata",
@@ -4801,7 +4801,7 @@
     },
     {
       "id": "OSIFT-070",
-      "title": "Document Metadata: Audit Summary",
+      "title": "Information Disclosure: Document Metadata: Audit Summary",
       "aliases": [
         "Document Metadata Scan Summary",
         "EXIF Audit Report"

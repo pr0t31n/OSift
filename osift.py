@@ -456,11 +456,12 @@ except ImportError:
 
 # ─── Vantage protocol tokens & dual-mode console ─────────────────────────────
 
-_CP_LOG    = "__CRUCIBLE_LOG__:"
-_CP_ERR    = "__CRUCIBLE_ERR__:"
-_CP_PROMPT = "__CRUCIBLE_PROMPT__:"
-_CP_STATUS = "__CRUCIBLE_STATUS__:"
-_CP_ACTION = "__CRUCIBLE_ACTION_ITEM__:"
+_CP_LOG     = "__CRUCIBLE_LOG__:"
+_CP_ERR     = "__CRUCIBLE_ERR__:"
+_CP_PROMPT  = "__CRUCIBLE_PROMPT__:"
+_CP_STATUS  = "__CRUCIBLE_STATUS__:"
+_CP_ACTION  = "__CRUCIBLE_ACTION_ITEM__:"
+_CP_FINDING = "__CRUCIBLE_FINDING__:"
 
 
 class VantageConsole:
@@ -2490,6 +2491,21 @@ class FindingStore:
 
             self._store[fp]   = finding
             self._ordered.append(fp)
+
+        if _CRUCIBLE_MANAGED:
+            try:
+                _payload = json.dumps({
+                    "title": detail, "ip": ip or host or "",
+                    "port": 0, "hostname": host or domain or "",
+                    "risk": severity.upper() if severity else "INFO",
+                    "description": detail,
+                    "sources": tool, "service": "",
+                    "affected": extra.get("affected", url or ""),
+                    "cves": cve, "output_file": extra.get("output_file", ""),
+                }, ensure_ascii=False)
+                print(f"{_CP_FINDING}{_payload}", flush=True)
+            except Exception:
+                pass
 
         return fp
 

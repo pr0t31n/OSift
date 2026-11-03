@@ -1,0 +1,130 @@
+{
+  "_osift_settings_version": "2.0.0",
+  "_instructions": [
+    "OSift Settings File \u2014 paste your API keys and options here.",
+    "All keys are optional. Sections with no keys are simply ignored.",
+    "CLI arguments always override values in this file.",
+    "This file is loaded automatically if it lives next to OSift.py.",
+    "To point to a different location: python3 OSift.py --settings /path/to/file.json",
+    "SECURITY: Never commit this file to version control.",
+    "          Add 'osift_settings.json' to your .gitignore."
+  ],
+  "target": {
+    "_comment": "Optional defaults for target. -c and -d CLI flags always win.",
+    "company": "Example Security Firm",
+    "domain": "example-security.com"
+  },
+  "scan_options": {
+    "_comment": "Tune scan behaviour. All values here are the OSift defaults.",
+    "max_pages": 200,
+    "max_depth": 3,
+    "skip_crawl": false,
+    "skip_amass": false,
+    "skip_brute": false,
+    "skip_api": false,
+    "skip_pd": false,
+    "wordlist": "",
+    "output_base": ""
+  },
+  "breach_intelligence": {
+    "_comment": [
+      "HIBP (Have I Been Pwned) \u2014 paid domain-level breach search.",
+      "  Get key : https://haveibeenpwned.com/API/Key",
+      "Dehashed  \u2014 credential leak search (paid).",
+      "  Register: https://www.dehashed.com",
+      "  API key : https://www.dehashed.com/profile"
+    ],
+    "hibp_key": "",
+    "dehashed_user": "user@example-security.com",
+    "dehashed_key": ""
+  },
+  "api_tier1_infrastructure": {
+    "_comment": [
+      "Phase 10 \u2014 Tier 1: Attack Surface & Infrastructure.",
+      "All keys are optional; each missing key skips that source.",
+      "",
+      "Shodan        \u2014 host/port/banner/CVE data.",
+      "  Free dev key : https://account.shodan.io",
+      "",
+      "Censys         \u2014 TLS cert + host data. Requires BOTH id AND secret.",
+      "  Free community: https://app.censys.io/account",
+      "",
+      "FullHunt       \u2014 EASM: subdomains, hosts, tech stack, CDN/cloud.",
+      "  Free tier    : https://fullhunt.io/user/api",
+      "",
+      "SecurityTrails \u2014 passive DNS history, subdomain DB, WHOIS history.",
+      "  Free tier    : https://securitytrails.com/app/api",
+      "",
+      "Netlas         \u2014 internet scan: responses, certs, DNS, WHOIS, IoC.",
+      "  Free tier    : https://app.netlas.io/profile/"
+    ],
+    "shodan_key": "",
+    "censys_id": "00000000-0000-0000-0000-000000000000",
+    "censys_secret": "",
+    "fullhunt_key": "",
+    "securitytrails_key": "",
+    "netlas_key": ""
+  },
+  "api_tier2_threat_intel": {
+    "_comment": [
+      "Phase 10 \u2014 Tier 2: Threat Intelligence & Reputation.",
+      "",
+      "VirusTotal \u2014 domain/IP reputation, 70+ AV vendors, passive DNS.",
+      "  Free tier  : https://www.virustotal.com/gui/my-apikey",
+      "",
+      "URLScan.io  \u2014 web scan history, tech stack, malicious verdicts.",
+      "  NOTE: public scan searches work without a key.",
+      "  Free tier  : https://urlscan.io/user/profile/",
+      "",
+      "AlienVault OTX \u2014 threat feeds, passive DNS, malware associations.",
+      "  Free account: https://otx.alienvault.com/settings"
+    ],
+    "virustotal_key": "",
+    "urlscan_key": "",
+    "otx_key": ""
+  },
+  "api_tier3_email_people": {
+    "_comment": [
+      "Phase 10 \u2014 Tier 3: Email & People Intelligence.",
+      "",
+      "Hunter.io \u2014 email discovery, employee profiles, company enrichment.",
+      "  Free tier : https://hunter.io/api-keys"
+    ],
+    "hunter_key": ""
+  },
+  "projectdiscovery": {
+    "_comment": [
+      "Phase 11 \u2014 ProjectDiscovery Toolkit.",
+      "All PD binaries are auto-installed via 'go install' if Go is present.",
+      "",
+      "Chaos DB     \u2014 curated subdomain dataset by ProjectDiscovery.",
+      "  API key    : https://cloud.projectdiscovery.io (free with account)",
+      "",
+      "cloudlist    \u2014 enumerate live assets across cloud provider accounts.",
+      "  Config file: YAML with provider credentials (AWS, GCP, Azure, etc.).",
+      "  Docs       : https://github.com/projectdiscovery/cloudlist",
+      "  Leave blank to skip cloud asset enumeration."
+    ],
+    "chaos_key": "",
+    "cloudlist_config": ""
+  },
+  "uncover_engine_env_vars": {
+    "_comment": [
+      "Phase 11 \u2014 'uncover' multi-engine internet-wide search.",
+      "These keys are injected as environment variables for the uncover binary.",
+      "Only engines with a valid key are queried.",
+      "",
+      "FOFA       \u2014 https://fofa.info   (requires both FOFA_EMAIL + FOFA_KEY)",
+      "Quake360   \u2014 https://quake.360.net",
+      "ZoomEye    \u2014 https://www.zoomeye.org",
+      "Netlas     \u2014 https://app.netlas.io/profile/ (same key as netlas_key above)",
+      "CriminalIP \u2014 https://www.criminalip.io"
+    ],
+    "FOFA_EMAIL": "",
+    "FOFA_KEY": "",
+    "QUAKE_TOKEN": "",
+    "ZOOMEYE_API_KEY": "",
+    "NETLAS_API_KEY": "",
+    "CRIMINALIP_API_KEY": ""
+  }
+}

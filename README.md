@@ -2,7 +2,7 @@
 
 **Comprehensive OSINT & reconnaissance framework** — domain-level passive recon through M365 credential spray and GitHub secret scanning, in a single script.
 
-OSift takes a company name and domain, and runs a structured 13-phase intelligence pipeline: DNS enumeration, subdomain discovery, certificate harvesting, IP intelligence, WHOIS, company and employee OSINT, web crawling, API-enriched attack surface mapping, ProjectDiscovery toolkit sweep, M365 credential spraying (TREVORspray), and GitHub secret scanning (GitDorker). All results are deduplicated and written to structured JSON/CSV output for direct import into Vantage or security reports.
+OSift takes a company name and domain, and runs a structured 13-phase intelligence pipeline: DNS enumeration, subdomain discovery, certificate harvesting, IP intelligence, WHOIS, company and employee OSINT, web crawling, API-enriched attack surface mapping, ProjectDiscovery toolkit sweep, M365 credential spraying (TREVORspray), and GitHub secret scanning (GitDorker). All results are deduplicated and written to structured JSON/CSV output for direct import into Crucible or security reports.
 
 ---
 
@@ -12,7 +12,7 @@ OSift takes a company name and domain, and runs a structured 13-phase intelligen
 - **30+ tool integrations** — theHarvester, xurlfind3r, amass, puredns, subfinder, dnsx, shuffledns, katana, httpx, naabu, tlsx, cdncheck, uncover, cloudlist, waybackurls, Wappalyzer, maigret, TruffleHog, cloud_enum, EmailHarvester, Shodan CLI, TREVORspray, GitDorker, and more.
 - **10+ API integrations** — Shodan, Censys, FullHunt, SecurityTrails, Netlas, VirusTotal, URLScan.io, AlienVault OTX, Hunter.io, Have I Been Pwned, Dehashed, ProjectDiscovery Chaos, FOFA, Quake360, ZoomEye, CriminalIP.
 - **Scan resumption** — `checkpoint.json` tracks every completed phase. Re-running with the same output directory skips already-finished work.
-- **Vantage integration** — Set `VANTAGE_MANAGED=1` to emit structured protocol tokens for the [Vantage](../vantage/) web UI. All output streams switch to JSON protocol messages; phases report live status.
+- **Crucible integration** — Set `CRUCIBLE_MANAGED=1` to emit structured protocol tokens for the Crucible web UI. All output streams switch to JSON protocol messages; phases report live status.
 - **Fingerprint-based deduplication** — `FindingStore` uses 16-hex SHA fingerprints to deduplicate findings across all 30+ tools.
 - **Auto-install** — ProjectDiscovery tools are auto-installed via `go install` if Go is present. Python dependencies are detected and offered for auto-install at startup.
 - **Cross-platform** — Linux, macOS, Windows. Requires elevated privileges (root/Administrator).
@@ -293,9 +293,9 @@ Severity values: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`
 
 ---
 
-## Vantage Integration
+## Crucible Integration
 
-When launched by [Vantage](../vantage/) (`VANTAGE_MANAGED=1`), OSift switches to structured protocol output:
+When launched by Crucible (`CRUCIBLE_MANAGED=1`), OSift switches to structured protocol output:
 
 | Token | Purpose |
 |-------|---------|
@@ -304,7 +304,7 @@ When launched by [Vantage](../vantage/) (`VANTAGE_MANAGED=1`), OSift switches to
 | `__VANTAGE_STATUS__:` | Phase progress update |
 | `__VANTAGE_PROMPT__:` | Interactive prompt requiring user response |
 
-Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Vantage UI can track progress in real time.
+Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress in real time.
 
 ---
 

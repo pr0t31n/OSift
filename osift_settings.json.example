@@ -1,7 +1,7 @@
 {
   "_osift_settings_version": "2.0.0",
   "_instructions": [
-    "OSift Settings File \u2014 paste your API keys and options here.",
+    "OSift Settings File — paste your API keys and options here.",
     "All keys are optional. Sections with no keys are simply ignored.",
     "CLI arguments always override values in this file.",
     "This file is loaded automatically if it lives next to OSift.py.",
@@ -11,8 +11,8 @@
   ],
   "target": {
     "_comment": "Optional defaults for target. -c and -d CLI flags always win.",
-    "company": "Example Security Firm",
-    "domain": "example-security.com"
+    "company": "",
+    "domain": ""
   },
   "scan_options": {
     "_comment": "Tune scan behaviour. All values here are the OSift defaults.",
@@ -28,38 +28,38 @@
   },
   "breach_intelligence": {
     "_comment": [
-      "HIBP (Have I Been Pwned) \u2014 paid domain-level breach search.",
+      "HIBP (Have I Been Pwned) — paid domain-level breach search.",
       "  Get key : https://haveibeenpwned.com/API/Key",
-      "Dehashed  \u2014 credential leak search (paid).",
+      "Dehashed  — credential leak search (paid).",
       "  Register: https://www.dehashed.com",
       "  API key : https://www.dehashed.com/profile"
     ],
     "hibp_key": "",
-    "dehashed_user": "user@example-security.com",
+    "dehashed_user": "",
     "dehashed_key": ""
   },
   "api_tier1_infrastructure": {
     "_comment": [
-      "Phase 10 \u2014 Tier 1: Attack Surface & Infrastructure.",
+      "Phase 10 — Tier 1: Attack Surface & Infrastructure.",
       "All keys are optional; each missing key skips that source.",
       "",
-      "Shodan        \u2014 host/port/banner/CVE data.",
+      "Shodan        — host/port/banner/CVE data.",
       "  Free dev key : https://account.shodan.io",
       "",
-      "Censys         \u2014 TLS cert + host data. Requires BOTH id AND secret.",
+      "Censys         — TLS cert + host data. Requires BOTH id AND secret.",
       "  Free community: https://app.censys.io/account",
       "",
-      "FullHunt       \u2014 EASM: subdomains, hosts, tech stack, CDN/cloud.",
+      "FullHunt       — EASM: subdomains, hosts, tech stack, CDN/cloud.",
       "  Free tier    : https://fullhunt.io/user/api",
       "",
-      "SecurityTrails \u2014 passive DNS history, subdomain DB, WHOIS history.",
+      "SecurityTrails — passive DNS history, subdomain DB, WHOIS history.",
       "  Free tier    : https://securitytrails.com/app/api",
       "",
-      "Netlas         \u2014 internet scan: responses, certs, DNS, WHOIS, IoC.",
+      "Netlas         — internet scan: responses, certs, DNS, WHOIS, IoC.",
       "  Free tier    : https://app.netlas.io/profile/"
     ],
     "shodan_key": "",
-    "censys_id": "00000000-0000-0000-0000-000000000000",
+    "censys_id": "",
     "censys_secret": "",
     "fullhunt_key": "",
     "securitytrails_key": "",
@@ -67,16 +67,16 @@
   },
   "api_tier2_threat_intel": {
     "_comment": [
-      "Phase 10 \u2014 Tier 2: Threat Intelligence & Reputation.",
+      "Phase 10 — Tier 2: Threat Intelligence & Reputation.",
       "",
-      "VirusTotal \u2014 domain/IP reputation, 70+ AV vendors, passive DNS.",
+      "VirusTotal — domain/IP reputation, 70+ AV vendors, passive DNS.",
       "  Free tier  : https://www.virustotal.com/gui/my-apikey",
       "",
-      "URLScan.io  \u2014 web scan history, tech stack, malicious verdicts.",
+      "URLScan.io  — web scan history, tech stack, malicious verdicts.",
       "  NOTE: public scan searches work without a key.",
       "  Free tier  : https://urlscan.io/user/profile/",
       "",
-      "AlienVault OTX \u2014 threat feeds, passive DNS, malware associations.",
+      "AlienVault OTX — threat feeds, passive DNS, malware associations.",
       "  Free account: https://otx.alienvault.com/settings"
     ],
     "virustotal_key": "",
@@ -85,22 +85,22 @@
   },
   "api_tier3_email_people": {
     "_comment": [
-      "Phase 10 \u2014 Tier 3: Email & People Intelligence.",
+      "Phase 10 — Tier 3: Email & People Intelligence.",
       "",
-      "Hunter.io \u2014 email discovery, employee profiles, company enrichment.",
+      "Hunter.io — email discovery, employee profiles, company enrichment.",
       "  Free tier : https://hunter.io/api-keys"
     ],
     "hunter_key": ""
   },
   "projectdiscovery": {
     "_comment": [
-      "Phase 11 \u2014 ProjectDiscovery Toolkit.",
+      "Phase 11 — ProjectDiscovery Toolkit.",
       "All PD binaries are auto-installed via 'go install' if Go is present.",
       "",
-      "Chaos DB     \u2014 curated subdomain dataset by ProjectDiscovery.",
+      "Chaos DB     — curated subdomain dataset by ProjectDiscovery.",
       "  API key    : https://cloud.projectdiscovery.io (free with account)",
       "",
-      "cloudlist    \u2014 enumerate live assets across cloud provider accounts.",
+      "cloudlist    — enumerate live assets across cloud provider accounts.",
       "  Config file: YAML with provider credentials (AWS, GCP, Azure, etc.).",
       "  Docs       : https://github.com/projectdiscovery/cloudlist",
       "  Leave blank to skip cloud asset enumeration."
@@ -110,15 +110,15 @@
   },
   "uncover_engine_env_vars": {
     "_comment": [
-      "Phase 11 \u2014 'uncover' multi-engine internet-wide search.",
+      "Phase 11 — 'uncover' multi-engine internet-wide search.",
       "These keys are injected as environment variables for the uncover binary.",
       "Only engines with a valid key are queried.",
       "",
-      "FOFA       \u2014 https://fofa.info   (requires both FOFA_EMAIL + FOFA_KEY)",
-      "Quake360   \u2014 https://quake.360.net",
-      "ZoomEye    \u2014 https://www.zoomeye.org",
-      "Netlas     \u2014 https://app.netlas.io/profile/ (same key as netlas_key above)",
-      "CriminalIP \u2014 https://www.criminalip.io"
+      "FOFA       — https://fofa.info   (requires both FOFA_EMAIL + FOFA_KEY)",
+      "Quake360   — https://quake.360.net",
+      "ZoomEye    — https://www.zoomeye.org",
+      "Netlas     — https://app.netlas.io/profile/ (same key as netlas_key above)",
+      "CriminalIP — https://www.criminalip.io"
     ],
     "FOFA_EMAIL": "",
     "FOFA_KEY": "",

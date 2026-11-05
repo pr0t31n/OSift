@@ -305,7 +305,7 @@ The settings file allows API keys and scan options to be persisted across engage
 ├── spray/                      TREVORspray M365 results
 ├── gitdorker/                  GitDorker GitHub secret scan results
 ├── reports/
-│   ├── findings_vantage.json   ← Vantage-compatible findings (primary)
+│   ├── findings_crucible.json  ← Crucible-compatible findings (primary)
 │   ├── findings_report.json    ← Unified deduplicated findings
 │   ├── final_report.json       ← Full machine-readable report
 │   ├── subdomains_confirmed.csv← Live confirmed subdomains
@@ -317,7 +317,7 @@ The settings file allows API keys and scan options to be persisted across engage
 └── checkpoint.json             Scan resumption state
 ```
 
-### findings_vantage.json schema
+### findings_crucible.json schema
 
 ```json
 [
@@ -347,10 +347,10 @@ When launched by Crucible (`CRUCIBLE_MANAGED=1`), OSift switches to structured p
 
 | Token | Purpose |
 |-------|---------|
-| `__VANTAGE_LOG__:` | Standard log line forwarded to UI console |
-| `__VANTAGE_ERR__:` | Error line forwarded to UI |
-| `__VANTAGE_STATUS__:` | Phase progress update |
-| `__VANTAGE_PROMPT__:` | Interactive prompt requiring user response |
+| `__CRUCIBLE_LOG__:` | Standard log line forwarded to UI console |
+| `__CRUCIBLE_ERR__:` | Error line forwarded to UI |
+| `__CRUCIBLE_STATUS__:` | Phase progress update |
+| `__CRUCIBLE_PROMPT__:` | Interactive prompt requiring user response |
 
 Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress in real time.
 

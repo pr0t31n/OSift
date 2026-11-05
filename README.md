@@ -45,9 +45,9 @@ Security testing is a professional discipline with significant ethical and legal
 
 # OSift
 
-**Comprehensive OSINT & reconnaissance framework** — domain-level passive recon through M365 credential spray and GitHub secret scanning, in a single script.
+**Comprehensive OSINT & reconnaissance framework** — domain-level passive recon through Azure AD tenant discovery and GitHub secret scanning, in a single script.
 
-OSift takes a company name and domain, and runs a structured 13-phase intelligence pipeline: DNS enumeration, subdomain discovery, certificate harvesting, IP intelligence, WHOIS, company and employee OSINT, web crawling, API-enriched attack surface mapping, ProjectDiscovery toolkit sweep, M365 credential spraying (TREVORspray), and GitHub secret scanning (GitDorker). All results are deduplicated and written to structured JSON/CSV output for direct import into Crucible or security reports.
+OSift takes a company name and one or more domains, and runs a structured 22-stage intelligence pipeline: DNS enumeration, passive OSINT tool sweeps, subdomain discovery, IP intelligence, WHOIS, company and employee OSINT, web crawling, API-enriched attack surface mapping, ProjectDiscovery toolkit sweep, DNS enrichment, GitHub secret scanning (GitDorker), people dorking, Shodan CLI per-IP enumeration, dnstwist typosquatting detection, VirusTotal reputation sweep, and Azure AD tenant reconnaissance. All results are deduplicated and written to structured JSON/CSV output for direct import into Crucible or security reports.
 
 ---
 
@@ -56,13 +56,14 @@ OSift takes a company name and domain, and runs a structured 13-phase intelligen
 
 ## Features
 
-- **13-phase structured pipeline** — DNS enumeration through GitHub dorking, each phase building on previous results. Phases gate on prior findings to avoid redundant tool runs.
-- **30+ tool integrations** — theHarvester, xurlfind3r, amass, puredns, subfinder, dnsx, shuffledns, katana, httpx, naabu, tlsx, cdncheck, uncover, cloudlist, waybackurls, Wappalyzer, maigret, TruffleHog, cloud_enum, EmailHarvester, Shodan CLI, TREVORspray, GitDorker, and more.
+- **22-stage structured pipeline** — DNS enumeration through Azure AD tenant recon, each phase building on previous results. Phases gate on prior findings to avoid redundant tool runs.
+- **30+ tool integrations** — theHarvester, xurlfind3r, amass, puredns, shuffledns, dnsx, katana, httpx, naabu, tlsx, cdncheck, uncover, cloudlist, waybackurls, Wappalyzer, maigret, TruffleHog, cloud_enum, EmailHarvester, Shodan CLI, GitDorker, dnstwist, gato, HakOriginFinder, waymore, exiftool, and more.
 - **10+ API integrations** — Shodan, Censys, FullHunt, SecurityTrails, Netlas, VirusTotal, URLScan.io, AlienVault OTX, Hunter.io, Have I Been Pwned, Dehashed, ProjectDiscovery Chaos, FOFA, Quake360, ZoomEye, CriminalIP.
 - **Scan resumption** — `checkpoint.json` tracks every completed phase. Re-running with the same output directory skips already-finished work.
 - **Crucible integration** — Set `CRUCIBLE_MANAGED=1` to emit structured protocol tokens for the Crucible web UI. All output streams switch to JSON protocol messages; phases report live status.
 - **Fingerprint-based deduplication** — `FindingStore` uses 16-hex SHA fingerprints to deduplicate findings across all 30+ tools.
 - **Auto-install** — ProjectDiscovery tools are auto-installed via `go install` if Go is present. Python dependencies are detected and offered for auto-install at startup.
+- **Multi-domain support** — Pass multiple `-d` domains to run the full pipeline against each, with per-domain phase tracking and deduplication.
 - **Cross-platform** — Linux, macOS, Windows. Requires elevated privileges (root/Administrator).
 - **Settings file** — All API keys, targets, and scan options persist in a single `osift_settings.json` file across engagements.
 
@@ -70,26 +71,131 @@ OSift takes a company name and domain, and runs a structured 13-phase intelligen
 
 ## Scan Phases
 
+The pipeline runs 22 tracked stages. Some stages run concurrently where inputs allow it. The execution order is shown below.
+
 | # | Phase | Tools / Sources | Notes |
 |---|-------|-----------------|-------|
 | 1 | **DNS Enumeration** | dig, nslookup, host, dnspython, zone transfer | A, AAAA, MX, NS, TXT, SRV, DMARC, SPF, DKIM |
-| 1.5-A | **Passive OSINT Wave A** | theHarvester (40+ sources), xurlfind3r | Concurrent with Phase 1 and Amass |
-| 2 | **Subdomain Discovery** | Amass (passive + active), certificate CT logs | Concurrent with Phase 1 |
-| 1.5-B | **Passive OSINT Wave B** | puredns (DNS brute-force), waybackurls | After subdomain collection |
-| 3 | **Certificate Collection** | crt.sh, Certspotter, Facebook CT | SAN/CN parsing, cert chain analysis |
+| PD-A | **PD Wave A** | subfinder, chaos | Passive subdomain discovery; concurrent with Phase 1 |
+| 1.5-A | **Passive OSINT Wave A** | theHarvester (40+ sources), xurlfind3r | Concurrent with Phase 1 and PD Wave A |
+| 2 | **Subdomain Discovery** | Amass (passive + active) | Concurrent with Phase 1; skip with `--skip-amass` |
+| PD-B | **PD Wave B** | dnsx | DNS resolution of all discovered subdomains |
+| 1.5-B | **Passive OSINT Wave B** | puredns (DNS brute-force), waybackurls, waymore | After subdomain collection |
 | 4 | **IP Intelligence** | PTR lookups, ASN mapping, geolocation, BGP data | Cloud/CDN detection |
-| 4.5 | **Shodan CLI** | shodan CLI per-IP scan | Open ports, banners, CVEs per host |
+| PD-CE | **PD Wave C+E** | cdncheck, asnmap, uncover, cloudlist | CDN/ASN/cloud after IPs are known |
+| PD-D | **PD Wave D** | katana (passive crawl) | Web crawling via ProjectDiscovery |
 | 5 | **WHOIS** | python-whois, manual WHOIS query | Registrar, nameservers, abuse contacts |
-| 6 | **Company Intelligence** | LinkedIn, Crunchbase, EDGAR SEC filings, Maltego seed | Org structure, subsidiaries, executives |
-| 7 | **Email & People OSINT** | Hunter.io, HIBP, Dehashed, maigret, EmailHarvester, TruffleHog | Employee emails, breach exposure, social profiles |
-| 8 | **Web Crawling** | katana (JS-aware), sensitive file detection | URLs, forms, secrets in page content |
-| 1.5-C | **Tech Fingerprinting** | Wappalyzer, cloud_enum | Tech stack per host, S3/Azure/GCP bucket enum |
+| 6 | **Company Intelligence** | EDGAR SEC filings, LinkedIn, Maltego seed | Org structure, subsidiaries, executives |
+| 7 | **Email & People OSINT** | Hunter.io, HIBP, Dehashed, maigret, EmailHarvester, TruffleHog, gato, exiftool | Employee emails, breach exposure, social profiles, git secrets |
+| 1.5-C | **Tech Fingerprinting** | Wappalyzer, cloud_enum, HakOriginFinder | Tech stack per host, S3/Azure/GCP bucket enum, origin IP detection |
 | 10 | **OSINT API Engine** | Shodan, Censys, FullHunt, SecurityTrails, Netlas, VirusTotal, URLScan, OTX | Attack surface, threat intel, reputation, passive DNS |
-| PD | **ProjectDiscovery Toolkit** | subfinder, chaos, shuffledns, dnsx, httpx, naabu, tlsx, cdncheck, katana, asnmap, uncover, cloudlist | Full PD sweep: subdomains → live hosts → TLS → open ports → cloud assets |
 | 11 | **DNS Enrichment** | dig, dnsx | Per-IP PTR, A, AAAA, CNAME resolution for all confirmed subdomains |
-| 9 | **Aggregation & Final Report** | IntelAggregator, RawOutputParser, SubdomainConfirmer | Cross-tool deduplication, subdomain liveness confirmation |
-| 12 | **M365 Credential Spray** | TREVORspray | Azure AD credential spray against confirmed O365 tenants |
 | 13 | **GitHub Secret Scanning** | GitDorker | Dork GitHub for org secrets, API keys, credentials |
+| 14 | **People Dorking** | SerpAPI / DuckDuckGo | Search-engine dorks for employee PII and contact intelligence |
+| 4.5 | **Shodan CLI** | shodan CLI per-IP scan | Open ports, banners, CVEs per host |
+| 15 | **dnstwist** | dnstwist | Typosquatting and brand impersonation domain detection |
+| 16 | **VT Reputation Sweep** | VirusTotal API | Subdomain + dnstwist domain reputation check |
+| 17 | **Azure Tenant Recon** | Azure AD API | O365 tenant discovery, federation detection, MX/autodiscover probing |
+| 12/9 | **Aggregation & Report** | IntelAggregator, RawOutputParser, SubdomainConfirmer, PhoneValidator | Intel classification, phone validation, cross-tool deduplication, subdomain liveness, final report generation |
+
+---
+
+## CLI Reference
+
+### Target and Output
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-c`, `--company` | `str` | *(required)* | Target company name |
+| `-d`, `--domain` | `str` (one or more) | *(required)* | Target FQDN(s) -- one or more (e.g. `acme.com acme.co.uk`) |
+| `--settings` | `FILE` | `osift_settings.json` | Path to JSON settings file containing API keys and options |
+| `--output-base` | `DIR` | *(auto)* | Override base output directory path |
+| `--project-dir` | `DIR` | | Crucible project root; evidence paths stored relative to this directory |
+| `--client-short` | `SLUG` | | Client short name / abbreviation for project directory naming |
+| `--year` | `YYYY` | *(current)* | Engagement year for project directory naming |
+
+### Web Crawling
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--max-pages` | `int` | `200` | Max pages to crawl per host |
+| `--max-depth` | `int` | `3` | Max crawl depth |
+| `--wordlist` | `FILE` | | Custom wordlist for DNS brute force |
+
+### Breach Intelligence Keys
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--hibp-key` | `KEY` | | Have I Been Pwned API key (paid -- domain search) |
+| `--dehashed-user` | `EMAIL` | | Dehashed account email |
+| `--dehashed-key` | `KEY` | | Dehashed API key |
+
+### Phase 10 -- OSINT API Intelligence (all optional)
+
+Provide API keys to enable each intelligence source. Missing keys cause that source to be skipped.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--shodan-key` | `KEY` | | Shodan API key -- host/port/vuln/cert data |
+| `--censys-id` | `API_ID` | | Censys API ID -- TLS cert + host data |
+| `--censys-secret` | `SECRET` | | Censys API secret -- required together with `--censys-id` |
+| `--fullhunt-key` | `KEY` | | FullHunt API key -- EASM: subdomains, hosts, tech stack |
+| `--securitytrails-key` | `KEY` | | SecurityTrails API key -- DNS history, subdomain DB, WHOIS history |
+| `--netlas-key` | `KEY` | | Netlas API key -- internet scan: responses, certs, DNS, WHOIS, IoC |
+| `--virustotal-key` | `KEY` | | VirusTotal API key -- domain/IP reputation, passive DNS, 70+ AV vendors |
+| `--urlscan-key` | `KEY` | | URLScan.io API key -- scan history, tech stack, verdicts |
+| `--otx-key` | `KEY` | | AlienVault OTX API key -- threat feeds, passive DNS, malware |
+| `--hunter-key` | `KEY` | | Hunter.io API key -- email discovery, company enrichment |
+
+### ProjectDiscovery Toolkit (all optional)
+
+Keys/config for ProjectDiscovery tools. Missing tools are auto-installed via `go install` if Go is present.
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--chaos-key` | `KEY` | | Chaos DB API key for chaos subdomain dataset |
+| `--cloudlist-config` | `PATH` | | Path to cloudlist YAML config with cloud provider credentials |
+| `--skip-pd` | flag | | Skip all ProjectDiscovery tool phases entirely |
+
+### Phase 1.5 -- Passive OSINT Tool Suite
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--harvester-limit` | `int` | `500` | Max results per source for theHarvester |
+| `--skip-passive` | flag | | Skip all Phase 1.5 passive OSINT tools (theHarvester, xurlfind3r, EmailHarvester, puredns, waybackurls, cloud_enum, maigret, TruffleHog, Maltego) |
+| `--skip-xurlfind3r` | flag | | Skip xurlfind3r URL discovery (still runs theHarvester) |
+| `--skip-wayback` | flag | | Skip waybackurls Wayback Machine CDX mining (Wave B) |
+| `--skip-cloud-enum` | flag | | Skip cloud_enum cloud storage bucket enumeration (Wave C) |
+| `--github-org` | `ORG` | *(inferred)* | GitHub organisation name for TruffleHog secret scanning |
+
+### Phone Validation
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--abstractapi-phone-key` | `KEY` | | Abstract API phone validation key for external carrier-level enrichment |
+
+### Phase Skip Flags
+
+| Flag | Description |
+|------|-------------|
+| `--skip-crawl` | Skip web crawling |
+| `--skip-amass` | Skip Amass enumeration |
+| `--skip-brute` | Skip DNS brute forcing |
+| `--skip-api` | Skip Phase 10 OSINT API intelligence entirely |
+| `--skip-dns-enrich` | Skip Phase 11 DNS enrichment (dig + dnsx) |
+| `--no-gitdorker` | Skip Phase 13 GitDorker GitHub secret scanning |
+| `--no-dork` | Skip Phase 14 People Dorking (search-engine dorks for employee PII) |
+| `--no-dnstwist` | Skip Phase 15 dnstwist typosquatting detection |
+| `--no-vt-sweep` | Skip Phase 16 VirusTotal subdomain reputation sweep |
+
+### Phase-Specific Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--github-token` | `TOKEN` | | GitHub personal access token for GitDorker (Phase 13) |
+| `--serpapi-key` | `KEY` | | SerpAPI key for Google-backed dork execution in Phase 14 (optional; DuckDuckGo used if omitted) |
+| `--max-vt-sweep` | `int` | `100` | Max subdomains to check in VT sweep (Phase 16) |
+| `--edgar-email` | `EMAIL` | *(placeholder)* | Email address sent in SEC EDGAR User-Agent header (required by SEC policy) |
 
 ---
 
@@ -116,13 +222,17 @@ The following tools are detected at runtime. Missing tools are skipped gracefull
 | `puredns` | DNS brute-force with wildcard filtering |
 | `waybackurls` | Wayback Machine URL extraction |
 | `xurlfind3r` | Passive URL discovery (Wayback, CommonCrawl, OTX, GitHub) |
+| `waymore` | Extended Wayback Machine mining |
 | `maigret` | Social profile OSINT by username |
 | `trufflehog` | Secret scanning across git history and web |
 | `cloud_enum` | Cloud bucket enumeration (S3, Azure Blob, GCP) |
 | `wappalyzer` | Technology fingerprinting (CLI) |
 | `shodan` | Shodan CLI for per-IP open-port enumeration |
-| `TREVORspray` | M365/Azure AD credential spray |
 | `GitDorker` | GitHub dork-based secret scanning |
+| `dnstwist` | Typosquatting and brand impersonation domain detection |
+| `gato` | GitHub Actions security auditing |
+| `hakoriginfinder` | Origin IP discovery behind CDN/WAF |
+| `exiftool` | Metadata extraction from crawled documents |
 | `subfinder` | Fast passive subdomain discovery (ProjectDiscovery) |
 | `httpx` | HTTP probing and tech detection (ProjectDiscovery) |
 | `dnsx` | DNS resolution and enrichment (ProjectDiscovery) |
@@ -160,6 +270,9 @@ Python dependencies are detected at startup and offered for auto-install. Projec
 # Basic scan — company name and domain
 sudo python3 OSift.py -c "Acme Corp" -d acme.com
 
+# Multi-domain scan
+sudo python3 OSift.py -c "Acme Corp" -d acme.com acme.co.uk acme.io
+
 # With API keys passed inline
 sudo python3 OSift.py -c "Acme Corp" -d acme.com \
   --shodan-key YOUR_KEY --virustotal-key YOUR_KEY --hunter-key YOUR_KEY
@@ -181,37 +294,6 @@ sudo python3 OSift.py --settings osift_settings.json
 ```
 
 CLI arguments always override settings file values.
-
-### Common flags
-
-| Flag | Description |
-|------|-------------|
-| `-c COMPANY` | Company name (required) |
-| `-d DOMAIN` | Primary domain (required) |
-| `--settings FILE` | Load API keys and defaults from JSON settings file |
-| `--output-base DIR` | Override base output directory path |
-| `--max-pages N` | Max pages to crawl per host (default: 200) |
-| `--max-depth N` | Max crawl depth (default: 3) |
-| `--wordlist FILE` | Custom wordlist for DNS brute-force |
-| `--skip-crawl` | Skip web crawling |
-| `--skip-amass` | Skip Amass enumeration |
-| `--skip-brute` | Skip DNS brute-forcing |
-| `--skip-api` | Skip Phase 10 OSINT API intelligence entirely |
-| `--skip-dns-enrich` | Skip Phase 11 DNS enrichment |
-| `--no-spray` | Skip Phase 12 TREVORspray credential spraying |
-| `--no-gitdorker` | Skip Phase 13 GitDorker GitHub secret scanning |
-| `--github-token TOKEN` | GitHub personal access token for GitDorker |
-| `--hibp-key KEY` | Have I Been Pwned API key (domain search) |
-| `--dehashed-user EMAIL` | Dehashed account email |
-| `--dehashed-key KEY` | Dehashed API key |
-| `--shodan-key KEY` | Shodan API key |
-| `--censys-id ID` | Censys API ID |
-| `--censys-secret SECRET` | Censys API secret |
-| `--securitytrails-key KEY` | SecurityTrails API key |
-| `--netlas-key KEY` | Netlas API key |
-| `--virustotal-key KEY` | VirusTotal API key |
-| `--hunter-key KEY` | Hunter.io API key |
-| `--chaos-key KEY` | ProjectDiscovery Chaos API key |
 
 ---
 
@@ -302,15 +384,15 @@ The settings file allows API keys and scan options to be persisted across engage
 ├── web/                        Crawled pages, sensitive data hits
 ├── shodan/                     Shodan CLI per-IP results
 ├── projectdiscovery/           PD tool results (subfinder, httpx, dnsx, naabu, etc.)
-├── spray/                      TREVORspray M365 results
+├── dnstwist/                   Typosquatting detection results
 ├── gitdorker/                  GitDorker GitHub secret scan results
 ├── reports/
-│   ├── findings_crucible.json  ← Crucible-compatible findings (primary)
-│   ├── findings_report.json    ← Unified deduplicated findings
-│   ├── final_report.json       ← Full machine-readable report
-│   ├── subdomains_confirmed.csv← Live confirmed subdomains
-│   ├── targets_osint.json      ← Enriched target IP/host map
-│   └── tools_used.json         ← Tool availability log
+│   ├── findings_crucible.json  Crucible-compatible findings (primary)
+│   ├── findings_report.json    Unified deduplicated findings
+│   ├── final_report.json       Full machine-readable report
+│   ├── subdomains_confirmed.csv  Live confirmed subdomains
+│   ├── targets_osint.json      Enriched target IP/host map
+│   └── tools_used.json         Tool availability log
 ├── scan.log                    Human-readable progress log
 ├── scan.log.json               Structured JSON log
 ├── errors.log                  Tool errors and exceptions
@@ -351,6 +433,8 @@ When launched by Crucible (`CRUCIBLE_MANAGED=1`), OSift switches to structured p
 | `__CRUCIBLE_ERR__:` | Error line forwarded to UI |
 | `__CRUCIBLE_STATUS__:` | Phase progress update |
 | `__CRUCIBLE_PROMPT__:` | Interactive prompt requiring user response |
+| `__CRUCIBLE_FINDING__:` | Real-time finding emission |
+| `__CRUCIBLE_ACTION_ITEM__:` | Action item for manual follow-up |
 
 Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress in real time.
 
@@ -362,10 +446,13 @@ Dependency installs are non-interactive (auto-approved). Phase status is reporte
 - **Scan resumption** — Re-running against the same output directory resumes from the last completed phase. Partial phase results are discarded and re-run.
 - **FindingStore deduplication** — All findings are keyed on a 16-hex SHA fingerprint derived from `(title, host, port, tool)`. Duplicate findings from overlapping tools are merged automatically.
 - **ProjectDiscovery tools** — Auto-installed via `go install` into `$GOPATH/bin`. If Go is not present, PD phases are skipped gracefully.
-- **TREVORspray (Phase 12)** — Only runs against targets where O365 tenant discovery succeeds. Skip with `--no-spray`.
 - **GitDorker (Phase 13)** — Requires a GitHub personal access token (`--github-token`). Skip with `--no-gitdorker`.
+- **People Dorking (Phase 14)** — Uses SerpAPI for Google-backed results when `--serpapi-key` is provided; falls back to DuckDuckGo when omitted. Skip with `--no-dork`.
+- **dnstwist (Phase 15)** — Detects typosquatting and brand impersonation domains. Skip with `--no-dnstwist`.
+- **VT Reputation Sweep (Phase 16)** — Checks subdomain and dnstwist-discovered domain reputation via VirusTotal. Requires `--virustotal-key`. Skip with `--no-vt-sweep`.
+- **Azure Tenant Recon (Phase 17)** — Probes Azure AD tenant endpoints, federation configuration, and autodiscover records for each target domain.
 - **`uncover` engines** — Each engine (FOFA, Quake360, ZoomEye, CriminalIP) only queries if its API key is present in the settings file or environment.
-- All tool timeouts are hardened defaults. Long-running tools (amass, puredns, katana) default to 300–600 seconds.
+- All tool timeouts are hardened defaults. Long-running tools (amass, puredns, katana) default to 300-600 seconds.
 
 ---
 
@@ -394,7 +481,6 @@ OSift integrates and depends on the following external tools and Python librarie
 | theHarvester | Christian Martorella | @laramies | https://github.com/laramies/theHarvester |
 | ffuf | Joohoi | @joohoi | https://github.com/ffuf/ffuf |
 | waybackurls | Tom Hudson | @tomnomnom | https://github.com/tomnomnom/waybackurls |
-| TREVORspray | Black Lantern Security | @blacklanternsecurity | https://github.com/blacklanternsecurity/TREVORspray |
 | GitDorker | obheda12 | @obheda12 | https://github.com/obheda12/GitDorker |
 | trufflehog | Truffle Security | @trufflesecurity | https://github.com/trufflesecurity/trufflehog |
 | puredns | d3mondev | @d3mondev | https://github.com/d3mondev/puredns |
@@ -403,6 +489,10 @@ OSift integrates and depends on the following external tools and Python librarie
 | cloud_enum | initstring | @initstring | https://github.com/initstring/cloud_enum |
 | whatweb | urbanadventurer | @urbanadventurer | https://github.com/urbanadventurer/WhatWeb |
 | shodan CLI | Shodan.io / John Matherly | @achillean | https://github.com/achillean/shodan-python |
+| dnstwist | elceef | @elceef | https://github.com/elceef/dnstwist |
+| gato | AdnaneKhan | @AdnaneKhan | https://github.com/AdnaneKhan/gato |
+| hakoriginfinder | hakluke | @hakluke | https://github.com/hakluke/hakoriginfinder |
+| waymore | xnl-h4ck3r | @xnl-h4ck3r | https://github.com/xnl-h4ck3r/waymore |
 
 ### Python Libraries
 

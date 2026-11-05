@@ -454,7 +454,7 @@ try:
 except ImportError:
     _OPENPYXL_AVAILABLE = False
 
-# ─── Vantage protocol tokens & dual-mode console ─────────────────────────────
+# ─── Crucible protocol tokens & dual-mode console ─────────────────────────────
 
 _CP_LOG     = "__CRUCIBLE_LOG__:"
 _CP_ERR     = "__CRUCIBLE_ERR__:"
@@ -464,7 +464,7 @@ _CP_ACTION  = "__CRUCIBLE_ACTION_ITEM__:"
 _CP_FINDING = "__CRUCIBLE_FINDING__:"
 
 
-class VantageConsole:
+class CrucibleConsole:
     """Dual-mode console output.
 
     When CRUCIBLE_MANAGED=1: emits protocol tokens that Crucible intercepts for
@@ -549,8 +549,8 @@ class VantageConsole:
             sys.stdout.flush()
 
     def action_item(self, entry: dict) -> None:
-        """Emit a live action-item event so Vantage can update the
-        Action Items tab in real time (no-op outside Vantage)."""
+        """Emit a live action-item event so Crucible can update the
+        Action Items tab in real time (no-op outside Crucible)."""
         if not self._managed:
             return
         with self._lock:
@@ -709,11 +709,11 @@ class ProgressManager:
 
 
 # Module-level singleton console; ProgressManager is created in main()
-_vc: VantageConsole = VantageConsole()
+_cc: CrucibleConsole = CrucibleConsole()
 _pm: "ProgressManager | None" = None
 _PAUSE: "_pp.PauseManager | None" = None  # type: ignore[name-defined]
-# Optional Vantage project root; when set, evidence output_file paths are stored
-# relative to this directory instead of output_dir (so Vantage can serve them).
+# Optional Crucible project root; when set, evidence output_file paths are stored
+# relative to this directory instead of output_dir (so Crucible can serve them).
 _project_dir: Optional[Path] = None
 _OSIFT_PHASE = ["recon"]   # §14h: current phase label for per-request HTTP evidence
 # §14i: registry of all HttpEvidenceRecorder instances so FindingStore.add() can
@@ -726,7 +726,7 @@ _consumed_evidence: set = set()
 
 # §14j: run-dir audit logger (scan.log + scan.log.json + errors.log), set in
 # main() once the run directory is known. Phase transitions persist here so the
-# audit trail survives without the live Vantage manager attached.
+# audit trail survives without the live Crucible manager attached.
 try:
     import sys as _s14j
     if "/opt/pr0t31n/shared" not in _s14j.path:
@@ -777,7 +777,7 @@ def _record_timeout_action_item(
         "metadata":         {"failure_type": "timeout_or_error"},
     }
     _timeout_action_items.append(entry)
-    _vc.action_item(entry)
+    _cc.action_item(entry)
 
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -1323,7 +1323,7 @@ def load_settings(settings_path: Union[str, Path]) -> Dict[str, Any]:
         schema = _FLAT_SCHEMA.get(key)
 
         if schema is None:
-            # Silently ignore Vantage-only metadata keys (consultant, etc.)
+            # Silently ignore Crucible-only metadata keys (consultant, etc.)
             return
 
         # Skip empty / placeholder values
@@ -1381,7 +1381,7 @@ def load_settings(settings_path: Union[str, Path]) -> Dict[str, Any]:
             for key, value in section_val.items():
                 _process_key(key, value, section_name)
         else:
-            # Flat format (Vantage): {"shodan_key": "...", "company": "..."}
+            # Flat format (Crucible): {"shodan_key": "...", "company": "..."}
             _process_key(section_name, section_val, "flat")
 
     if warnings:
@@ -2287,7 +2287,7 @@ _API_TOOL_VERSIONS: Dict[str, str] = {
 for _svc, _ver in _API_TOOL_VERSIONS.items():
     TOOL_REGISTRY.register(_svc, _ver)
 
-# Map tool names → install/package type for Vantage Tools tab display
+# Map tool names → install/package type for Crucible Tools tab display
 _TOOL_TYPES: Dict[str, str] = {
     # Internal OSift modules
     "OSift":             "Internal",
@@ -6187,7 +6187,7 @@ class CrtShAPI:
     """Certificate Transparency log search via crt.sh's JSON endpoint."""
 
     def __init__(self, domain: str, out_dir: Path,
-                  data: "ReconData", log: VantageConsole):
+                  data: "ReconData", log: CrucibleConsole):
         self.domain = domain
         self.out    = out_dir / "company" / "tools" / "crtsh"
         self.out.mkdir(parents=True, exist_ok=True)
@@ -6266,7 +6266,7 @@ class IntelXAPI:
     """intelx.io selector search via their public API."""
 
     def __init__(self, domain: str, out_dir: Path,
-                  data: "ReconData", log: VantageConsole,
+                  data: "ReconData", log: CrucibleConsole,
                   api_key: str = ""):
         self.domain = domain
         self.out    = out_dir / "company" / "tools" / "intelx"
@@ -6342,7 +6342,7 @@ class IntelXAPI:
 
 class FOFAAPI:
     def __init__(self, domain: str, out_dir: Path,
-                  data: "ReconData", log: VantageConsole,
+                  data: "ReconData", log: CrucibleConsole,
                   email: str = "", api_key: str = ""):
         self.domain = domain
         self.out    = out_dir / "company" / "tools" / "fofa"
@@ -6405,7 +6405,7 @@ class FOFAAPI:
 
 class ZoomEyeAPI:
     def __init__(self, domain: str, out_dir: Path,
-                  data: "ReconData", log: VantageConsole,
+                  data: "ReconData", log: CrucibleConsole,
                   api_key: str = ""):
         self.domain = domain
         self.out    = out_dir / "company" / "tools" / "zoomeye"
@@ -6464,7 +6464,7 @@ class ZoomEyeAPI:
 
 class GitLeakScanner:
     def __init__(self, domain: str, out_dir: Path,
-                  data: "ReconData", log: VantageConsole,
+                  data: "ReconData", log: CrucibleConsole,
                   repos: "list[str] | None" = None):
         self.domain = domain
         self.out    = out_dir / "company" / "tools" / "gitleaks"
@@ -6917,7 +6917,7 @@ class ReconLogger:
             self.logger.info(f"{self._tag()} {msg}")
         self._log_json("INFO", msg, kw)
         if _CRUCIBLE_MANAGED:
-            _vc.log(msg, level="INFO")
+            _cc.log(msg, level="INFO")
 
     def debug(self, msg: str, **kw):
         self.logger.debug(f"{self._tag()} {msg}")
@@ -6927,14 +6927,14 @@ class ReconLogger:
             self.logger.warning(f"{self._tag()} {msg}")
         self._log_json("WARNING", msg, kw)
         if _CRUCIBLE_MANAGED:
-            _vc.log(msg, level="WARNING")
+            _cc.log(msg, level="WARNING")
 
     def success(self, msg: str, **kw):
         if not _CRUCIBLE_MANAGED:
             self.logger.info(f"{self._tag()} [OK] {msg}")
         self._log_json("SUCCESS", msg, kw)
         if _CRUCIBLE_MANAGED:
-            _vc.log(msg, level="INFO")
+            _cc.log(msg, level="INFO")
 
     def error(self, msg: str, exc: Optional[Exception] = None, **kw):
         full = msg + (f" | {type(exc).__name__}: {exc}" if exc else "")
@@ -6943,7 +6943,7 @@ class ReconLogger:
         self._log_json("ERROR", full, kw)
         self._write_error(full, exc)
         if _CRUCIBLE_MANAGED:
-            _vc.error(full, source=getattr(self._tool_local, "tool", "OSift"))
+            _cc.error(full, source=getattr(self._tool_local, "tool", "OSift"))
 
     def log_command(
         self,
@@ -7565,9 +7565,9 @@ def _osift_pip_install(pkg) -> tuple:
 
 
 def _tool_log(log: "ReconLogger", msg: str, level: str = "INFO") -> None:
-    """Emit a tool-check message to VantageConsole (managed) or ReconLogger (TTY)."""
+    """Emit a tool-check message to CrucibleConsole (managed) or ReconLogger (TTY)."""
     if _CRUCIBLE_MANAGED:
-        _vc.log(msg, level)
+        _cc.log(msg, level)
     elif level in ("WARNING", "WARN"):
         log.warning(msg)
     elif level == "SUCCESS":
@@ -7623,7 +7623,7 @@ def check_python_deps(log: ReconLogger):
     if not missing:
         return
 
-    # ── Vantage-managed: auto-install silently without sys.exit() ────────────
+    # ── Crucible-managed: auto-install silently without sys.exit() ────────────
     if _CRUCIBLE_MANAGED:
         sys.stdout.write(
             "__CRUCIBLE_LOG__:" + json.dumps({
@@ -12079,7 +12079,7 @@ class PureDNSRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "puredns")
         self.log.set_tool_context("puredns")
-        _vc.status("tool_puredns",
+        _cc.status("tool_puredns",
                    label="puredns (brute-force + wildcard filter)",
                    status="running", active_tool="dns/puredns")
 
@@ -12137,7 +12137,7 @@ class PureDNSRunner:
                 output_file=str(brute_out),
             )
         self.log.success(f"[puredns] Complete — {total} new subdomains discovered")
-        _vc.status("tool_puredns",
+        _cc.status("tool_puredns",
                    label="puredns (brute-force + wildcard filter)",
                    status="complete", active_tool="dns/puredns")
         return total
@@ -12203,7 +12203,7 @@ class WaybackURLsRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "waybackurls")
         self.log.set_tool_context("waybackurls")
-        _vc.status("tool_waybackurls",
+        _cc.status("tool_waybackurls",
                    label="waybackurls (Wayback Machine CDX mining)",
                    status="running", active_tool="tools/waybackurls")
 
@@ -12258,7 +12258,7 @@ class WaybackURLsRunner:
                 )
 
         self.log.success(f"[waybackurls] Complete — {count} new historical URLs ingested")
-        _vc.status("tool_waybackurls",
+        _cc.status("tool_waybackurls",
                    label="waybackurls (Wayback Machine CDX mining)",
                    status="complete", active_tool="tools/waybackurls")
         return count
@@ -13451,7 +13451,7 @@ class GatoRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "gato")
         self.log.set_tool_context("gato")
-        _vc.status("tool_gato",
+        _cc.status("tool_gato",
                    label="gato (GitHub Actions security audit)",
                    status="running", active_tool="tools/gato")
 
@@ -13484,7 +13484,7 @@ class GatoRunner:
         count = self._parse(combined, out_file)
 
         self.log.success(f"[gato] Complete — {count} GitHub Actions findings")
-        _vc.status("tool_gato",
+        _cc.status("tool_gato",
                    label="gato (GitHub Actions security audit)",
                    status="complete", active_tool="tools/gato")
         return count
@@ -13697,7 +13697,7 @@ class HakOriginFinderRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "hakoriginfinder")
         self.log.set_tool_context("hakoriginfinder")
-        _vc.status("tool_hakoriginfinder",
+        _cc.status("tool_hakoriginfinder",
                    label="hakoriginfinder (CDN/WAF origin bypass)",
                    status="running", active_tool="tools/hakoriginfinder")
 
@@ -13720,7 +13720,7 @@ class HakOriginFinderRunner:
         count = self._parse(stdout, out_file)
 
         self.log.success(f"[hakoriginfinder] Complete — {count} origin IP candidates found")
-        _vc.status("tool_hakoriginfinder",
+        _cc.status("tool_hakoriginfinder",
                    label="hakoriginfinder (CDN/WAF origin bypass)",
                    status="complete", active_tool="tools/hakoriginfinder")
         return count
@@ -13867,7 +13867,7 @@ class WaymoreRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "waymore")
         self.log.set_tool_context("waymore")
-        _vc.status("tool_waymore",
+        _cc.status("tool_waymore",
                    label="waymore (historical endpoint discovery)",
                    status="running", active_tool="tools/waymore")
 
@@ -13898,7 +13898,7 @@ class WaymoreRunner:
         count = self._ingest(out_file)
 
         self.log.success(f"[waymore] Complete — {count} new URLs ingested")
-        _vc.status("tool_waymore",
+        _cc.status("tool_waymore",
                    label="waymore (historical endpoint discovery)",
                    status="complete", active_tool="tools/waymore")
         return count
@@ -14074,7 +14074,7 @@ class ExiftoolRunner:
 
         TOOL_REGISTRY.query_and_register(binary, "exiftool")
         self.log.set_tool_context("exiftool")
-        _vc.status("tool_exiftool",
+        _cc.status("tool_exiftool",
                    label="exiftool (document metadata OSINT)",
                    status="running", active_tool="tools/exiftool")
 
@@ -14130,7 +14130,7 @@ class ExiftoolRunner:
         )
 
         self.log.success(f"[exiftool] Complete — {count} metadata findings from {len(all_metadata)} documents")
-        _vc.status("tool_exiftool",
+        _cc.status("tool_exiftool",
                    label="exiftool (document metadata OSINT)",
                    status="complete", active_tool="tools/exiftool")
         return count
@@ -15758,7 +15758,7 @@ class PDCdncheck:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[cdncheck] Binary not found — skipping")
             return 0
-        _vc.status("tool_cdncheck", label="cdncheck / asnmap (CDN / ASN / cloud)",
+        _cc.status("tool_cdncheck", label="cdncheck / asnmap (CDN / ASN / cloud)",
                    status="running", active_tool="ip_addresses")
 
         targets = list(self.data.ip_addresses.keys()) + list(self.data.subdomains.keys())
@@ -15818,7 +15818,7 @@ class PDCdncheck:
             json.dumps(records, indent=2, default=str), encoding="utf-8"
         )
         self.log.success(f"[cdncheck] Classified {cdn_count} CDN/cloud/WAF targets")
-        _vc.status("tool_cdncheck", label="cdncheck / asnmap (CDN / ASN / cloud)",
+        _cc.status("tool_cdncheck", label="cdncheck / asnmap (CDN / ASN / cloud)",
                    status="complete", active_tool="ip_addresses")
         return cdn_count
 
@@ -16059,7 +16059,7 @@ class PDASNmap:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[asnmap] Binary not found — skipping")
             return 0
-        _vc.status("tool_asnmap", label="asnmap (ASN to CIDR expansion)",
+        _cc.status("tool_asnmap", label="asnmap (ASN to CIDR expansion)",
                    status="running", active_tool="ip_addresses")
 
         orgs, asns = self._collect_orgs_and_asns()
@@ -16159,7 +16159,7 @@ class PDASNmap:
         out_json = self.out / "asnmap_results.json"
         out_json.write_text(json.dumps(all_ranges, indent=2, default=str), encoding="utf-8")
         self.log.success(f"[asnmap] {cidr_count} CIDR ranges discovered from {len(targets)} target(s)")
-        _vc.status("tool_asnmap", label="asnmap (ASN to CIDR expansion)",
+        _cc.status("tool_asnmap", label="asnmap (ASN to CIDR expansion)",
                    status="complete", active_tool="ip_addresses")
         return cidr_count
 
@@ -16239,7 +16239,7 @@ class PDUncover:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[uncover] Binary not found — skipping")
             return 0
-        _vc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
+        _cc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
                    status="running", active_tool="api_intel/uncover")
 
         env    = self._setup_env()
@@ -16264,7 +16264,7 @@ class PDUncover:
 
         if not engines_available:
             self.log.info("[uncover] No engine API keys detected — skipping")
-            _vc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
+            _cc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
                        status="skipped", active_tool="api_intel/uncover")
             return 0
 
@@ -16321,7 +16321,7 @@ class PDUncover:
                     )
 
         self.log.success(f"[uncover] {total} unique hosts found via {engines_str}")
-        _vc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
+        _cc.status("tool_uncover", label="uncover (Shodan/Censys/Fofa internet search)",
                    status="complete", active_tool="api_intel/uncover")
         return total
 
@@ -16365,19 +16365,19 @@ class PDCloudlist:
         if not shutil.which(binary) and not os.path.isfile(binary):
             self.log.warning("[cloudlist] Binary not found — skipping")
             return 0
-        _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+        _cc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
                    status="running", active_tool="company/info/cloudlist")
         if not self.cloud_config:
             self.log.info(
                 "[cloudlist] No cloud config path provided — skipping "
                 "(use --cloudlist-config to point to a cloudlist YAML)"
             )
-            _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+            _cc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
                        status="skipped", active_tool="company/info/cloudlist")
             return 0
         if not os.path.isfile(self.cloud_config):
             self.log.warning(f"[cloudlist] Config file not found: {self.cloud_config}")
-            _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+            _cc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
                        status="skipped", active_tool="company/info/cloudlist")
             return 0
 
@@ -16442,7 +16442,7 @@ class PDCloudlist:
         self.log.success(
             f"[cloudlist] {len(records)} cloud assets | {host_count} in-scope hosts | {ip_count} IPs"
         )
-        _vc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
+        _cc.status("tool_cloudlist", label="cloudlist (cloud asset provider enumeration)",
                    status="complete", active_tool="company/info/cloudlist")
         return len(records)
 
@@ -17227,7 +17227,7 @@ def write_tools_snapshot(output_dir: Path) -> None:
 
 def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
     """
-    Write incremental targets_osint.json and findings_vantage.json so Vantage
+    Write incremental targets_osint.json and findings_crucible.json so Crucible
     can display live data during an active scan.  Called after each major phase;
     generate_final_report() overwrites these with the fully-populated versions.
     Non-fatal: any exception is silently swallowed.
@@ -17347,7 +17347,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
             encoding="utf-8",
         )
 
-        # ── findings_vantage.json ──────────────────────────────────────────────
+        # ── findings_crucible.json ──────────────────────────────────────────────
         _SKIP_SNAP = {
             "subdomain", "subdomain_enum", "subdomain_discovery",
             "email", "email_address", "ip", "ip_intel", "ip_address",
@@ -17396,7 +17396,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
                 "_tool":       "osift",
                 "_category":   _category,
             })
-        (reports_dir / "findings_vantage.json").write_text(
+        (reports_dir / "findings_crucible.json").write_text(
             json.dumps(snap_findings, indent=2, default=str),
             encoding="utf-8",
         )
@@ -17444,7 +17444,7 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
             "metadata":         metadata or {},
         }
         items.append(entry)
-        _vc.action_item(entry)
+        _cc.action_item(entry)
 
     # ── Load existing SS3 targets so we skip IPs already in scope ────────
     _ss_nets: list = []
@@ -17484,7 +17484,7 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
     _ext_nets: list = []
     _has_ext_scope = False
     if _project_dir:
-        for _meta_name in ("crucible_meta.json", "vantage_meta.json"):
+        for _meta_name in ("crucible_meta.json",):
             _meta_path = _project_dir / _meta_name
             if _meta_path.exists():
                 try:
@@ -17614,7 +17614,7 @@ def _generate_action_items(output_dir: Path, data: ReconData) -> int:
 
     # ── Known-vulnerable appliances → Manual Testing ────────────────────
     # Scan findings for appliance detections (from tlsx fingerprinting)
-    # and generate action items so they appear in the Vantage Action Items tab.
+    # and generate action items so they appear in the Crucible Action Items tab.
     for f in data.findings.all_findings():
         if f.get("category") != "Known-Vulnerable Appliance":
             continue
@@ -17940,8 +17940,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
 
     # ── Unified findings report ────────────────────────────────────────────────
     # Normalise output_file paths to be portable relative paths.
-    # When launched from Vantage with --project-dir, paths are stored relative
-    # to project_dir so the Vantage evidence viewer can resolve them directly
+    # When launched from Crucible with --project-dir, paths are stored relative
+    # to project_dir so the Crucible evidence viewer can resolve them directly
     # against the project root.  In standalone mode, paths are relative to output_dir.
     _path_base = project_dir if project_dir else (_project_dir if _project_dir else output_dir)
     _raw_findings = data.findings.all_findings()
@@ -18520,8 +18520,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         or r.get("https_status", "") in _LIVE_CODES
     )
 
-    # ── findings_vantage.json — findings normalized to Vantage format ─────────
-    # Ports app.py's _normalize_osift_findings() logic so Vantage can read this
+    # ── findings_crucible.json — findings normalized to Crucible format ─────────
+    # Ports app.py's _normalize_osift_findings() logic so Crucible can read this
     # file directly without performing its own transformation.
     _SKIP_TYPES = {
         "subdomain", "subdomain_enum", "subdomain_discovery",
@@ -18531,7 +18531,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     }
     _SEV_MAP = {"CRITICAL": "CRITICAL", "HIGH": "HIGH",
                 "MEDIUM": "MEDIUM", "LOW": "LOW", "INFO": "INFO"}
-    vantage_findings: List[Dict] = []
+    crucible_findings: List[Dict] = []
     for _f in all_findings:
         if not isinstance(_f, dict):
             continue
@@ -18586,7 +18586,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
                 _port = 443
             elif _p.scheme == "http":
                 _port = 80
-        vantage_findings.append({
+        crucible_findings.append({
             "title":       _title,
             "datetime":    _f.get("timestamp") or "",
             "ip":          _ip,
@@ -18609,13 +18609,13 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             "_tool":       "osift",
             "_category":   _category,
         })
-    fv_path = output_dir / "reports" / "findings_vantage.json"
+    fv_path = output_dir / "reports" / "findings_crucible.json"
     fv_path.write_text(
-        json.dumps(vantage_findings, indent=2, default=str), encoding="utf-8"
+        json.dumps(crucible_findings, indent=2, default=str), encoding="utf-8"
     )
 
-    # ── targets_osint.json — OSINT asset aggregation in Vantage format ─────────
-    # Ports app.py's /api/targets OSINT section so Vantage can read directly.
+    # ── targets_osint.json — OSINT asset aggregation in Crucible format ─────────
+    # Ports app.py's /api/targets OSINT section so Crucible can read directly.
     _SUB_TYPES_V   = {"subdomain", "subdomain_enum", "subdomain_discovery", "primary_subdomain"}
     _EMAIL_TYPES_V = {"email", "email_address", "credential_email"}
     _IP_TYPES_V    = {"ip", "ip_intel", "ip_address", "ip_info", "ip_reputation"}
@@ -18877,7 +18877,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
                     ws.column_dimensions[col_letter].width = min(max_len + 2, 80)
                 return ws
 
-            # Sheet 1: Findings (Vantage-normalised)
+            # Sheet 1: Findings (Crucible-normalised)
             _xl_sheet(
                 _wb, "Findings",
                 ["Title", "Risk", "IP", "Port", "Hostname", "Description",
@@ -18888,7 +18888,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
                      f.get("description",""), f.get("sources",""),
                      f.get("cves",""), f.get("command",""),
                      f.get("datetime",""), f.get("_category","")]
-                    for f in vantage_findings
+                    for f in crucible_findings
                 ],
             )
 
@@ -18984,7 +18984,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         f"[REPORT] Findings CSV      : {findings_csv_path.name}  ({len(_csv_findings)} findings, {len(all_findings) - len(_csv_findings)} sensitive-data excluded)"
     )
     log.success(
-        f"[REPORT] Findings Vantage  : {fv_path.name}  ({len(vantage_findings)} findings)"
+        f"[REPORT] Findings Crucible  : {fv_path.name}  ({len(crucible_findings)} findings)"
     )
     log.success(
         f"[REPORT] Targets OSINT     : {to_path.name}  "
@@ -19830,7 +19830,7 @@ class IntelAggregator:
         self.data._aggregated_phones = intel["phone_numbers"]
         self._insert_classification_findings(intel)
         out   = self._write_findings_file(intel)
-        self._write_vantage_flat(intel)
+        self._write_crucible_flat(intel)
 
         st = intel["stats"]
         self.log.success(
@@ -21189,13 +21189,13 @@ class IntelAggregator:
         self.log.success(f"[AGGREGATE] Unified findings → {out_path}")
         return out_path
 
-    def _write_vantage_flat(self, intel: Dict) -> None:
+    def _write_crucible_flat(self, intel: Dict) -> None:
         """
-        Write <output_dir>/findings.json — a flat JSON array in Vantage's expected
+        Write <output_dir>/findings.json — a flat JSON array in Crucible's expected
         format so the web UI can display every discovered data item as an
         informational finding in real time.
 
-        Vantage schema per item:
+        Crucible schema per item:
           title, datetime, ip, port, hostname, risk, command, description, output
         """
         ts   = intel["meta"].get("generated_at", datetime.datetime.now(_UTC).isoformat())
@@ -21523,10 +21523,10 @@ class IntelAggregator:
                 output_file=_email_evidence(email),
             ))
 
-        # Write the flat file Vantage polls
+        # Write the flat file Crucible polls
         out_path = self.output_dir / "findings.json"
         out_path.write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
-        self.log.info(f"[AGGREGATE] Vantage findings.json → {out_path} ({len(rows)} items)")
+        self.log.info(f"[AGGREGATE] Crucible findings.json → {out_path} ({len(rows)} items)")
 
 # ─── Raw Output Parser ────────────────────────────────────────────────────────
 
@@ -21611,7 +21611,7 @@ class RawOutputParser:
         "tr_settings.json",
         "fr_settings.json",
         "si_settings.json",
-        "vantage_meta.json",
+        "crucible_meta.json",
         "meta.json",
         "checkpoint.json",
         "config.json",
@@ -23998,7 +23998,7 @@ API key sources (all free tiers available):
     parser.add_argument("--year",                 default="",     metavar="YYYY",
                         help="Engagement year for project directory naming (default: current year)")
     parser.add_argument("--output-base",          default="",     help="Override base output directory path")
-    parser.add_argument("--project-dir",          default="",     help="Vantage project root; evidence paths stored relative to this directory")
+    parser.add_argument("--project-dir",          default="",     help="Crucible project root; evidence paths stored relative to this directory")
     parser.add_argument(
         "--edgar-email",
         default="",
@@ -24052,7 +24052,7 @@ API key sources (all free tiers available):
     _project_dir = project_dir  # expose for write_targets_snapshot()
 
     if args.output_base:
-        # Explicit base path (from Vantage) — use as-is, just ensure subdirs exist
+        # Explicit base path (from Crucible) — use as-is, just ensure subdirs exist
         output_dir = Path(args.output_base)
         for _sd in ("logs", "domains", "company", "ip_addresses", "api_intel", "reports"):
             (output_dir / _sd).mkdir(parents=True, exist_ok=True)
@@ -24118,7 +24118,7 @@ API key sources (all free tiers available):
     _cp_state = _pm.get_state()
     if _cp_state.get("completed_phases"):
         _cp_done = _cp_state["completed_phases"]
-        _vc.log(
+        _cc.log(
             f"Checkpoint found — {len(_cp_done)} phase(s) already complete: "
             + ", ".join(_cp_done),
             "INFO",
@@ -24145,7 +24145,7 @@ API key sources (all free tiers available):
     check_python_deps(log)
 
     # ── INIT: Tool Discovery ───────────────────────────────────────────────
-    _vc.status("os_init_tools", label="INIT: Tool Discovery", status="running")
+    _cc.status("os_init_tools", label="INIT: Tool Discovery", status="running")
     _pm.set_phase_status("os_init_tools", "running", label="INIT: Tool Discovery")
 
     # ── Detect / auto-install external binaries ────────────────────────────
@@ -24156,7 +24156,7 @@ API key sources (all free tiers available):
     if not args.skip_amass:
         amass_available = check_amass(log)
 
-    # Build tool availability map for Vantage UI
+    # Build tool availability map for Crucible UI
     _os_tool_ui: dict = {}
     for _t_name, _t_candidates, *_ in _BINARY_TOOLS:
         _t_path = _find_binary(_t_candidates)
@@ -24176,7 +24176,7 @@ API key sources (all free tiers available):
         _os_tool_ui[_py_tool] = {"installed": _py_installed, "path": f"pip:{_py_tool}"}
 
     _pm.set_phase_status("os_init_tools", "complete", label="INIT: Tool Discovery")
-    _vc.status("os_init_tools", label="INIT: Tool Discovery", status="complete",
+    _cc.status("os_init_tools", label="INIT: Tool Discovery", status="complete",
                tools=_os_tool_ui)
     write_tools_snapshot(output_dir)
 
@@ -24278,11 +24278,11 @@ API key sources (all free tiers available):
         # ── Phase 1 DNS ──────────────────────────────────────────────────────
         _p1_label = f"Phase 1 DNS: {domain}"
         if _pm.is_phase_complete(_p1_key):
-            _vc.log(f"Phase 1 DNS already complete{_lbl} — resuming from checkpoint.", "INFO")
-            _vc.status(_p1_key, label=_p1_label, status="complete")
+            _cc.log(f"Phase 1 DNS already complete{_lbl} — resuming from checkpoint.", "INFO")
+            _cc.status(_p1_key, label=_p1_label, status="complete")
         else:
             _pm.set_phase_status(_p1_key, "running", label=_p1_label)
-            _vc.status(_p1_key, label=_p1_label, status="running",
+            _cc.status(_p1_key, label=_p1_label, status="running",
                        active_tools=["dns", "dns/subdomains"])
             _section(log, f"PHASE 1: DNS Enumeration{_lbl}")
             _dns_enum = DNSEnumerator(domain, output_dir, log, data)
@@ -24293,7 +24293,7 @@ API key sources (all free tiers available):
             else:
                 _dns_enum.run()
             _pm.set_phase_status(_p1_key, "complete", label=_p1_label)
-            _vc.status(_p1_key, label=_p1_label, status="complete")
+            _cc.status(_p1_key, label=_p1_label, status="complete")
             _snap(output_dir, data)
 
         _check_pause()
@@ -24301,10 +24301,10 @@ API key sources (all free tiers available):
         # ── PD Wave A (subfinder / chaos) ────────────────────────────────────
         _pda_label = f"PD Wave A: {domain}"
         if _pm.is_phase_complete(_pda_key):
-            _vc.status(_pda_key, label=_pda_label, status="complete")
+            _cc.status(_pda_key, label=_pda_label, status="complete")
         else:
             _pm.set_phase_status(_pda_key, "running", label=_pda_label)
-            _vc.status(_pda_key, label=_pda_label, status="running",
+            _cc.status(_pda_key, label=_pda_label, status="running",
                        active_tool="dns/subdomains")
             if is_primary:
                 pd.run_wave_a()
@@ -24315,7 +24315,7 @@ API key sources (all free tiers available):
                 if pd.avail.get("chaos"):
                     PDChaos(domain, output_dir, log, data, args.chaos_key).run()
             _pm.set_phase_status(_pda_key, "complete", label=_pda_label)
-            _vc.status(_pda_key, label=_pda_label, status="complete")
+            _cc.status(_pda_key, label=_pda_label, status="complete")
             _snap(output_dir, data)
 
         _check_pause()
@@ -24323,11 +24323,11 @@ API key sources (all free tiers available):
         # ── Phase 1.5 Wave A (theHarvester / xurlfind3r) ─────────────────────
         _p15_label = f"Passive OSINT: {domain}"
         if _pm.is_phase_complete(_p15_key):
-            _vc.log(f"Phase 1.5 Wave A already complete{_lbl} — resuming from checkpoint.", "INFO")
-            _vc.status(_p15_key, label=_p15_label, status="complete")
+            _cc.log(f"Phase 1.5 Wave A already complete{_lbl} — resuming from checkpoint.", "INFO")
+            _cc.status(_p15_key, label=_p15_label, status="complete")
         elif not args.skip_passive:
             _pm.set_phase_status(_p15_key, "running", label=_p15_label)
-            _vc.status(_p15_key, label=_p15_label, status="running",
+            _cc.status(_p15_key, label=_p15_label, status="running",
                        active_tools=["tools/theharvester", "tools/xurlfind3r"])
             _section(log, f"PHASE 1.5: Passive OSINT Wave A{_lbl}")
             if is_primary:
@@ -24340,7 +24340,7 @@ API key sources (all free tiers available):
                 if not getattr(args, "skip_xurlfind3r", False):
                     XurlFind3rRunner(domain, args.company, output_dir, log, data).run()
             _pm.set_phase_status(_p15_key, "complete", label=_p15_label)
-            _vc.status(_p15_key, label=_p15_label, status="complete")
+            _cc.status(_p15_key, label=_p15_label, status="complete")
             _snap(output_dir, data)
 
         _check_pause()
@@ -24349,20 +24349,20 @@ API key sources (all free tiers available):
         _amass_label = f"Amass: {domain}"
         if not args.skip_amass and amass_available:
             if _pm.is_phase_complete(_amass_key):
-                _vc.log(f"Phase 2 Amass already complete{_lbl} — resuming from checkpoint.", "INFO")
-                _vc.status(_amass_key, label=_amass_label, status="complete")
+                _cc.log(f"Phase 2 Amass already complete{_lbl} — resuming from checkpoint.", "INFO")
+                _cc.status(_amass_key, label=_amass_label, status="complete")
             else:
                 _pm.set_phase_status(_amass_key, "running", label=_amass_label)
-                _vc.status(_amass_key, label=_amass_label, status="running",
+                _cc.status(_amass_key, label=_amass_label, status="running",
                            active_tool="tools/amass")
                 _section(log, f"PHASE 2: Amass{_lbl}")
                 AmassEnumerator(domain, output_dir, log, data).run()
                 _pm.set_phase_status(_amass_key, "complete", label=_amass_label)
-                _vc.status(_amass_key, label=_amass_label, status="complete")
+                _cc.status(_amass_key, label=_amass_label, status="complete")
                 _snap(output_dir, data)
         else:
             _pm.set_phase_status(_amass_key, "skipped", label=_amass_label)
-            _vc.status(_amass_key, label=_amass_label, status="skipped")
+            _cc.status(_amass_key, label=_amass_label, status="skipped")
 
     # Dispatch — single domain runs inline; multiple run concurrently (≤ 20 threads)
     _all_wave1 = [(args.domains[0], True)] + [(d, False) for d in args.domains[1:]]
@@ -24390,93 +24390,93 @@ API key sources (all free tiers available):
     # ── PD Wave B — mass DNS resolution (all passive subs now known) ────────
     if not _pm.is_phase_complete("pd_wave_b"):
         _pm.set_phase_status("pd_wave_b", "running", label="PD Wave B: DNS Resolution")
-        _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="running",
+        _cc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="running",
                    active_tool="dns/subdomains")
         pd.run_wave_b()
         _pm.set_phase_status("pd_wave_b", "complete", label="PD Wave B: DNS Resolution")
-        _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
+        _cc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
         write_targets_snapshot(output_dir, data)
     else:
-        _vc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
+        _cc.status("pd_wave_b", label="PD Wave B: DNS Resolution", status="complete")
 
     _check_pause()
 
     # ── Phase 1.5 Wave B — puredns + waybackurls (subdomains now collected) ─
     if _pm.is_phase_complete("phase1_5_wave_b"):
-        _vc.log("Phase 1.5 Wave B already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
+        _cc.log("Phase 1.5 Wave B already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
     else:
         _pm.set_phase_status("phase1_5_wave_b", "running", label="Phase 1.5: puredns/waybackurls")
-        _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="running",
+        _cc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="running",
                    active_tools=["dns/puredns", "tools/waybackurls"])
         _section(log, "PHASE 1.5 Wave B: puredns DNS brute-force + waybackurls")
         passive.run_wave_b()
         _pm.set_phase_status("phase1_5_wave_b", "complete", label="Phase 1.5: puredns/waybackurls")
-        _vc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
+        _cc.status("phase1_5_wave_b", label="Phase 1.5: puredns/waybackurls", status="complete")
         write_targets_snapshot(output_dir, data)
 
     _check_pause()
 
     # ── Phase 4: IP Intelligence ───────────────────────────────────────────
     if _pm.is_phase_complete("phase4_ip"):
-        _vc.log("Phase 4 IP Intelligence already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
+        _cc.log("Phase 4 IP Intelligence already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
     else:
         _pm.set_phase_status("phase4_ip", "running", label="Phase 4: IP Intelligence")
-        _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="running",
+        _cc.status("phase4_ip", label="Phase 4: IP Intelligence", status="running",
                    active_tool="ip_addresses")
         _section(log, "PHASE 4: IP Address Intelligence")
         IPIntelligence(output_dir, log, data).run()
         _pm.set_phase_status("phase4_ip", "complete", label="Phase 4: IP Intelligence")
-        _vc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
+        _cc.status("phase4_ip", label="Phase 4: IP Intelligence", status="complete")
         write_targets_snapshot(output_dir, data)
 
     # ── PD Wave C+E — CDN, ASN, internet search, cloud (IPs now known)
     if not _pm.is_phase_complete("pd_wave_ce"):
         _pm.set_phase_status("pd_wave_ce", "running", label="PD Wave C+E: CDN/ASN/Cloud")
-        _vc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="running",
+        _cc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="running",
                    active_tools=["ip_addresses", "api_intel/uncover", "company/info/cloudlist"])
         pd.run_wave_c_and_e()
         _pm.set_phase_status("pd_wave_ce", "complete", label="PD Wave C+E: CDN/ASN/Cloud")
-        _vc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="complete")
+        _cc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="complete")
     else:
-        _vc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="complete")
+        _cc.status("pd_wave_ce", label="PD Wave C+E: CDN/ASN/Cloud", status="complete")
 
     # ── PD Wave D — deep katana crawl (live hosts + certs available) ────────
     if not _pm.is_phase_complete("pd_wave_d"):
         _pm.set_phase_status("pd_wave_d", "running", label="PD Wave D: Katana Crawl")
-        _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="running",
+        _cc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="running",
                    active_tool="web_crawl/katana")
         pd.run_wave_d()
         _pm.set_phase_status("pd_wave_d", "complete", label="PD Wave D: Katana Crawl")
-        _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
+        _cc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
     else:
-        _vc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
+        _cc.status("pd_wave_d", label="PD Wave D: Katana Crawl", status="complete")
 
     _check_pause()
 
     # ── Phase 5: WHOIS ─────────────────────────────────────────────────────
     if _pm.is_phase_complete("phase5_whois"):
-        _vc.log("Phase 5 WHOIS already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
+        _cc.log("Phase 5 WHOIS already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
     else:
         _pm.set_phase_status("phase5_whois", "running", label="Phase 5: WHOIS")
-        _vc.status("phase5_whois", label="Phase 5: WHOIS", status="running",
+        _cc.status("phase5_whois", label="Phase 5: WHOIS", status="running",
                    active_tool="whois")
         _section(log, "PHASE 5: WHOIS Collection")
         WhoisCollector(output_dir, log, data, args.domains[0]).run()
         _pm.set_phase_status("phase5_whois", "complete", label="Phase 5: WHOIS")
-        _vc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
+        _cc.status("phase5_whois", label="Phase 5: WHOIS", status="complete")
 
     _check_pause()
 
     # ── Phase 6: Company Intelligence ─────────────────────────────────────
     if _pm.is_phase_complete("phase6_company"):
-        _vc.log("Phase 6 Company Intelligence already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
+        _cc.log("Phase 6 Company Intelligence already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
     else:
         _pm.set_phase_status("phase6_company", "running", label="Phase 6: Company Intelligence")
-        _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="running",
+        _cc.status("phase6_company", label="Phase 6: Company Intelligence", status="running",
                    active_tools=["company/info", "company/tools/maltego"])
         _section(log, "PHASE 6: Company Intelligence")
         CompanyIntelligence(
@@ -24485,17 +24485,17 @@ API key sources (all free tiers available):
         ).run()
         passive.run_maltego_export()
         _pm.set_phase_status("phase6_company", "complete", label="Phase 6: Company Intelligence")
-        _vc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
+        _cc.status("phase6_company", label="Phase 6: Company Intelligence", status="complete")
 
     _check_pause()
 
     # ── Phase 7: Email & People OSINT ─────────────────────────────────────
     if _pm.is_phase_complete("phase7_email"):
-        _vc.log("Phase 7 Email & People OSINT already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
+        _cc.log("Phase 7 Email & People OSINT already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
     else:
         _pm.set_phase_status("phase7_email", "running", label="Phase 7: Email & People OSINT")
-        _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="running",
+        _cc.status("phase7_email", label="Phase 7: Email & People OSINT", status="running",
                    active_tools=["company/emails", "api_intel/hibp", "company/tools/maigret", "company/tools/trufflehog"])
         _section(log, "PHASE 7: Email & People OSINT")
         # Run EmailAndPeopleOSINT and the Phase 1.5 email/social tools concurrently.
@@ -24515,21 +24515,21 @@ API key sources (all free tiers available):
                 except Exception as _exc:
                     log.warning(f"[Phase 7] Worker error: {_exc}")
         _pm.set_phase_status("phase7_email", "complete", label="Phase 7: Email & People OSINT")
-        _vc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
+        _cc.status("phase7_email", label="Phase 7: Email & People OSINT", status="complete")
         write_targets_snapshot(output_dir, data)
 
     # ── Phase 1.5 Wave C — cloud_enum (live hosts now known) ────────────────
     if _pm.is_phase_complete("phase1_5_wave_c"):
-        _vc.log("Phase 1.5 Wave C already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
+        _cc.log("Phase 1.5 Wave C already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
     else:
         _pm.set_phase_status("phase1_5_wave_c", "running", label="Phase 1.5: cloud_enum")
-        _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="running",
+        _cc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="running",
                    active_tools=["company/tools/cloud_enum"])
         _section(log, "PHASE 1.5 Wave C: cloud_enum bucket scan")
         passive.run_wave_c()
         _pm.set_phase_status("phase1_5_wave_c", "complete", label="Phase 1.5: cloud_enum")
-        _vc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
+        _cc.status("phase1_5_wave_c", label="Phase 1.5: cloud_enum", status="complete")
 
     _check_pause()
 
@@ -24537,13 +24537,13 @@ API key sources (all free tiers available):
     if args.skip_api:
         log.info("[API] Phase 10 skipped (--skip-api)")
         _pm.set_phase_status("phase10_api", "skipped", label="Phase 10: OSINT API Intelligence")
-        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="skipped")
+        _cc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="skipped")
     elif _pm.is_phase_complete("phase10_api"):
-        _vc.log("Phase 10 API Intelligence already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="complete")
+        _cc.log("Phase 10 API Intelligence already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="complete")
     else:
         _pm.set_phase_status("phase10_api", "running", label="Phase 10: OSINT API Intelligence")
-        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="running",
+        _cc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="running",
                    active_tools=["api_intel/shodan", "api_intel/censys", "api_intel/fullhunt",
                                   "api_intel/securitytrails", "api_intel/netlas",
                                   "api_intel/virustotal", "api_intel/urlscan",
@@ -24569,7 +24569,7 @@ API key sources (all free tiers available):
             hibp_key            = args.hibp_key,
         ).run()
         _pm.set_phase_status("phase10_api", "complete", label="Phase 10: OSINT API Intelligence")
-        _vc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="complete")
+        _cc.status("phase10_api", label="Phase 10: OSINT API Intelligence", status="complete")
         write_targets_snapshot(output_dir, data)
 
     # ── Additional domains: Phase 10 API Intelligence ─────────────────────
@@ -24578,10 +24578,10 @@ API key sources (all free tiers available):
             _d_sfx = f"_extra_{_safe_filename(_extra_domain)}"
             _phase10_extra_key = f"phase10_api{_d_sfx}"
             if _pm.is_phase_complete(_phase10_extra_key):
-                _vc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
+                _cc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
             else:
                 _pm.set_phase_status(_phase10_extra_key, "running", label=f"Phase 10 API: {_extra_domain}")
-                _vc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="running")
+                _cc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="running")
                 _section(log, f"PHASE 10 API (additional domain): {_extra_domain}")
                 OSINTAPIOrchestrator(
                     domain              = _extra_domain,
@@ -24602,7 +24602,7 @@ API key sources (all free tiers available):
                     hibp_key            = args.hibp_key,
                 ).run()
                 _pm.set_phase_status(_phase10_extra_key, "complete", label=f"Phase 10 API: {_extra_domain}")
-                _vc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
+                _cc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
 
     # ── PD summary (all waves complete) ───────────────────────────────────
     pd._write_summary()
@@ -24613,19 +24613,19 @@ API key sources (all free tiers available):
     if getattr(args, "skip_dns_enrich", False):
         log.info("[DNS Enrich] Phase 11 skipped (--skip-dns-enrich)")
         _pm.set_phase_status("phase11_dns_enrich", "skipped", label="Phase 11: DNS Enrichment")
-        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="skipped")
+        _cc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="skipped")
     elif _pm.is_phase_complete("phase11_dns_enrich"):
-        _vc.log("Phase 11 DNS Enrichment already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
+        _cc.log("Phase 11 DNS Enrichment already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
     else:
         _pm.set_phase_status("phase11_dns_enrich", "running", label="Phase 11: DNS Enrichment")
-        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="running",
+        _cc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="running",
                    step=f"{len(data.subdomains)} FQDNs",
                    active_tools=["dns/dig", "dns/dnsx_enrich"])
         _section(log, "PHASE 11: DNS Enrichment (dig + dnsx)")
         DNSEnrichmentRunner(args.domains[0], output_dir, log, data).run()
         _pm.set_phase_status("phase11_dns_enrich", "complete", label="Phase 11: DNS Enrichment")
-        _vc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
+        _cc.status("phase11_dns_enrich", label="Phase 11: DNS Enrichment", status="complete")
         write_targets_snapshot(output_dir, data)
 
     _check_pause()
@@ -24634,13 +24634,13 @@ API key sources (all free tiers available):
     if getattr(args, "no_gitdorker", False):
         log.info("[GitDorker] Phase 13 skipped (--no-gitdorker)")
         _pm.set_phase_status("phase13_gitdorker", "skipped", label="Phase 13: GitDorker")
-        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="skipped")
+        _cc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="skipped")
     elif _pm.is_phase_complete("phase13_gitdorker"):
-        _vc.log("Phase 13 GitDorker already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
+        _cc.log("Phase 13 GitDorker already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
     else:
         _pm.set_phase_status("phase13_gitdorker", "running", label="Phase 13: GitDorker")
-        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="running",
+        _cc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="running",
                    active_tool="osint/gitdorker")
         _section(log, "PHASE 13: GitDorker — GitHub Secret Scanning")
         run_gitdorker(
@@ -24652,7 +24652,7 @@ API key sources (all free tiers available):
             github_token=getattr(args, "github_token", "") or "",
         )
         _pm.set_phase_status("phase13_gitdorker", "complete", label="Phase 13: GitDorker")
-        _vc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
+        _cc.status("phase13_gitdorker", label="Phase 13: GitDorker", status="complete")
         write_targets_snapshot(output_dir, data)
 
     _check_pause()
@@ -24661,13 +24661,13 @@ API key sources (all free tiers available):
     if getattr(args, "no_dork", False):
         log.info("[DORK] Phase 14 skipped (--no-dork)")
         _pm.set_phase_status("phase14_dork", "skipped", label="Phase 14: People Dorking")
-        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="skipped")
+        _cc.status("phase14_dork", label="Phase 14: People Dorking", status="skipped")
     elif _pm.is_phase_complete("phase14_dork"):
-        _vc.log("Phase 14 People Dorking already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="complete")
+        _cc.log("Phase 14 People Dorking already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase14_dork", label="Phase 14: People Dorking", status="complete")
     else:
         _pm.set_phase_status("phase14_dork", "running", label="Phase 14: People Dorking")
-        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="running",
+        _cc.status("phase14_dork", label="Phase 14: People Dorking", status="running",
                    active_tool="osint/people_dork")
         _section(log, "PHASE 14: People Dorking — Employee & Contact Intelligence")
         PeopleDorker(
@@ -24680,16 +24680,16 @@ API key sources (all free tiers available):
             serpapi_key = getattr(args, "serpapi_key", "") or "",
         ).run()
         _pm.set_phase_status("phase14_dork", "complete", label="Phase 14: People Dorking")
-        _vc.status("phase14_dork", label="Phase 14: People Dorking", status="complete")
+        _cc.status("phase14_dork", label="Phase 14: People Dorking", status="complete")
         write_targets_snapshot(output_dir, data)
 
     # ── Phase 4.5: Shodan CLI — per-IP open-port lookup ───────────────────
     if _pm.is_phase_complete("phase4_5_shodan_cli"):
-        _vc.log("Phase 4.5 Shodan CLI already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
+        _cc.log("Phase 4.5 Shodan CLI already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
     else:
         _pm.set_phase_status("phase4_5_shodan_cli", "running", label="Phase 4.5: Shodan CLI")
-        _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="running",
+        _cc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="running",
                    step=f"{len(data.ip_addresses)} IPs",
                    active_tool="company/tools/shodan_cli")
         _section(log, "PHASE 4.5: Shodan CLI — per-IP open-port enumeration")
@@ -24700,7 +24700,7 @@ API key sources (all free tiers available):
             shodan_key  = args.shodan_key,
         ).run()
         _pm.set_phase_status("phase4_5_shodan_cli", "complete", label="Phase 4.5: Shodan CLI")
-        _vc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
+        _cc.status("phase4_5_shodan_cli", label="Phase 4.5: Shodan CLI", status="complete")
         write_targets_snapshot(output_dir, data)
 
     _check_pause()
@@ -24710,13 +24710,13 @@ API key sources (all free tiers available):
     if getattr(args, "no_dnstwist", False):
         log.info("[dnstwist] Phase 15 skipped (--no-dnstwist)")
         _pm.set_phase_status("phase15_dnstwist", "skipped", label="Phase 15: dnstwist")
-        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="skipped")
+        _cc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="skipped")
     elif _pm.is_phase_complete("phase15_dnstwist"):
-        _vc.log("Phase 15 dnstwist already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
+        _cc.log("Phase 15 dnstwist already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
     else:
         _pm.set_phase_status("phase15_dnstwist", "running", label="Phase 15: dnstwist")
-        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="running",
+        _cc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="running",
                    active_tool="tools/dnstwist")
         _section(log, "PHASE 15: dnstwist — Typosquatting & Brand Impersonation Detection")
         _dnstwist_live = DnsTwistRunner(
@@ -24726,7 +24726,7 @@ API key sources (all free tiers available):
             data=data,
         ).run()
         _pm.set_phase_status("phase15_dnstwist", "complete", label="Phase 15: dnstwist")
-        _vc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
+        _cc.status("phase15_dnstwist", label="Phase 15: dnstwist", status="complete")
 
     _check_pause()
 
@@ -24734,17 +24734,17 @@ API key sources (all free tiers available):
     if getattr(args, "no_vt_sweep", False) or args.skip_api:
         log.info("[VT Sweep] Phase 16 skipped (--no-vt-sweep or --skip-api)")
         _pm.set_phase_status("phase16_vt_sweep", "skipped", label="Phase 16: VT Reputation Sweep")
-        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="skipped")
+        _cc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="skipped")
     elif not getattr(args, "virustotal_key", ""):
         log.info("[VT Sweep] Phase 16 skipped (no VirusTotal API key)")
         _pm.set_phase_status("phase16_vt_sweep", "skipped", label="Phase 16: VT Reputation Sweep")
-        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="skipped")
+        _cc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="skipped")
     elif _pm.is_phase_complete("phase16_vt_sweep"):
-        _vc.log("Phase 16 VT Reputation Sweep already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
+        _cc.log("Phase 16 VT Reputation Sweep already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
     else:
         _pm.set_phase_status("phase16_vt_sweep", "running", label="Phase 16: VT Reputation Sweep")
-        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="running",
+        _cc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="running",
                    active_tool="api_intel/virustotal")
         _section(log, "PHASE 16: VirusTotal Reputation Sweep — Subdomain + Typosquatting Domains")
         VTReputationSweep(
@@ -24756,17 +24756,17 @@ API key sources (all free tiers available):
             max_domains=getattr(args, "max_vt_sweep", 100),
         ).run()
         _pm.set_phase_status("phase16_vt_sweep", "complete", label="Phase 16: VT Reputation Sweep")
-        _vc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
+        _cc.status("phase16_vt_sweep", label="Phase 16: VT Reputation Sweep", status="complete")
 
     _check_pause()
 
     # ── Phase 17: Azure AD Tenant Reconnaissance ─────────────────────────
     if _pm.is_phase_complete("phase17_azure_tenant"):
-        _vc.log("Phase 17 Azure Tenant Recon already complete — resuming from checkpoint.", "INFO")
-        _vc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="complete")
+        _cc.log("Phase 17 Azure Tenant Recon already complete — resuming from checkpoint.", "INFO")
+        _cc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="complete")
     else:
         _pm.set_phase_status("phase17_azure_tenant", "running", label="Phase 17: Azure Tenant Recon")
-        _vc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="running",
+        _cc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="running",
                    active_tool="domains/tools/azure_tenant")
         _section(log, "PHASE 17: Azure AD Tenant Reconnaissance")
         AzureTenantRecon(
@@ -24776,13 +24776,13 @@ API key sources (all free tiers available):
             data=data,
         ).run()
         _pm.set_phase_status("phase17_azure_tenant", "complete", label="Phase 17: Azure Tenant Recon")
-        _vc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="complete")
+        _cc.status("phase17_azure_tenant", label="Phase 17: Azure Tenant Recon", status="complete")
 
     _check_pause()
 
     # ── Phase 9: Aggregation & Report ─────────────────────────────────────
     _pm.set_phase_status("phase9_report", "running", label="Phase 9: Aggregation & Report")
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="running")
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report", status="running")
     _section(log, "PHASE 9: Aggregation & Final Report")
     data.end_time = datetime.datetime.now(_UTC).isoformat()
 
@@ -24790,13 +24790,13 @@ API key sources (all free tiers available):
     #          extract emails/phones/subdomains/IPs/URLs, merge into ReconData.
     #          This ensures IntelAggregator sees a fully-populated dataset even
     #          when a tool wrote results to disk but didn't update ReconData live.
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report",
                status="running", step="Raw output parsing")
     _section(log, "PHASE 9a: Cross-Tool Raw Output Parsing")
     RawOutputParser(output_dir, log, data).run()
 
     # Step 9b: Intel aggregation — classify, validate phones, write findings.json
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report",
                status="running", step="Intel aggregation")
     aggregator   = IntelAggregator(
         output_dir, log, data,
@@ -24805,23 +24805,23 @@ API key sources (all free tiers available):
     findings_path = aggregator.run()
 
     # Step 9c: Sensitive-data summary (per-category JSONL files)
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report",
                status="running", step="Sensitive data summary")
     aggregate_sensitive_data(output_dir, log, data)
 
     # Step 9d: Full data report + executive summary
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report",
                status="running", step="Generating final report")
     report_path = generate_final_report(output_dir, log, data, project_dir=project_dir)
 
-    # Step 9e: Action items — cross-tool recommendations for Vantage
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report",
+    # Step 9e: Action items — cross-tool recommendations for Crucible
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report",
                status="running", step="Generating action items")
     _ai_count = _generate_action_items(output_dir, data)
-    _vc.log(f"Generated {_ai_count} action items for cross-tool follow-up")
+    _cc.log(f"Generated {_ai_count} action items for cross-tool follow-up")
 
     _pm.set_phase_status("phase9_report", "complete", label="Phase 9: Aggregation & Report")
-    _vc.status("phase9_report", label="Phase 9: Aggregation & Report", status="complete")
+    _cc.status("phase9_report", label="Phase 9: Aggregation & Report", status="complete")
 
     if _PAUSE: _PAUSE.write_stop_reason("completed", "all_phases_done")
 

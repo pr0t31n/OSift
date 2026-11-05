@@ -6,6 +6,9 @@ OSift takes a company name and domain, and runs a structured 13-phase intelligen
 
 ---
 
+
+> **[View full documentation on the Codex Wiki](https://wiki.pr0t31n.com/tools/osift)** — detailed features, CLI reference, findings catalogue, and integration guides.
+
 ## Features
 
 - **13-phase structured pipeline** — DNS enumeration through GitHub dorking, each phase building on previous results. Phases gate on prior findings to avoid redundant tool runs.

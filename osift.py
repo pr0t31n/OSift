@@ -2358,6 +2358,7 @@ class FindingStore:
         self._lock    = threading.Lock()
         self._store:  Dict[str, Dict] = {}   # fingerprint → finding dict
         self._ordered: List[str]      = []   # insertion-order fingerprints
+        self._findings_json_path: Optional[Path] = None
         self._fdb = None
         _db_path = os.environ.get("PR0T31N_FINDINGS_DB")
         if _db_path:
@@ -2369,6 +2370,77 @@ class FindingStore:
                 self._fdb = pr0t31n_findings_db.FindingsDB(_db_path)
             except Exception:
                 self._fdb = None
+
+    def _flush_json(self):
+        p = self._findings_json_path
+        if not p:
+            return
+        try:
+            rows = [self._store[fp] for fp in self._ordered if fp in self._store]
+            p.write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
+        except Exception:
+            pass
+
+    _SKIP_TYPES = {
+        "subdomain", "subdomain_enum", "subdomain_discovery",
+        "email", "email_address", "ip", "ip_intel", "ip_address",
+        "dns_record", "whois", "technology", "crawled_url",
+        "primary_subdomain",
+    }
+    _SEV_MAP = {"CRITICAL": "CRITICAL", "HIGH": "HIGH",
+                "MEDIUM": "MEDIUM", "LOW": "LOW", "INFO": "INFO"}
+
+    def _flush_findings_json(self) -> None:
+        if _project_dir is None:
+            return
+        try:
+            reports_dir = _project_dir / "reports"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            snap: list = []
+            for _f in self.all_findings():
+                if not isinstance(_f, dict):
+                    continue
+                _ftype = (_f.get("type") or "").strip().lower()
+                if _ftype in self._SKIP_TYPES:
+                    continue
+                _detail = (_f.get("detail") or "").strip()
+                _ftype_raw = (_f.get("type") or "").strip()
+                _category = (_f.get("category") or "").strip()
+                if _f.get("title"):
+                    _title = _f["title"]
+                elif _detail:
+                    _title = _detail[:120]
+                elif _ftype_raw:
+                    _title = f"{_ftype_raw}: {_category}"
+                else:
+                    continue
+                _tool_name = (_f.get("tool") or "").strip()
+                _val_tools = [v.get("tool", "") for v in (_f.get("validations") or []) if v.get("tool")]
+                snap.append({
+                    "title":       _title,
+                    "datetime":    _f.get("timestamp") or "",
+                    "ip":          (_f.get("ip") or "").strip(),
+                    "port":        0,
+                    "hostname":    (_f.get("host") or _f.get("domain") or "").strip(),
+                    "risk":        self._SEV_MAP.get((_f.get("severity") or "info").upper(), "INFO"),
+                    "command":     _f.get("raw_command") or f"osift:{_tool_name}",
+                    "description": (_f.get("description") or _detail),
+                    "output":      "",
+                    "cves":        (_f.get("cve") or "").strip(),
+                    "sources":     ",".join(sorted(set(s for s in ([_tool_name] + _val_tools) if s))),
+                    "service":     "",
+                    "output_file": _rel_output_file((_f.get("output_file") or "").strip(),
+                                                   _project_dir),
+                    "affected":    (_f.get("affected") or "").strip(),
+                    "_scope":      "osint",
+                    "_tool":       "osift",
+                    "_category":   _category,
+                })
+            tmp = reports_dir / "findings_crucible.json.tmp"
+            tmp.write_text(json.dumps(snap, indent=2, default=str), encoding="utf-8")
+            tmp.replace(reports_dir / "findings_crucible.json")
+        except Exception:
+            pass
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -2507,6 +2579,7 @@ class FindingStore:
                     self._fdb.insert_finding(finding)
                 except Exception:
                     pass
+            self._flush_json()
 
         if _CRUCIBLE_MANAGED:
             try:
@@ -2523,6 +2596,7 @@ class FindingStore:
             except Exception:
                 pass
 
+        self._flush_findings_json()
         return fp
 
     def all_findings(self) -> List[Dict]:
@@ -24192,6 +24266,7 @@ API key sources (all free tiers available):
 
     # ── Initialise data structure ──────────────────────────────────────────
     data = ReconData(company=args.company, domain=args.domains[0], domains=list(args.domains))
+    data.findings._findings_json_path = output_dir / "findings.json"
 
     # Save sanitised config (no secrets)
     cfg = vars(args).copy()

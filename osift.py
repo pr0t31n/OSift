@@ -2584,12 +2584,14 @@ class FindingStore:
         if _CRUCIBLE_MANAGED:
             try:
                 _payload = json.dumps({
-                    "title": detail, "ip": ip or host or "",
+                    "title": extra.get("title", detail),
+                    "ip": ip or host or "",
                     "port": 0, "hostname": host or domain or "",
                     "risk": severity.upper() if severity else "INFO",
                     "description": detail,
-                    "sources": tool, "service": "",
-                    "affected": extra.get("affected", url or ""),
+                    "sources": extra.get("sources", tool),
+                    "service": "",
+                    "affected": extra.get("affected", url or host or ""),
                     "cves": cve, "output_file": extra.get("output_file", ""),
                 }, ensure_ascii=False)
                 print(f"{_CP_FINDING}{_payload}", flush=True)
@@ -3060,6 +3062,7 @@ class ShodanAPI:
                 add_finding(
                     self.data, "shodan", "CVE", CAT_CVE, "high",
                     f"Shodan identified {vuln}",
+                    title="Known Vulnerable: Known Vuln on Service",
                     cve=vuln, ip=ip, affected=f"{ip}:{port}",
                     output_file=str(self.out / "ssl_cert_search.json"),
                 )
@@ -3146,6 +3149,7 @@ class ShodanAPI:
                     add_finding(
                         self.data, "shodan", "CVE", CAT_CVE, "high",
                         f"Shodan identified {vuln_id}",
+                        title="Known Vulnerable: Known CVE on Service",
                         cve=vuln_id, ip=ip, affected=ip,
                         output_file=str(self.out / "host_enrichment.json"),
                     )
@@ -3414,6 +3418,7 @@ class ShodanAPI:
                 self.data, "shodan", "dns_platform_enumeration",
                 CAT_RECON, "INFO",
                 "DNS CNAME Platform Enumeration",
+                title="Enumeration: Cloud Platform Identified via CNAME",
                 domain=self.domain, affected=self.domain,
                 description=(
                     f"DNS CNAME records reveal {len(platforms_found)} third-party platforms/services "
@@ -3513,6 +3518,7 @@ class ShodanAPI:
                     self.data, "shodan", "spf_infrastructure_enumeration",
                     CAT_RECON, "INFO",
                     "SPF Record Infrastructure Enumeration",
+                    title="Enumeration: Mail Infrastructure Identified via SPF",
                     domain=self.domain, affected=self.domain,
                     description=(
                         f"The SPF record exposes {' and '.join(parts)}. "
@@ -3544,6 +3550,7 @@ class ShodanAPI:
                 self.data, "shodan", "txt_saas_enumeration",
                 CAT_RECON, "INFO",
                 "DNS TXT SaaS Platform Enumeration",
+                title="Enumeration: SaaS Platform Identified via DNS TXT",
                 domain=self.domain, affected=self.domain,
                 description=(
                     f"DNS TXT verification tokens reveal {len(saas_platforms)} SaaS platforms "
@@ -3570,6 +3577,7 @@ class ShodanAPI:
                         self.data, "shodan", "cname_non_production",
                         CAT_INFRA, "LOW",
                         "CNAME Points to Non-Production Infrastructure",
+                        title="Information Disclosure: Non-Production Infrastructure Exposed via CNAME",
                         domain=self.domain, host=fqdn,
                         affected=f"{fqdn} → {target}",
                         description=(
@@ -3605,6 +3613,7 @@ class ShodanAPI:
                 self.data, "shodan", "network_concentration",
                 CAT_RECON, "INFO",
                 "Network Infrastructure Concentration Identified",
+                title="Discovery: Network Infrastructure Concentration",
                 domain=self.domain, affected=self.domain,
                 description=(
                     f"DNS records reveal significant infrastructure concentration: {net_summary}. "
@@ -4145,6 +4154,7 @@ class FullHuntAPI:
                     add_finding(
                         self.data, "fullhunt", "vulnerability", CAT_CVE, "high",
                         f"FullHunt: {vuln}",
+                        title="Known Vulnerable: Known Vuln on Service",
                         host=host, affected=host,
                         output_file=str(self.out / "host_enrichment.json"),
                     )
@@ -4683,6 +4693,7 @@ class NetlasAPI:
                         self.data, "netlas", "ioc", CAT_THREAT_INTEL,
                         "high" if score > 60 else "medium",
                         f"Netlas IoC indicator detected (score: {score}): {ioc.get('threat', [])}",
+                        title="Threat Intel: Indicator of Compromise Detected",
                         domain=self.domain, affected=self.domain,
                         ioc_score=score, tags=ioc.get("tags", []),
                         output_file=str(self.out / "host_summary.json"),
@@ -5053,6 +5064,7 @@ class VirusTotalAPI:
                 add_finding(
                     self.data, "virustotal", "malicious_domain", CAT_THREAT_INTEL, "critical",
                     f"VirusTotal: domain flagged malicious by {malicious} vendors",
+                    title="Threat Intel: Domain Flagged Malicious",
                     domain=self.domain, affected=self.domain,
                     vt_stats=stats,
                     output_file=str(self.out / "domain_report.json"),
@@ -5121,6 +5133,7 @@ class VirusTotalAPI:
                                 self.data, "virustotal", "malicious_subdomain",
                                 CAT_THREAT_INTEL, "high",
                                 f"VirusTotal: subdomain flagged malicious by {sub_stats['malicious']} vendors",
+                                title="Threat Intel: Domain Flagged Malicious",
                                 host=sub_id, affected=sub_id,
                                 output_file=str(self.out / "subdomains.json"),
                             )
@@ -5252,6 +5265,7 @@ class VirusTotalAPI:
                     add_finding(
                         self.data, "virustotal", "malicious_ip", CAT_THREAT_INTEL, "high",
                         "IP Address Flagged as Malicious",
+                        title="Threat Intel: IP Address Flagged Malicious",
                         ip=ip, affected=ip, host=self.domain,
                         output_file=str(self.out / "ip_enrichment.json"),
                     )
@@ -5409,6 +5423,7 @@ class URLScanAPI:
                         add_finding(
                             self.data, "urlscan", "malicious_url", CAT_THREAT_INTEL, "high",
                             "URLScan verdict: malicious URL detected",
+                            title="Threat Intel: Malicious URL Detected",
                             url=url_str, affected=url_str,
                             scan_id=r.get("task", {}).get("uuid", ""),
                             output_file=str(self.out / "search_results.json"),
@@ -5586,6 +5601,7 @@ class AlienVaultOTXAPI:
                     CAT_THREAT_INTEL,
                     "high" if pulse_count > 5 else "medium",
                     f"OTX: domain referenced in {pulse_count} threat pulses",
+                    title="Threat Intel: Domain Referenced in Threat Pulses",
                     domain=self.domain, affected=self.domain,
                     pulse_count=pulse_count,
                     output_file=str(self.out / "domain_general.json"),
@@ -5743,6 +5759,7 @@ class AlienVaultOTXAPI:
                     self.data, "alienvault_otx", "malware_association",
                     CAT_MALWARE, "critical",
                     f"OTX: {count} malware samples associated with domain",
+                    title="Threat Intel: Malware Samples Associated with Domain",
                     domain=self.domain, affected=self.domain,
                     sample_count=count,
                     output_file=str(self.out / "malware.json"),
@@ -5801,6 +5818,7 @@ class AlienVaultOTXAPI:
                         CAT_THREAT_INTEL,
                         "high" if pulse_count > 3 else "medium",
                         f"OTX: IP referenced in {pulse_count} threat pulses",
+                        title="Threat Intel: IP Referenced in Threat Pulses",
                         ip=ip, affected=ip,
                         pulse_count=pulse_count,
                         output_file=str(self.out / "ip_enrichment.json"),
@@ -6235,6 +6253,7 @@ class HIBPDomainAPI:
                     f"breach record(s) via HaveIBeenPwned. Affected aliases: "
                     f"{', '.join(list(payload.keys())[:10])}"
                     + (" (…and more)" if len(payload) > 10 else ""),
+                    title="Enumeration: M365 Valid User Enumerated",
                     domain=self.domain, affected=self.domain,
                     output_file=str(self.out / "domain_breaches.json"),
                 )
@@ -6400,6 +6419,7 @@ class IntelXAPI:
                 detail=(f"IntelX bucket '{bucket}' returned a hit for "
                          f"{self.domain}. Source: {name} ({date}). "
                          f"Preview: {preview[:200]}"),
+                title="Threat Intel: IntelligenceX Leak Data Found",
                 domain=self.domain,
                 affected=name or self.domain,
                 output_file=str(out_json),
@@ -6525,6 +6545,7 @@ class ZoomEyeAPI:
                 category=CAT_INFRA,
                 severity="info",
                 detail=f"ZoomEye: {host or ip}:{port} ({svc})",
+                title="Discovery: Internet-Wide Scan Engine Match",
                 hostname=host, ip=ip, affected=host or ip, domain=self.domain,
                 output_file=str(out_json),
             )
@@ -6561,12 +6582,6 @@ class GitLeakScanner:
         gitleaks   = _shu.which("gitleaks")
         if not trufflehog and not gitleaks:
             self.log.info("[gitleaks] Neither trufflehog nor gitleaks installed — skipping")
-            add_finding(self.data, tool="gitleaks",
-                          type_="tool_not_installed", category=CAT_INFRA,
-                          severity="info",
-                          detail=("GitHub leak detection SKIPPED — neither trufflehog "
-                                  "nor gitleaks is installed. Install one to enable."),
-                          domain=self.domain)
             return 0
         total_findings = 0
         for repo_url in self.repos[:20]:
@@ -6597,6 +6612,7 @@ class GitLeakScanner:
                                               detail=(f"trufflehog flagged secret in {repo_url}: "
                                                        f"{hit.get('DetectorName', '?')} "
                                                        f"({'VERIFIED' if hit.get('Verified') else 'unverified'})"),
+                                              title="Information Disclosure: Github Secret / API Key",
                                               affected=repo_url, domain=self.domain,
                                               output_file=str(out_path))
                     except Exception as exc:
@@ -6620,6 +6636,7 @@ class GitLeakScanner:
                                               detail=(f"gitleaks flagged secret in {repo_url}: "
                                                        f"{hit.get('Description', '?')} "
                                                        f"(rule: {hit.get('RuleID', '?')})"),
+                                              title="Information Disclosure: Github Secret / API Key",
                                               affected=repo_url, domain=self.domain,
                                               output_file=str(out_path))
                     except Exception as exc:
@@ -8658,6 +8675,7 @@ class DNSEnumerator:
             add_finding(
                 self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
                 f"DKIM selectors found: {', '.join(selectors_found)}",
+                title="DNS Information: DKIM Selectors Identified",
                 domain=self.domain, host=self.domain,
                 affected="\n".join(selectors_found),
                 output_file=_rec_file,
@@ -8776,14 +8794,6 @@ class DNSEnumerator:
             )
         _collected_types = ', '.join(sorted(found_types)) if found_types else 'none'
         self.log.success(f"[DNS] Records collected: {_collected_types}")
-        if found_types:
-            add_finding(
-                self.data, "OSift-DNS", "dns_configuration", CAT_DNS, "INFO",
-                f"DNS Records collected: {_collected_types}",
-                domain=self.domain, host=self.domain,
-                affected=_collected_types,
-                output_file=_rec_file,
-            )
 
     def _brute_force_subdomains(self):
         self.log.info(f"[DNS] Brute forcing {len(DEFAULT_WORDLIST)} subdomains")
@@ -10936,6 +10946,7 @@ class EdgarIntelligence:
                 CAT_RECON,
                 "info",
                 f"SEC 8-K M&A: {name} ({rel})",
+                title="Discovery: SEC EDGAR Filing Data Found",
                 domain=target["domains"][0] if target["domains"] else "",
                 affected=domain_list,
                 timestamp=datetime.datetime.now(_UTC).isoformat(),
@@ -11845,6 +11856,7 @@ class XurlFind3rRunner:
                     f"xurlfind3r discovered {count} archived/indexed URLs "
                     f"from passive sources (Wayback, CommonCrawl, OTX…)"
                 ),
+                title="Discovery: Historical Endpoints Discovered",
                 domain=self.domain, affected=self.domain,
                 output_file=str(out_file),
             )
@@ -12048,6 +12060,7 @@ class EmailHarvesterRunner:
                 detail=(
                     f"EmailHarvester found {count} email addresses via multi-engine search scraping"
                 ),
+                title="Information Disclosure: Employee Email Address Harvested",
                 domain=self.domain, affected=self.domain,
                 output_file=str(self.out / "emails.txt"),
             )
@@ -12312,6 +12325,7 @@ class WaybackURLsRunner:
                     f"Wayback Machine CDX returned {count} historical URLs — "
                     f"review for legacy endpoints and exposed params"
                 ),
+                title="Discovery: Historical Endpoints Discovered",
                 domain=self.domain, affected=self.domain,
                 output_file=str(out_file),
             )
@@ -12678,21 +12692,6 @@ class MaigretRunner:
             json.dumps(all_profiles, indent=2, default=str), encoding="utf-8"
         )
 
-        if all_profiles:
-            add_finding(
-                self.data,
-                tool="maigret",
-                type_="social_media_enumeration",
-                category=CAT_RECON,
-                severity="info",
-                detail=(
-                    f"maigret identified {len(all_profiles)} social/platform profiles "
-                    f"across {len(usernames)} usernames"
-                ),
-                domain=self.domain, affected=self.domain,
-                output_file=str(summary_file),
-            )
-
         self.log.success(
             f"[maigret] Complete — {len(all_profiles)} profiles across "
             f"{len(usernames)} username(s)"
@@ -12753,6 +12752,7 @@ class MaigretRunner:
                     category=CAT_RECON,
                     severity="info",
                     detail=f"maigret: @{username} found on {site_name}",
+                    title="Enumeration: Social Media Profile Identified",
                     url=profile_url, affected=profile_url,
                     domain=self.domain,
                     output_file=str(json_path),
@@ -12943,6 +12943,7 @@ class TruffleHogRunner:
                 category=CAT_SENSITIVE,
                 severity="high",
                 detail=detail,
+                title="Information Disclosure: Github Secret / API Key",
                 url=link or f"https://github.com/{org}",
                 affected=_affected,
                 domain=self.domain,
@@ -13631,6 +13632,7 @@ class GatoRunner:
                         type_="github_actions_secret_exfil",
                         category=CAT_CLOUD, severity="high",
                         detail=detail,
+                        title="CI/CD Security: Secret Exfiltration Path",
                         domain=self.domain,
                         affected=repo_name,
                         output_file=str(out_file),
@@ -13652,6 +13654,7 @@ class GatoRunner:
                         type_="github_actions_permissions",
                         category=CAT_CLOUD, severity="medium",
                         detail=detail,
+                        title="CI/CD Security: Overly Permissive Permissions",
                         domain=self.domain,
                         affected=repo_name,
                         output_file=str(out_file),
@@ -13671,6 +13674,7 @@ class GatoRunner:
                         type_="github_actions_selfhosted_runner",
                         category=CAT_CLOUD, severity="medium",
                         detail=detail,
+                        title="CI/CD Security: Self-Hosted Runner Risk",
                         domain=self.domain,
                         affected=repo_name,
                         output_file=str(out_file),
@@ -14029,6 +14033,7 @@ class WaymoreRunner:
                 detail=(f"Historical Endpoints Discovered — waymore returned {count} "
                         f"unique URLs from Wayback Machine, Common Crawl, VirusTotal, "
                         f"URLScan, and AlienVault OTX"),
+                title="Discovery: Historical Endpoints Discovered",
                 domain=self.domain, affected=self.domain,
                 output_file=str(file_path),
             )
@@ -14042,6 +14047,7 @@ class WaymoreRunner:
                 detail=(f"Sensitive Historical URL Discovered — {len(sensitive_hits)} "
                         f"URL(s) matching admin/config/backup/debug patterns. "
                         f"Sample: {sample}"),
+                title="Information Disclosure: Sensitive Historical URL Discovered",
                 domain=self.domain, affected=self.domain,
                 output_file=str(self.out / f"waymore_sensitive_{_safe_dom}.json"),
             )
@@ -14057,6 +14063,7 @@ class WaymoreRunner:
                 category=CAT_RECON, severity="low",
                 detail=(f"Historical API Endpoint — {len(api_hits)} API endpoint(s) "
                         f"found in historical archives. Sample: {sample}"),
+                title="Discovery: Historical API Endpoint",
                 domain=self.domain, affected=self.domain,
                 output_file=str(self.out / f"waymore_api_{_safe_dom}.json"),
             )
@@ -15758,6 +15765,7 @@ class ShodanCLIRunner:
                 category=CAT_INFRA,
                 severity="INFO",
                 detail="Open Port Found",
+                title="Discovery: Open Port Identified on Subdomain",
                 ip=ip,
                 host=self.data.domain,
                 affected="\n".join(ports),
@@ -15883,6 +15891,7 @@ class PDCdncheck:
                     self.data, "cdncheck",
                     "waf_detected", CAT_INFRA, "info",
                     f"cdncheck: WAF/proxy detected (provider: {provider})",
+                    title="Discovery: Web Technology Fingerprint",
                     host=host, affected=host,
                     cdn_provider=provider,
                     output_file=str(self.out / "cdncheck_parsed.json"),
@@ -16022,6 +16031,7 @@ class PDKatana:
                     self.data, "katana",
                     "form_discovered", CAT_WEB, "info",
                     f"Form discovered: method={form.get('method','?')} fields={form.get('parameters',[])}",
+                    title="Discovery: HTML Form Discovered",
                     url=action, affected=action,
                     form_method=form.get("method", ""),
                     form_fields=form.get("parameters", []),
@@ -20632,11 +20642,15 @@ class IntelAggregator:
                 _breach_detail += f"\nPassword: {_pw}"
             if _hpw:
                 _breach_detail += f"\nPassword Hash: {_hpw}" + (f" ({_ht})" if _ht else "")
+            _hibp_title = ("Information Disclosure: Credential Breach with Password"
+                           if _pw or _hpw else
+                           "Information Disclosure: Credential Breach Detected")
             add_finding(
                 data,
                 rec.get("source_tool") or "hibp",
                 "credential_breach", self.CAT_BREACH, "high",
                 _breach_detail,
+                title=_hibp_title,
                 email=rec["email"], affected=rec["email"],
                 timestamp=rec.get("timestamp") or ts,
                 breach_name=rec.get("breach_name"),
@@ -22166,6 +22180,7 @@ def run_gitdorker(domain: str, company: str, output_dir: "Path", data: "ReconDat
                     f"exposing secrets/keys referencing '{domain}'. "
                     f"Top matches: " + ", ".join(matches[:5])
                 ),
+                title="Information Disclosure: Sensitive Code Exposure",
                 domain=domain,
                 output_file=str(out_file),
                 data=matches,

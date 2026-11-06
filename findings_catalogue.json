@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.7.0",
   "tool": "osift",
   "generated": "(complete: upgraded existing + scaffolded missing)",
   "total": 72,
@@ -3752,10 +3752,11 @@
     },
     {
       "id": "OSIFT-054",
-      "title": "CI/CD Security: GitHub Actions: Workflow Injection Vulnerability",
+      "title": "CI/CD Security: Workflow Injection Vulnerability",
       "aliases": [
         "GitHub Actions Script Injection",
-        "Workflow Expression Injection"
+        "Workflow Expression Injection",
+        "CI/CD Security: GitHub Actions: Workflow Injection Vulnerability"
       ],
       "source_tools": [
         "osift"
@@ -3832,10 +3833,11 @@
     },
     {
       "id": "OSIFT-055",
-      "title": "CI/CD Security: GitHub Actions: Secret Exfiltration Path",
+      "title": "CI/CD Security: Secret Exfiltration Path",
       "aliases": [
         "GitHub Actions Secret Leak",
-        "CI/CD Secret Exposure"
+        "CI/CD Secret Exposure",
+        "CI/CD Security: GitHub Actions: Secret Exfiltration Path"
       ],
       "source_tools": [
         "osift"
@@ -3906,10 +3908,11 @@
     },
     {
       "id": "OSIFT-056",
-      "title": "CI/CD Security: GitHub Actions: Overly Permissive Permissions",
+      "title": "CI/CD Security: Overly Permissive Permissions",
       "aliases": [
         "Workflow Excessive Permissions",
-        "GitHub Actions write-all"
+        "GitHub Actions write-all",
+        "CI/CD Security: GitHub Actions: Overly Permissive Permissions"
       ],
       "source_tools": [
         "osift"
@@ -3972,10 +3975,11 @@
     },
     {
       "id": "OSIFT-057",
-      "title": "CI/CD Security: GitHub Actions: Self-Hosted Runner Risk",
+      "title": "CI/CD Security: Self-Hosted Runner Risk",
       "aliases": [
         "Self-Hosted Runner Exposure",
-        "GitHub Actions Runner on Public Repo"
+        "GitHub Actions Runner on Public Repo",
+        "CI/CD Security: GitHub Actions: Self-Hosted Runner Risk"
       ],
       "source_tools": [
         "osift"
@@ -4038,9 +4042,10 @@
     },
     {
       "id": "OSIFT-058",
-      "title": "CI/CD Security: GitHub Actions: Audit Complete — No Issues",
+      "title": "CI/CD Security: Audit Complete — No Issues",
       "aliases": [
-        "GitHub Actions Security Audit Clean"
+        "GitHub Actions Security Audit Clean",
+        "CI/CD Security: GitHub Actions: Audit Complete — No Issues"
       ],
       "source_tools": [
         "osift"
@@ -4844,6 +4849,911 @@
       "validation_tools": [
         "exiftool",
         "mat2"
+      ]
+    },
+    {
+      "id": "OSIFT-071",
+      "title": "Known Vulnerable: Known Vuln on Service",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "A known vulnerability was identified on an internet-facing service via passive reconnaissance (Shodan, Censys, or similar). The vulnerability is associated with the detected service version or banner.",
+      "impact": "An attacker can exploit the known vulnerability to gain unauthorized access, execute code, or escalate privileges on the affected service. The exposure is amplified because the vulnerability is publicly documented and exploit code may be available.",
+      "cwe": [
+        "CWE-1395"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.RA-01"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Patch or upgrade the affected service to a version that addresses the vulnerability. If patching is not immediately possible, restrict network access to the service via firewall rules or VPN.",
+      "remediation_component": "Network",
+      "remediation_category": "Patch Management",
+      "remediation_effort": "Moderate",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-072",
+      "title": "Known Vulnerable: Known CVE on Service",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "A specific CVE was matched to an internet-facing service via passive scanning engines (Shodan, Censys, FullHunt, ZoomEye, Netlas). The CVE is associated with the detected service version or technology stack.",
+      "impact": "An attacker with knowledge of the CVE can craft targeted exploits against the service. Public exploit code or Metasploit modules may be available, reducing the skill barrier for exploitation.",
+      "cwe": [
+        "CWE-1395"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.RA-01"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Apply the vendor-issued patch or upgrade the software to a non-vulnerable version. Review the CVE advisory for specific mitigations if a patch is not available.",
+      "remediation_component": "Network",
+      "remediation_category": "Patch Management",
+      "remediation_effort": "Moderate",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-073",
+      "title": "Enumeration: Cloud Platform Identified via CNAME",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "DNS CNAME records reveal that subdomains resolve to third-party cloud or SaaS platforms (e.g., AWS CloudFront, Azure, Heroku, Shopify). This maps the organization's cloud infrastructure footprint.",
+      "impact": "An attacker can use cloud platform identification to focus reconnaissance on platform-specific attack vectors (subdomain takeover, misconfigured S3 buckets, exposed API gateways).",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review CNAME mappings for accuracy. Ensure all pointed-to cloud resources are actively managed and not abandoned (which could allow subdomain takeover).",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-074",
+      "title": "Enumeration: Mail Infrastructure Identified via SPF",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "SPF (Sender Policy Framework) DNS records reveal the organization's authorized mail sending infrastructure, including third-party email service providers.",
+      "impact": "An attacker can use SPF record data to map authorized mail infrastructure and identify potential targets for impersonation or relay attacks.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure SPF records are accurate and use '-all' (hard fail) rather than '~all' (soft fail). Remove references to decommissioned mail infrastructure.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-075",
+      "title": "Enumeration: SaaS Platform Identified via DNS TXT",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "DNS TXT records (domain verification, site verification) reveal third-party SaaS platforms integrated with the organization (e.g., Google Workspace, Microsoft 365, Salesforce, HubSpot).",
+      "impact": "An attacker can use SaaS platform identification to craft targeted phishing campaigns or focus on platform-specific API exploitation.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Audit DNS TXT records periodically. Remove verification records for SaaS platforms no longer in use.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-076",
+      "title": "Information Disclosure: Non-Production Infrastructure Exposed via CNAME",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "description": "DNS CNAME records expose non-production infrastructure (staging, dev, test, UAT, QA environments) to the public internet.",
+      "impact": "An attacker can target non-production environments which often have weaker security controls, default credentials, or debug features enabled. Compromise of non-production systems can provide access to production data or lateral movement paths.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Restrict DNS resolution of non-production environments to internal networks. Use split-horizon DNS or remove public CNAME records for non-production hosts.",
+      "remediation_component": "Network",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-077",
+      "title": "Discovery: Network Infrastructure Concentration",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "Analysis of the organization's DNS and IP address space reveals concentration of infrastructure in a small number of hosting providers, ASNs, or IP ranges.",
+      "impact": "High concentration of infrastructure in a single provider increases the blast radius of provider-level incidents (outages, security breaches). An attacker can focus efforts on a single provider's attack surface.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Document infrastructure concentration risk. Consider diversifying hosting across multiple providers for critical services.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-078",
+      "title": "Threat Intel: Indicator of Compromise Detected",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "VirusTotal analysis flagged the target domain or associated infrastructure with indicators of compromise (IoC). Multiple security vendors have flagged the asset as malicious or associated with malicious activity.",
+      "impact": "The presence of IoCs indicates the domain or infrastructure may already be compromised, used for malware distribution, or associated with command-and-control activity. Immediate investigation is required.",
+      "cwe": [
+        "CWE-506"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1071",
+          "tactic": "Command and Control",
+          "name": "Application Layer Protocol"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Investigate the flagged asset immediately. Cross-reference with internal logs for evidence of compromise. If confirmed, initiate incident response procedures.",
+      "remediation_component": "Network",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Significant",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-079",
+      "title": "Threat Intel: Domain Flagged Malicious",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "Threat intelligence sources (VirusTotal, URLScan, AlienVault OTX) have flagged the target domain as malicious or associated with malicious activity.",
+      "impact": "A domain flagged as malicious may be actively used for phishing, malware distribution, or C2 operations. This could indicate compromise or abuse of the organization's domain.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Investigate the domain flagging. Check for unauthorized DNS changes, compromised web applications, or rogue content. Request delisting from threat intelligence vendors after remediation.",
+      "remediation_component": "Network",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Significant",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-080",
+      "title": "Threat Intel: IP Address Flagged Malicious",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "Threat intelligence sources have flagged an IP address associated with the target as malicious. The IP may be listed in blocklists or associated with known attack campaigns.",
+      "impact": "A flagged IP address may indicate the infrastructure is compromised and being used for attacks, or that the IP was previously used by malicious actors and retains a negative reputation.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Investigate the IP flagging. Check hosting infrastructure for compromise. If the IP is shared hosting, consider dedicated IP allocation. Request delisting after remediation.",
+      "remediation_component": "Network",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Significant",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-081",
+      "title": "Threat Intel: Malicious URL Detected",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "URLScan or similar services detected specific URLs under the target domain that are associated with malicious content, phishing kits, or malware delivery.",
+      "impact": "Malicious URLs indicate active compromise of web infrastructure. Visitors to these URLs may be exposed to malware, credential theft, or drive-by downloads.",
+      "cwe": [
+        "CWE-506"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Immediately investigate and remove malicious content. Review web server access logs. Scan for web shells or unauthorized modifications. Implement file integrity monitoring.",
+      "remediation_component": "Application",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Significant",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-082",
+      "title": "Threat Intel: Domain Referenced in Threat Pulses",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "AlienVault OTX threat intelligence pulses reference the target domain in connection with threat campaigns, malware analysis, or security research.",
+      "impact": "References in threat pulses may indicate the domain is a known target, has been previously compromised, or is associated with threat actor infrastructure.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review the specific OTX pulses for context. Cross-reference with internal security logs. Assess whether the references indicate current or historical risk.",
+      "remediation_component": "Network",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Moderate",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-083",
+      "title": "Threat Intel: Malware Samples Associated with Domain",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "VirusTotal or similar platforms have identified malware samples that reference or communicate with the target domain.",
+      "impact": "Malware association indicates the domain may be used as a C2 server, malware distribution point, or data exfiltration destination. This represents active or recent compromise.",
+      "cwe": [
+        "CWE-506"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1071",
+          "tactic": "Command and Control",
+          "name": "Application Layer Protocol"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Investigate immediately. Review DNS logs for communications with known malware infrastructure. Scan internal endpoints for the identified malware samples. Initiate incident response if compromise is confirmed.",
+      "remediation_component": "Network",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Major",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-084",
+      "title": "Threat Intel: IP Referenced in Threat Pulses",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "description": "AlienVault OTX threat intelligence pulses reference an IP address associated with the target in connection with threat campaigns or security research.",
+      "impact": "IP references in threat pulses may indicate the infrastructure has been targeted, compromised, or is collocated with threat actor resources.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.AE-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review the specific OTX pulses for context. Verify IP ownership and usage. Cross-reference with firewall and IDS logs for suspicious activity.",
+      "remediation_component": "Network",
+      "remediation_category": "Incident Response",
+      "remediation_effort": "Moderate",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-085",
+      "title": "Threat Intel: IntelligenceX Leak Data Found",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "IntelligenceX search identified leaked data associated with the target domain, including potential credentials, email addresses, or sensitive documents found in paste sites, data breaches, or dark web sources.",
+      "impact": "Leaked credentials can be used for credential stuffing or targeted attacks. Exposed documents may reveal sensitive business information, internal infrastructure details, or employee personal data.",
+      "cwe": [
+        "CWE-312"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Identify affected accounts and force password resets. Implement MFA across all exposed services. Monitor for unauthorized access using the leaked credentials.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Significant",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-086",
+      "title": "Discovery: Internet-Wide Scan Engine Match",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "The target's infrastructure was identified in internet-wide scan engines (Shodan, Censys, ZoomEye, FOFA, Netlas). These engines index publicly accessible services and their banners.",
+      "impact": "Presence in scan engines confirms the services are publicly accessible and their banners/versions are indexed. Attackers routinely use these engines to identify vulnerable targets at scale.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review indexed services for necessity of public exposure. Implement banner hardening to reduce information leakage. Consider rate-limiting or blocking scan engine IP ranges for non-public services.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-087",
+      "title": "DNS Information: DKIM Selectors Identified",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "DNS enumeration identified DKIM (DomainKeys Identified Mail) selectors configured for the domain. DKIM selectors reveal which email services are authorized to sign outbound mail.",
+      "impact": "While DKIM is a positive security control, knowledge of selectors can help an attacker understand which email platforms are in use and potentially craft more convincing phishing emails.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure DKIM keys use at least 2048-bit RSA. Rotate DKIM keys periodically. Remove selectors for decommissioned email services.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-088",
+      "title": "Enumeration: Social Media Profile Identified",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "Username enumeration tools (maigret) identified social media and platform profiles associated with target usernames across 3,000+ platforms.",
+      "impact": "Social media profiles can be used for social engineering, impersonation attacks, and gathering personal information about employees. Profile data may reveal organizational structure and communication patterns.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-06"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Review identified profiles for appropriateness. Implement social media security awareness training. Consider monitoring for impersonation accounts.",
+      "remediation_component": "Application",
+      "remediation_category": "Awareness",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "maigret"
+      ]
+    },
+    {
+      "id": "OSIFT-089",
+      "title": "Discovery: HTML Form Discovered",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "description": "Web crawling identified HTML forms on the target's web applications. Forms represent potential input vectors for injection attacks.",
+      "impact": "HTML forms are primary input vectors for web application attacks including XSS, SQL injection, CSRF, and parameter manipulation. Each form represents a potential attack surface.",
+      "cwe": [
+        "CWE-20"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A03:2021 Injection",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Ensure all forms implement proper input validation, CSRF tokens, and output encoding. Review form actions for sensitive operations that require authentication.",
+      "remediation_component": "Application",
+      "remediation_category": "Input Validation",
+      "remediation_effort": "Easy",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-090",
+      "title": "Information Disclosure: Credential Breach with Password",
+      "aliases": [
+        "OSIFT-012 variant with password"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "CRITICAL",
+      "description": "HaveIBeenPwned or similar breach databases contain credentials for the target domain with plaintext or hashed passwords exposed. The breach includes usable credential material.",
+      "impact": "Exposed passwords enable direct credential stuffing attacks against the organization's services. If employees reuse passwords, attackers can gain unauthorized access to email, VPN, cloud services, and internal applications.",
+      "cwe": [
+        "CWE-522"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-01"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "8.3"
+      ],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Force immediate password resets for all affected accounts. Implement MFA on all externally accessible services. Check for credential reuse across systems. Enroll affected users in breach notification monitoring.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Significant",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-091",
+      "title": "Information Disclosure: Credential Breach Detected",
+      "aliases": [
+        "OSIFT-011 variant without password"
+      ],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "HaveIBeenPwned or similar breach databases contain records for the target domain. The breach data may include email addresses, usernames, and associated metadata, but no plaintext passwords.",
+      "impact": "Breach records confirm that employee email addresses are circulating in public breach datasets. Attackers use this data for targeted phishing, credential stuffing with common passwords, and social engineering.",
+      "cwe": [
+        "CWE-359"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-01"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Notify affected users. Enforce password changes for affected accounts. Implement MFA. Monitor for unauthorized access attempts targeting the breached accounts.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": []
+    },
+    {
+      "id": "OSIFT-092",
+      "title": "Information Disclosure: Sensitive Code Exposure",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "description": "GitDorker or similar GitHub dorking tools identified public repositories containing code that references the target domain with potentially sensitive content (API keys, secrets, configuration files, internal URLs).",
+      "impact": "Exposed source code and secrets in public repositories can be used to gain unauthorized access to APIs, internal systems, and cloud resources. Secrets in code are immediately exploitable.",
+      "cwe": [
+        "CWE-540",
+        "CWE-615"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Revoke and rotate all exposed secrets immediately. Remove or make private the affected repositories. Implement pre-commit hooks and CI/CD secret scanning to prevent future leaks.",
+      "remediation_component": "Application",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Significant",
+      "validation_tools": [
+        "trufflehog",
+        "gitleaks",
+        "gitdorker"
       ]
     }
   ]

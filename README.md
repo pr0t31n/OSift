@@ -66,6 +66,8 @@ OSift takes a company name and one or more domains, and runs a structured 22-sta
 - **Multi-domain support** — Pass multiple `-d` domains to run the full pipeline against each, with per-domain phase tracking and deduplication.
 - **Cross-platform** — Linux, macOS, Windows. Requires elevated privileges (root/Administrator).
 - **Settings file** — All API keys, targets, and scan options persist in a single `osift_settings.json` file across engagements.
+- **Finding title normalization** — all findings use `Category: Title Body` format with 11 categories (Discovery, DNS, Threat Intel, Known Vulnerable, Credential, CI/CD Security, Enumeration, Configuration, SSL/TLS Certificate, Email Security, Information Disclosure). Category prefixes are applied at emission time so Crucible displays clean, categorized titles.
+- **FindingsDB dual-write** — when running under Crucible, findings are written to both JSON and the per-project SQLite database for paginated retrieval.
 
 ---
 
@@ -387,7 +389,7 @@ The settings file allows API keys and scan options to be persisted across engage
 ├── dnstwist/                   Typosquatting detection results
 ├── gitdorker/                  GitDorker GitHub secret scan results
 ├── reports/
-│   ├── findings_crucible.json  Crucible-compatible findings (primary)
+│   ├── findings.json           Crucible-compatible findings (primary)
 │   ├── findings_report.json    Unified deduplicated findings
 │   ├── final_report.json       Full machine-readable report
 │   ├── subdomains_confirmed.csv  Live confirmed subdomains
@@ -399,7 +401,7 @@ The settings file allows API keys and scan options to be persisted across engage
 └── checkpoint.json             Scan resumption state
 ```
 
-### findings_crucible.json schema
+### findings.json schema
 
 ```json
 [
@@ -436,6 +438,8 @@ When launched by Crucible (`CRUCIBLE_MANAGED=1`), OSift switches to structured p
 | `__CRUCIBLE_FINDING__:` | Real-time finding emission |
 | `__CRUCIBLE_ACTION_ITEM__:` | Action item for manual follow-up |
 
+The `__CRUCIBLE_FINDING__` token is emitted each time a new finding is written to `findings.json` -- this includes findings from all 22 phases (DNS misconfigurations, subdomain takeover risks, exposed credentials, technology fingerprints, breach data, etc.). Each token carries the full finding payload so Crucible can render it in the findings table without polling the file.
+
 Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress in real time.
 
 ---
@@ -453,6 +457,7 @@ Dependency installs are non-interactive (auto-approved). Phase status is reporte
 - **Azure Tenant Recon (Phase 17)** — Probes Azure AD tenant endpoints, federation configuration, and autodiscover records for each target domain.
 - **`uncover` engines** — Each engine (FOFA, Quake360, ZoomEye, CriminalIP) only queries if its API key is present in the settings file or environment.
 - All tool timeouts are hardened defaults. Long-running tools (amass, puredns, katana) default to 300-600 seconds.
+- **FindingsDB dual-write** -- When the `PR0T31N_FINDINGS_DB` environment variable points to a SQLite database, findings are also inserted alongside JSON output. This enables cross-tool querying and Crucible dashboard aggregation.
 
 ---
 

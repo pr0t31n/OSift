@@ -2436,9 +2436,9 @@ class FindingStore:
                     "_tool":       "osift",
                     "_category":   _category,
                 })
-            tmp = reports_dir / "findings_crucible.json.tmp"
+            tmp = reports_dir / "findings.json.tmp"
             tmp.write_text(json.dumps(snap, indent=2, default=str), encoding="utf-8")
-            tmp.replace(reports_dir / "findings_crucible.json")
+            tmp.replace(reports_dir / "findings.json")
         except Exception:
             pass
 
@@ -17301,7 +17301,7 @@ def write_tools_snapshot(output_dir: Path) -> None:
 
 def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
     """
-    Write incremental targets_osint.json and findings_crucible.json so Crucible
+    Write incremental targets_osint.json and findings.json so Crucible
     can display live data during an active scan.  Called after each major phase;
     generate_final_report() overwrites these with the fully-populated versions.
     Non-fatal: any exception is silently swallowed.
@@ -17421,7 +17421,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
             encoding="utf-8",
         )
 
-        # ── findings_crucible.json ──────────────────────────────────────────────
+        # ── findings.json (Crucible-format flat array) ─────────────────────────
         _SKIP_SNAP = {
             "subdomain", "subdomain_enum", "subdomain_discovery",
             "email", "email_address", "ip", "ip_intel", "ip_address",
@@ -17470,7 +17470,7 @@ def write_targets_snapshot(output_dir: Path, data: "ReconData") -> None:
                 "_tool":       "osift",
                 "_category":   _category,
             })
-        (reports_dir / "findings_crucible.json").write_text(
+        (reports_dir / "findings.json").write_text(
             json.dumps(snap_findings, indent=2, default=str),
             encoding="utf-8",
         )
@@ -18594,8 +18594,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         or r.get("https_status", "") in _LIVE_CODES
     )
 
-    # ── findings_crucible.json — findings normalized to Crucible format ─────────
-    # Ports app.py's _normalize_osift_findings() logic so Crucible can read this
+    # ── findings.json — findings normalized to Crucible format ─────────────────
+    # Flat array export for external consumers (Prometheus, etc.); Crucible reads
     # file directly without performing its own transformation.
     _SKIP_TYPES = {
         "subdomain", "subdomain_enum", "subdomain_discovery",
@@ -18683,7 +18683,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             "_tool":       "osift",
             "_category":   _category,
         })
-    fv_path = output_dir / "reports" / "findings_crucible.json"
+    fv_path = output_dir / "reports" / "findings.json"
     fv_path.write_text(
         json.dumps(crucible_findings, indent=2, default=str), encoding="utf-8"
     )

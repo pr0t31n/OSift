@@ -852,11 +852,11 @@ def _create_tool_symlinks():
 def _fix_emailharvester_plugins():
     """Ensure EmailHarvester can find its plugins directory.
 
-    pip install EmailHarvester places a standalone script at /usr/local/bin/
-    that uses os.path.dirname(os.path.realpath(__file__)) to locate plugins/.
-    When that resolves to /usr/local/bin/ instead of /opt/EmailHarvester/,
-    it crashes with FileNotFoundError.  Fix: symlink plugins/ next to
-    wherever the binary resolves, if the git clone has the real plugins.
+    EmailHarvester uses os.path.abspath(__file__) (NOT realpath) to locate
+    plugins/.  When the entry-point is a symlink at /usr/local/bin/,
+    abspath resolves to /usr/local/bin/ and the script tries to load
+    /usr/local/bin/plugins/ which doesn't exist.  Fix: symlink plugins/
+    next to the SYMLINK (abspath directory), not the resolved target.
     """
     eh_bin = BIN_DIR / "EmailHarvester"
     src_plugins = OPT_DIR / "EmailHarvester" / "plugins"
@@ -865,19 +865,25 @@ def _fix_emailharvester_plugins():
         return
 
     if eh_bin.exists() or eh_bin.is_symlink():
-        resolved = Path(os.path.realpath(str(eh_bin)))
-        resolved_dir = resolved.parent
-        target_plugins = resolved_dir / "plugins"
+        abspath_dir = Path(os.path.abspath(str(eh_bin))).parent
+        target_plugins = abspath_dir / "plugins"
         if target_plugins.is_dir() and not target_plugins.is_symlink():
             info(f"EmailHarvester plugins/ already present at {target_plugins}")
             return
-        if resolved_dir != src_plugins.parent:
-            if target_plugins.is_symlink():
-                target_plugins.unlink()
+        if not target_plugins.exists():
             target_plugins.symlink_to(src_plugins)
             info(f"Symlink: {target_plugins} → {src_plugins}")
-        else:
-            info("EmailHarvester resolves to /opt/EmailHarvester/; plugins/ already local.")
+        elif target_plugins.is_symlink():
+            target_plugins.unlink()
+            target_plugins.symlink_to(src_plugins)
+            info(f"Symlink (refreshed): {target_plugins} → {src_plugins}")
+        resolved = Path(os.path.realpath(str(eh_bin)))
+        resolved_dir = resolved.parent
+        if resolved_dir != abspath_dir and resolved_dir != src_plugins.parent:
+            rp = resolved_dir / "plugins"
+            if not rp.exists():
+                rp.symlink_to(src_plugins)
+                info(f"Symlink (realpath fallback): {rp} → {src_plugins}")
 
 
 # ─── symlinks ────────────────────────────────────────────────────────────────

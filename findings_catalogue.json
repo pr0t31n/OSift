@@ -241,7 +241,7 @@
       "kev": false,
       "remediation_brief": "Restrict open ports to those strictly required. Apply firewall rules to limit access to sensitive ports (databases, admin panels) by source IP.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-200"
@@ -292,11 +292,11 @@
       "kev": false,
       "remediation_brief": "Renew the certificate before expiry. Implement automated certificate renewal (e.g., Let's Encrypt with certbot/acme.sh).",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "An SSL/TLS certificate for a discovered host will expire within 30 days. Expiry causes browser security warnings and can disrupt services.",
-      "impact": "",
+      "impact": "An attacker could use this information or weakness for reconnaissance or to facilitate more targeted attacks against the organization. Weak cryptographic implementations may allow interception, decryption, or forgery of protected communications.",
       "_x_severity": "LOW",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Renew the certificate before expiry. Implement automated certificate renewal (e.g., Let's Encrypt with certbot/acme.sh).",
@@ -338,7 +338,7 @@
       "kev": false,
       "remediation_brief": "Renew the certificate immediately and implement automated renewal (e.g., ACME/Let's Encrypt) to prevent future expiry.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The server's TLS certificate has passed its expiry date, causing browser trust errors and indicating a breakdown in certificate lifecycle management.",
@@ -385,13 +385,13 @@
       "kev": false,
       "remediation_brief": "Replace self-signed or mis-issued certificates with certificates from a trusted CA. Use SHA-256 or stronger signing algorithms.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-295"
       ],
       "description": "A certificate was found with a misconfiguration: hostname mismatch, self-signed cert on a public host, wildcard overuse, or weak signing algorithm (MD5/SHA-1).",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Weak cryptographic implementations may allow interception, decryption, or forgery of protected communications.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Replace self-signed or mis-issued certificates with certificates from a trusted CA. Use SHA-256 or stronger signing algorithms.",
@@ -825,7 +825,7 @@
       "kev": false,
       "remediation_brief": "Notify affected employees. Force password resets for all affected accounts. Enable MFA. Review whether compromised accounts have access to sensitive systems.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Information Disclosure",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "An email address associated with the target organisation appeared in a known data breach (HIBP or Dehashed). The account holder's credentials may have been exposed.",
@@ -872,7 +872,7 @@
       "kev": false,
       "remediation_brief": "Immediately force a password reset for the affected account. Check for reuse across other systems (VPN, cloud consoles, O365). Enable MFA on all accounts.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-256",
@@ -926,14 +926,14 @@
       "kev": false,
       "remediation_brief": "Revoke the exposed secret immediately. Rotate all affected credentials. Scrub the secret from git history (git filter-repo). Enable GitHub secret scanning alerts.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Secret Management",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-312",
         "CWE-798"
       ],
       "description": "GitDorker or TruffleHog identified a secret, API key, token, or private key in a public GitHub repository associated with the target organisation or its employees.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems.",
       "_x_severity": "CRITICAL",
       "_x_category": "Credential Exposure",
       "_x_remediation": "Revoke the exposed secret immediately. Rotate all affected credentials. Scrub the secret from git history (git filter-repo). Enable GitHub secret scanning alerts.",
@@ -980,11 +980,11 @@
       "kev": false,
       "remediation_brief": "Enable account lockout and smart lockout in Azure AD. Implement Conditional Access policies. Consider disabling legacy authentication protocols.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Email Security",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "TREVORspray or Azure AD authentication confirmed that a discovered email address is a valid M365/Azure AD account (user exists in the tenant). Confirms the account is a viable spray target.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems.",
       "_x_severity": "HIGH",
       "_x_category": "Cloud Identity",
       "_x_remediation": "Enable account lockout and smart lockout in Azure AD. Implement Conditional Access policies. Consider disabling legacy authentication protocols.",
@@ -1027,14 +1027,14 @@
       "kev": false,
       "remediation_brief": "Immediately revoke the session, reset the password, and enable MFA for the compromised account. Investigate access logs for lateral movement. Review Conditional Access policies.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Authentication",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-521",
         "CWE-307"
       ],
       "description": "TREVORspray successfully authenticated to M365/Azure AD with a discovered credential. Full account access to Microsoft cloud services may be available to an attacker.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Weak or missing authentication allows unauthorized users to access protected resources.",
       "_x_severity": "CRITICAL",
       "_x_category": "Cloud Identity",
       "_x_remediation": "Immediately revoke the session, reset the password, and enable MFA for the compromised account. Investigate access logs for lateral movement. Review Conditional Access policies.",
@@ -1081,13 +1081,13 @@
       "kev": false,
       "remediation_brief": "Remove the dangling DNS record immediately. If the external service is still needed, reclaim the resource. Implement subdomain monitoring.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-350"
       ],
       "description": "A subdomain has a CNAME pointing to an external service (e.g., GitHub Pages, S3, Heroku, Shopify) that is no longer claimed. An attacker could register the resource and serve malicious content under the organisation's subdomain.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems.",
       "_x_severity": "HIGH",
       "_x_category": "Subdomain Security",
       "_x_remediation": "Remove the dangling DNS record immediately. If the external service is still needed, reclaim the resource. Implement subdomain monitoring.",
@@ -1124,7 +1124,7 @@
       "qualys_qids": [
         70001
       ],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.PS-01",
@@ -1184,7 +1184,7 @@
       "kev": false,
       "remediation_brief": "Restrict zone transfer permissions to authorised secondary name server IP addresses using ACLs in the DNS server configuration.",
       "remediation_component": "DNS",
-      "remediation_category": "Security Misconfiguration",
+      "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [
         "CWE-200",
@@ -1304,11 +1304,11 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         }
       ],
       "description": "An employee email address was discovered via theHarvester, Hunter.io, LinkedIn, or public sources. Collected addresses support phishing and credential spray attacks.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "Educate employees on minimising personal information exposure. Implement email security controls (SPF, DKIM, DMARC, anti-phishing).",
@@ -1351,7 +1351,7 @@
       "kev": false,
       "remediation_brief": "Remove version disclosure from HTTP headers (Server, X-Powered-By). Keep software up to date. Consider a WAF to obscure fingerprinting.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-200"
@@ -1390,7 +1390,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -1437,7 +1437,7 @@
         "CWE-538"
       ],
       "description": "waybackurls or xurlfind3r discovered a historical URL containing a sensitive path (e.g., /admin, /backup, /.env, /config, /api/v1/keys) that was once publicly accessible.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "MEDIUM",
       "_x_category": "Web Exposure",
       "_x_remediation": "Verify whether the resource still exists. Remove sensitive files from public-facing web roots. Review server access logs for recent access to these paths.",
@@ -1453,7 +1453,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Discovery: Shodan Exposure \u2014 Open Service",
+      "title": "Discovery: Shodan Exposure — Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1482,7 +1482,7 @@
       "kev": false,
       "remediation_brief": "Restrict access to services that do not need to be publicly reachable. Apply firewall rules. Update exposed services to current versions.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "Shodan reports an open service on a target IP that is visible to the public internet. Banner data, software version, and service type are indexed and searchable by anyone.",
@@ -1500,7 +1500,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Uncategorized: Shodan Exposure \u2014 Known CVE on Service",
+      "title": "Known Vulnerability: Shodan Exposure — Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1529,7 +1529,7 @@
       "kev": false,
       "remediation_brief": "Patch or update the affected service immediately. If patching is not immediately possible, apply mitigating controls (WAF rule, network restriction).",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Patch Management",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-1026"
@@ -1580,14 +1580,14 @@
       "kev": false,
       "remediation_brief": "Immediately set the bucket to private unless public access is intentional. Audit bucket contents for sensitive data. Enable bucket access logging and alerts.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Information Disclosure",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-284",
         "CWE-200"
       ],
       "description": "cloud_enum or manual enumeration discovered a publicly accessible cloud storage bucket (AWS S3, Azure Blob, GCP Storage) associated with the target. It may contain sensitive files.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "HIGH",
       "_x_category": "Cloud Exposure",
       "_x_remediation": "Immediately set the bucket to private unless public access is intentional. Audit bucket contents for sensitive data. Enable bucket access logging and alerts.",
@@ -1634,7 +1634,7 @@
       "kev": false,
       "remediation_brief": "No direct remediation required. Review disclosed subdomains for unintended exposure. Consider certificate issuance monitoring for your domain.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A certificate was found in CT logs (crt.sh, Certspotter, Facebook CT) for the target domain. The SAN/CN reveals subdomain names that may not be otherwise discoverable.",
@@ -1725,7 +1725,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -1787,7 +1787,7 @@
       "kev": false,
       "remediation_brief": "Enable WHOIS privacy protection through your registrar for domains where registrant PII should not be public.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-200"
@@ -1837,11 +1837,11 @@
       "kev": false,
       "remediation_brief": "Educate staff on LinkedIn exposure. Implement strict email security (DMARC p=reject). Train employees to recognise spear-phishing.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Authentication",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "Employee names, titles, and organisational roles were enumerated from LinkedIn. This information supports spear-phishing, social engineering, and targeted credential spray attacks.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Weak or missing authentication allows unauthorized users to access protected resources.",
       "_x_severity": "INFO",
       "_x_category": "People Intelligence",
       "_x_remediation": "Educate staff on LinkedIn exposure. Implement strict email security (DMARC p=reject). Train employees to recognise spear-phishing.",
@@ -1883,11 +1883,11 @@
       "kev": false,
       "remediation_brief": "Assess employee privacy settings. Provide training on personal operational security.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Email Security",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "maigret discovered social media profiles (Twitter, GitHub, Reddit, etc.) linked to an employee username derived from their email address. May reveal personal information useful for social engineering.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening.",
       "_x_severity": "INFO",
       "_x_category": "People Intelligence",
       "_x_remediation": "Assess employee privacy settings. Provide training on personal operational security.",
@@ -1929,14 +1929,14 @@
       "kev": false,
       "remediation_brief": "Remove the file from the web root immediately. Audit web server directory listings. Restrict access to backup and config files via .htaccess or server config.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Information Disclosure",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-538",
         "CWE-312"
       ],
       "description": "katana or xurlfind3r discovered a publicly accessible file containing potentially sensitive data: backup archives (.zip, .bak), configuration files (.env, .config), log files, or database dumps.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "HIGH",
       "_x_category": "Web Exposure",
       "_x_remediation": "Remove the file from the web root immediately. Audit web server directory listings. Restrict access to backup and config files via .htaccess or server config.",
@@ -1982,14 +1982,14 @@
       "kev": false,
       "remediation_brief": "Add security headers to web server or application configuration. Verify with securityheaders.com.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Configuration",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-693",
         "OWASP A05:2021"
       ],
       "description": "httpx detected missing security headers on a live host: Content-Security-Policy, X-Frame-Options, Strict-Transport-Security, X-Content-Type-Options, or Referrer-Policy.",
-      "impact": "",
+      "impact": "An attacker could use this information or weakness for reconnaissance or to facilitate more targeted attacks against the organization. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "LOW",
       "_x_category": "Web Security",
       "_x_remediation": "Add security headers to web server or application configuration. Verify with securityheaders.com.",
@@ -2039,8 +2039,8 @@
         150100,
         150101
       ],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
-      "owasp_api": "API2:2023 \u2013 Broken Authentication",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_api": "API2:2023 – Broken Authentication",
       "nist_csf2": [
         "PR.AA-01",
         "DE.CM-01"
@@ -2096,7 +2096,7 @@
         "OWASP A07:2021"
       ],
       "description": "The target accepted well-known default or factory-set credentials, granting unauthorised access.",
-      "impact": "",
+      "impact": "An attacker could exploit this to gain full system compromise, execute arbitrary code, or obtain complete unauthorized access to sensitive data and systems. Weak or missing authentication allows unauthorized users to access protected resources.",
       "_x_severity": "CRITICAL",
       "_x_category": "Authentication",
       "_x_remediation": "Replace all default credentials with strong, unique secrets and enforce a password policy prior to any deployment.",
@@ -2142,11 +2142,11 @@
       "kev": false,
       "remediation_brief": "Review all indexed services. Remove unnecessary public exposure. Ensure indexed software versions are patched and up to date.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "The uncover tool found the target in internet-wide scan engine results (Shodan, Censys, FOFA, Quake360, ZoomEye, CriminalIP). Services and their versions are publicly catalogued.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system.",
       "_x_severity": "MEDIUM",
       "_x_category": "Attack Surface",
       "_x_remediation": "Review all indexed services. Remove unnecessary public exposure. Ensure indexed software versions are patched and up to date.",
@@ -2248,7 +2248,7 @@
         }
       ],
       "description": "A wildcard DNS record (*.domain.com) was detected. This causes all subdomains to resolve, which may mask dangling CNAMEs and complicate subdomain takeover detection.",
-      "impact": "",
+      "impact": "An attacker could use this information or weakness for reconnaissance or to facilitate more targeted attacks against the organization. Security misconfigurations expose unnecessary attack surface or weaken defensive controls.",
       "_x_severity": "LOW",
       "_x_category": "DNS",
       "_x_remediation": "Remove wildcard records unless they serve a specific purpose. Document and review all subdomains that rely on wildcard resolution.",
@@ -2335,7 +2335,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2355,7 +2355,7 @@
         }
       ],
       "description": "cloudlist or cdncheck identified assets hosted in cloud or CDN infrastructure (AWS, Azure, GCP, Cloudflare, Fastly, Akamai). Provides context for attack surface mapping.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "INFO",
       "_x_category": "Cloud Exposure",
       "_x_remediation": "Ensure cloud-hosted assets have appropriate access controls, IAM policies, and logging. Review for misconfigured security groups or ACLs.",
@@ -2398,11 +2398,11 @@
       "kev": false,
       "remediation_brief": "No direct remediation. Public regulatory filings are legally required for public companies. Ensure security awareness training covers executive impersonation risk.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Reconnaissance",
       "remediation_effort": "",
       "validation_tools": [],
       "description": "Public SEC EDGAR filings for the target company revealed corporate structure, subsidiary entities, executive names, and legal entity identifiers (LEI, CIK). Useful for targeted attacks and social engineering.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening.",
       "_x_severity": "INFO",
       "_x_category": "Company Intelligence",
       "_x_remediation": "No direct remediation. Public regulatory filings are legally required for public companies. Ensure security awareness training covers executive impersonation risk.",
@@ -2434,7 +2434,7 @@
       "cvss_vector": "N/A",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A08:2021 \u2013 Software and Data Integrity Failures",
+      "owasp_web": "A08:2021 – Software and Data Integrity Failures",
       "owasp_api": "",
       "nist_csf2": [
         "ID.SC-01",
@@ -2483,7 +2483,7 @@
       "kev": false,
       "remediation_brief": "Maintain an inventory of third-party services. Assess vendor security posture. Monitor for supply chain compromise indicators.",
       "remediation_component": "Process",
-      "remediation_category": "Supply Chain",
+      "remediation_category": "Supply Chain Security",
       "remediation_effort": "Moderate",
       "validation_tools": [
         {
@@ -2508,11 +2508,11 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
         }
       ],
       "description": "Enumeration revealed domains or subdomains associated with third-party services, SaaS providers, or supply chain vendors (identified via CNAME targets, MX records, or certificate SANs).",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening.",
       "_x_severity": "INFO",
       "_x_category": "Supply Chain",
       "_x_remediation": "Maintain an inventory of third-party services. Assess vendor security posture. Monitor for supply chain compromise indicators.",
@@ -2679,7 +2679,7 @@
         "CWE-200"
       ],
       "description": "One or more IP addresses were mapped to the target organisation's assets through DNS resolution, certificate transparency log analysis, ASN enumeration, WHOIS records, or OSINT sources. Confirmed IP addresses expand the known attack surface beyond the primary domain, enabling direct host scanning, service fingerprinting, and identification of infrastructure not protected by a CDN or application-layer proxy.",
-      "impact": "",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "INFO",
       "_x_category": "Reconnaissance",
       "_x_remediation": "Reconcile all discovered IP addresses against the authorised asset inventory. Ensure cloud-hosted instances are protected by security groups or firewall rules limiting unnecessary public exposure. Review whether any discovered IPs host unintended or forgotten services.",
@@ -2712,7 +2712,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_web": "A05:2021 – Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -2760,7 +2760,7 @@
         "CWE-200"
       ],
       "description": "Internal filesystem path components were found exposed in publicly accessible sources, including HTTP response bodies, error messages, stack traces, application comments, or historical Wayback Machine snapshots. Exposed paths such as /var/www/app/releases/20231105/, C:\\inetpub\\wwwroot\\api\\, or /home/deploy/app/ reveal the server's operating system, directory layout, deployment tooling, and technology stack. This information assists attackers in crafting targeted local file inclusion, path traversal, or directory brute-force payloads.",
-      "impact": "",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "MEDIUM",
       "_x_category": "Information Disclosure",
       "_x_remediation": "Configure the web application to display generic error pages rather than stack traces or exception details in production. Suppress server-side path information from HTTP response headers and application output. Review Wayback Machine archives for pages that previously revealed directory structure and ensure those resources are no longer publicly accessible.",
@@ -2860,10 +2860,10 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Information Disclosure: Potential PII Pattern \u2014 Social Security Number Format Detected",
+      "title": "Information Disclosure: Potential PII Pattern — Social Security Number Format Detected",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+        "Potential PII Pattern — Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -2937,7 +2937,7 @@
         "CWE-200"
       ],
       "description": "Content matching the US Social Security Number format (XXX-XX-XXXX, nine digits with specific separators) was identified in publicly accessible content associated with the target domain or organisation. Exposure of SSN-format data in a publicly reachable location constitutes a potential data breach under US federal and state regulations (HIPAA, state breach notification laws, FTC Act). Even if the values are synthetic or test data, their public exposure indicates a failure in data classification and handling controls.",
-      "impact": "",
+      "impact": "An attacker could leverage this to gain significant unauthorized access, escalate privileges, or exfiltrate sensitive data from affected systems. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_x_severity": "HIGH",
       "_x_category": "PII Exposure",
       "_x_remediation": "Immediately investigate whether the detected values are real SSNs or test data. If real, initiate incident response per your breach notification obligations (HIPAA, state data breach laws). Remove the file or page containing the data from public access. Implement data loss prevention (DLP) scanning to detect SSN-format strings in web application output and source code repositories. Conduct a broader audit of publicly accessible content for additional PII exposure.",
@@ -2982,12 +2982,12 @@
       "kev": false,
       "remediation_brief": "Replace the self-signed certificate with one issued by a publicly trusted CA. For internet-facing services, use Let's Encrypt via ACME automation (certbot, acme.sh, or Caddy) for zero-cost, automatically renewing certificates. For internal services, establish an internal CA with proper trust distribution rather than using ad-hoc self-signed certificates.",
       "remediation_component": "",
-      "remediation_category": "",
+      "remediation_category": "Cryptography",
       "remediation_effort": "",
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
       "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
@@ -3064,7 +3064,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles \u2014 only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
+      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles — only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
       "remediation_component": "People / Process",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Low",
@@ -3086,7 +3086,7 @@
           "description": "Automated OSINT tool with 200+ modules for deep reconnaissance on targets"
         }
       ],
-      "description": "",
+      "description": "osift detected: Phone Number Pattern Spotted - Unconfirmed. This finding indicates a security concern that requires review.",
       "impact": "Discovered phone numbers enable vishing (voice phishing) and SMS-based social engineering attacks. Combined with employee names and roles from other OSINT sources, phone numbers allow targeted pretexting calls that bypass email security controls entirely.",
       "_scaffold_from": "osift.py:9195",
       "_template": false
@@ -3096,7 +3096,7 @@
       "title": "Information Disclosure: Social Security pattern detected:",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern \u2014 Social Security Number Format Detected"
+        "Potential PII Pattern — Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -3183,8 +3183,8 @@
           "description": "Automated OSINT tool with 200+ modules for deep reconnaissance on targets"
         }
       ],
-      "description": "",
-      "impact": "",
+      "description": "osift detected: Social Security pattern detected:. This finding indicates a security concern that requires review.",
+      "impact": "An attacker could potentially exploit this weakness to gain partial access, disclose sensitive information, or degrade the security posture of the affected system. Exposed information aids attacker reconnaissance and reveals sensitive system details.",
       "_scaffold_from": "osift.py:9209",
       "_template": false
     },
@@ -3246,7 +3246,7 @@
       ],
       "risk": "LOW",
       "description": "No CAA record found. Without CAA, any public Certificate Authority can issue TLS certificates for this domain.",
-      "impact": "Any Certificate Authority can issue TLS certificates for this domain. An attacker who compromises a CA's validation process \u2014 or uses a permissive CA \u2014 can obtain a valid certificate and use it for man-in-the-middle attacks or impersonation.",
+      "impact": "Any Certificate Authority can issue TLS certificates for this domain. An attacker who compromises a CA's validation process — or uses a permissive CA — can obtain a valid certificate and use it for man-in-the-middle attacks or impersonation.",
       "cwe": [
         "CWE-295"
       ],
@@ -3285,7 +3285,7 @@
       "kev": false,
       "remediation_brief": "Publish a CAA DNS record restricting certificate issuance to your authorized CA(s), e.g. 0 issue \"letsencrypt.org\".",
       "remediation_component": "Configuration",
-      "remediation_category": "Certificate Management",
+      "remediation_category": "Cryptography",
       "remediation_effort": "Easy",
       "validation_tools": [
         "dig",
@@ -3385,7 +3385,7 @@
       "kev": false,
       "remediation_brief": "Monitor for typosquatting domains using automated tools (dnstwist). Consider registering common misspellings of the domain proactively. Implement DMARC to prevent spoofed emails from look-alike domains. Establish a domain takedown process with registrars.",
       "remediation_component": "Configuration",
-      "remediation_category": "Brand Protection",
+      "remediation_category": "Governance",
       "remediation_effort": "Moderate",
       "validation_tools": [
         "dnstwist",
@@ -4055,10 +4055,10 @@
     },
     {
       "id": "OSIFT-058",
-      "title": "CI/CD Security: Audit Complete \u2014 No Issues",
+      "title": "CI/CD Security: Audit Complete — No Issues",
       "aliases": [
         "GitHub Actions Security Audit Clean",
-        "CI/CD Security: GitHub Actions: Audit Complete \u2014 No Issues"
+        "CI/CD Security: GitHub Actions: Audit Complete — No Issues"
       ],
       "source_tools": [
         "osift"
@@ -4736,7 +4736,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Strip metadata from documents before publishing. This is informational \u2014 email addresses may already be publicly available through other channels.",
+      "remediation_brief": "Strip metadata from documents before publishing. This is informational — email addresses may already be publicly available through other channels.",
       "remediation_component": "Application",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Easy",
@@ -5588,7 +5588,7 @@
       "kev": false,
       "remediation_brief": "Review identified profiles for appropriateness. Implement social media security awareness training. Consider monitoring for impersonation accounts.",
       "remediation_component": "Application",
-      "remediation_category": "Awareness",
+      "remediation_category": "Governance",
       "remediation_effort": "Easy",
       "validation_tools": [
         "maigret"
@@ -6031,7 +6031,7 @@
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "SPF record has no 'all' mechanism. Receiving servers may treat unlisted senders inconsistently.",
-      "impact": "Without an explicit 'all' mechanism, different receiving servers apply different default policies to unlisted senders \u2014 some accept, some softfail, some reject. This inconsistency means spoofed mail delivery is unpredictable but not prevented."
+      "impact": "Without an explicit 'all' mechanism, different receiving servers apply different default policies to unlisted senders — some accept, some softfail, some reject. This inconsistency means spoofed mail delivery is unpredictable but not prevented."
     },
     {
       "id": "OSIFT-097",
@@ -6066,13 +6066,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 SPF is correctly configured. Periodically review the record to ensure new senders are included.",
+      "remediation_brief": "Informational — SPF is correctly configured. Periodically review the record to ensure new senders are included.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "SPF record present with a strict policy. Authorized senders are enumerated.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-098",
@@ -6239,13 +6239,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 DMARC is at the strongest enforcement level. Continue monitoring RUA reports for legitimate senders that fail alignment.",
+      "remediation_brief": "Informational — DMARC is at the strongest enforcement level. Continue monitoring RUA reports for legitimate senders that fail alignment.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
-      "description": "DMARC policy is 'p=reject' \u2014 optimal configuration. Spoofed messages are rejected outright.",
-      "impact": ""
+      "description": "DMARC policy is 'p=reject' — optimal configuration. Spoofed messages are rejected outright.",
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-101",
@@ -6280,13 +6280,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 DMARC record is published. Verify the policy level meets organizational requirements.",
+      "remediation_brief": "Informational — DMARC record is published. Verify the policy level meets organizational requirements.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "DMARC record present with a recognized policy.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-102",
@@ -6401,7 +6401,7 @@
       "kev": false,
       "remediation_brief": "Add a CAA record with the 'issuewild' tag restricting wildcard certificate issuance to authorized CAs.",
       "remediation_component": "Network",
-      "remediation_category": "Certificate Management",
+      "remediation_category": "Cryptography",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "CAA record restricts apex certificate issuance but has no 'issuewild' tag. Wildcard certificates may be issued by any CA.",
@@ -6440,13 +6440,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 CAA is correctly configured with both issue and issuewild restrictions.",
+      "remediation_brief": "Informational — CAA is correctly configured with both issue and issuewild restrictions.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "CAA record restricts certificate issuance to specified CAs, including wildcard coverage.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-105",
@@ -6502,7 +6502,7 @@
       "kev": false,
       "remediation_brief": "Enable DNSSEC at the domain registrar. Sign the zone and publish DS records in the parent zone.",
       "remediation_component": "Network",
-      "remediation_category": "DNS Configuration",
+      "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "DNSSEC is not enabled. DNS responses can be forged via cache poisoning or MITM.",
@@ -6542,13 +6542,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 DNSSEC is active. Periodically verify key rotation and DS record alignment with the parent zone.",
+      "remediation_brief": "Informational — DNSSEC is active. Periodically verify key rotation and DS record alignment with the parent zone.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "DNSSEC is enabled. DNS responses are cryptographically signed.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-107",
@@ -6583,13 +6583,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 DKIM is configured. Verify key strength (\u22652048-bit RSA or Ed25519) and monitor for selector rotation.",
+      "remediation_brief": "Informational — DKIM is configured. Verify key strength (≥2048-bit RSA or Ed25519) and monitor for selector rotation.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "DKIM public key(s) found on one or more selectors.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-108",
@@ -6816,13 +6816,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 MTA-STS is configured. Periodically verify the policy file and max_age are current.",
+      "remediation_brief": "Informational — MTA-STS is configured. Periodically verify the policy file and max_age are current.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "MTA-STS policy record present. Inbound SMTP connections are required to use TLS.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-112",
@@ -6912,13 +6912,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 TLS-RPT is configured. Periodically review reports for STARTTLS failures.",
+      "remediation_brief": "Informational — TLS-RPT is configured. Periodically review reports for STARTTLS failures.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "TLS-RPT reporting record present. Aggregate TLS failure reports are delivered.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     },
     {
       "id": "OSIFT-114",
@@ -6953,13 +6953,13 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Informational \u2014 BIMI is configured. Ensure the Verified Mark Certificate (VMC) is current and the SVG logo meets BIMI requirements.",
+      "remediation_brief": "Informational — BIMI is configured. Ensure the Verified Mark Certificate (VMC) is current and the SVG logo meets BIMI requirements.",
       "remediation_component": "Network",
       "remediation_category": "Configuration",
       "remediation_effort": "Low",
       "validation_tools": [],
       "description": "BIMI (Brand Indicators for Message Identification) record found. The domain publishes a brand logo for authenticated email.",
-      "impact": ""
+      "impact": "This finding provides informational context about the environment useful for security assessment and hardening. Security misconfigurations expose unnecessary attack surface or weaken defensive controls."
     }
   ]
 }

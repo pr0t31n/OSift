@@ -488,12 +488,13 @@
     },
     {
       "id": "OSIFT-008",
-      "title": "DNS Information: SPF Record Missing",
+      "title": "DNS: Missing SPF Record",
       "aliases": [
         "DMARC Record Missing",
         "MTA-STS Not Configured",
         "SPF Record Missing",
-        "DKIM Configuration Missing"
+        "DKIM Configuration Missing",
+        "DNS Information: SPF Record Missing"
       ],
       "source_tools": [
         "osift"
@@ -508,7 +509,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A05:2021 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -523,15 +524,15 @@
         "3.13.8"
       ],
       "pci_dss_4": [
-        "12.5.1"
+        "2.2.1",
+        "4.2.1"
       ],
       "iso_27001": [
-        "A.13.2.3",
-        "A.10.1.1"
+        "A.13.1.1",
+        "A.13.2.1"
       ],
       "iso_27002": [
-        "13.2.3",
-        "10.1.1"
+        "8.24"
       ],
       "soc2": [
         "CC6.7"
@@ -540,7 +541,7 @@
         "09.s"
       ],
       "gdpr": [
-        "Article 32"
+        "Art. 32"
       ],
       "mitre_attack": [
         {
@@ -562,14 +563,14 @@
       "kev": false,
       "remediation_brief": "Add an SPF TXT record to the domain's DNS: e.g., v=spf1 include:_spf.google.com ~all. Consult your mail provider's documentation.",
       "remediation_component": "Network",
-      "remediation_category": "Configuration",
+      "remediation_category": "Email Security",
       "remediation_effort": "Low",
       "validation_tools": [
         "CWE-346",
         "RFC 7208"
       ],
-      "description": "No SPF (Sender Policy Framework) TXT record was found for the target domain. Without SPF, attackers can spoof email from this domain and bypass basic spam filters.",
-      "impact": "",
+      "description": "No SPF (Sender Policy Framework) TXT record was found for the target domain. Without SPF, attackers can spoof email from this domain.",
+      "impact": "An attacker can send email that appears to originate from this domain, enabling phishing campaigns against employees, partners, and customers. Receiving mail servers have no policy to reject these spoofed messages, increasing the likelihood of credential theft and business email compromise.",
       "_x_severity": "MEDIUM",
       "_x_category": "Email Security",
       "_x_remediation": "Add an SPF TXT record to the domain's DNS: e.g., v=spf1 include:_spf.google.com ~all. Consult your mail provider's documentation.",
@@ -586,12 +587,13 @@
     },
     {
       "id": "OSIFT-009",
-      "title": "DNS Information: DMARC Record Missing",
+      "title": "DNS: Missing DMARC Record",
       "aliases": [
         "DMARC Record Missing",
         "MTA-STS Not Configured",
         "SPF Record Missing",
-        "DKIM Configuration Missing"
+        "DKIM Configuration Missing",
+        "DNS Information: DMARC Record Missing"
       ],
       "source_tools": [
         "osift"
@@ -606,7 +608,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A05:2021 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -621,15 +623,15 @@
         "3.13.8"
       ],
       "pci_dss_4": [
-        "12.5.1"
+        "2.2.1",
+        "4.2.1"
       ],
       "iso_27001": [
-        "A.13.2.3",
-        "A.10.1.1"
+        "A.13.1.1",
+        "A.13.2.1"
       ],
       "iso_27002": [
-        "13.2.3",
-        "10.1.1"
+        "8.24"
       ],
       "soc2": [
         "CC6.7"
@@ -638,7 +640,7 @@
         "09.s"
       ],
       "gdpr": [
-        "Article 32"
+        "Art. 32"
       ],
       "mitre_attack": [
         {
@@ -658,16 +660,16 @@
       ],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Add a DMARC record starting with p=quarantine or p=reject. Example: v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com",
+      "remediation_brief": "Publish a DMARC TXT record at _dmarc.<domain>. Start with p=none to collect reports (rua=), then escalate to p=quarantine and eventually p=reject.",
       "remediation_component": "Network",
-      "remediation_category": "Configuration",
+      "remediation_category": "Email Security",
       "remediation_effort": "Low",
       "validation_tools": [
         "CWE-346",
         "RFC 7489"
       ],
-      "description": "No DMARC (_dmarc.<domain> TXT) record was found. Without DMARC, there is no policy instructing receiving mail servers how to handle unauthenticated email from this domain.",
-      "impact": "",
+      "description": "No DMARC record was found. Without DMARC, receiving servers have no policy for handling SPF/DKIM failures.",
+      "impact": "Without DMARC, forged email from this domain will not be rejected or quarantined by receiving servers. Attackers can mount convincing phishing and business-email-compromise attacks with no automated defense in place, and the domain owner has no aggregate reporting on abuse.",
       "_x_severity": "MEDIUM",
       "_x_category": "Email Security",
       "_x_remediation": "Add a DMARC record starting with p=quarantine or p=reject. Example: v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com",
@@ -684,17 +686,18 @@
     },
     {
       "id": "OSIFT-010",
-      "title": "DNS Information: DKIM Configuration Missing",
+      "title": "DNS: Missing DKIM Record",
       "aliases": [
         "DMARC Record Missing",
         "MTA-STS Not Configured",
         "SPF Record Missing",
-        "DKIM Configuration Missing"
+        "DKIM Configuration Missing",
+        "DNS Information: DKIM Configuration Missing"
       ],
       "source_tools": [
         "osift"
       ],
-      "risk": "LOW",
+      "risk": "MEDIUM",
       "cwe": [
         "CWE-346",
         "CWE-940"
@@ -704,7 +707,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A05:2021 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -719,15 +722,15 @@
         "3.13.8"
       ],
       "pci_dss_4": [
-        "12.5.1"
+        "2.2.1",
+        "4.2.1"
       ],
       "iso_27001": [
-        "A.13.2.3",
-        "A.10.1.1"
+        "A.13.1.1",
+        "A.13.2.1"
       ],
       "iso_27002": [
-        "13.2.3",
-        "10.1.1"
+        "8.24"
       ],
       "soc2": [
         "CC6.7"
@@ -736,7 +739,7 @@
         "09.s"
       ],
       "gdpr": [
-        "Article 32"
+        "Art. 32"
       ],
       "mitre_attack": [
         {
@@ -756,9 +759,9 @@
       ],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Configure DKIM signing on your mail server and publish the public key as a DNS TXT record under <selector>._domainkey.<domain>.",
+      "remediation_brief": "Configure DKIM signing on the mail server or mail provider. Publish the public key as a TXT record under <selector>._domainkey.<domain>.",
       "remediation_component": "Network",
-      "remediation_category": "Configuration",
+      "remediation_category": "Email Security",
       "remediation_effort": "Low",
       "validation_tools": [
         {
@@ -778,8 +781,8 @@
           "description": "Fast template-based vulnerability scanner with 5000+ community templates"
         }
       ],
-      "description": "No DKIM (DomainKeys Identified Mail) selector was discoverable for the target domain. Without DKIM, email authentication is weaker and phishing risk increases.",
-      "impact": "",
+      "description": "No DKIM public keys were found across common selectors. Without DKIM, email from this domain cannot be cryptographically authenticated by receivers.",
+      "impact": "Email from this domain cannot be cryptographically verified. Receivers have no way to distinguish legitimate messages from forgeries, weakening DMARC enforcement (which depends on SPF or DKIM alignment). Attackers can spoof domain email more convincingly.",
       "_x_severity": "LOW",
       "_x_category": "Email Security",
       "_x_remediation": "Configure DKIM signing on your mail server and publish the public key as a DNS TXT record under <selector>._domainkey.<domain>.",
@@ -1121,7 +1124,7 @@
       "qualys_qids": [
         70001
       ],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.PS-01",
@@ -1301,7 +1304,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         }
       ],
       "description": "An employee email address was discovered via theHarvester, Hunter.io, LinkedIn, or public sources. Collected addresses support phishing and credential spray attacks.",
@@ -1387,7 +1390,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -1450,7 +1453,7 @@
     },
     {
       "id": "OSIFT-021",
-      "title": "Discovery: Shodan Exposure — Open Service",
+      "title": "Discovery: Shodan Exposure \u2014 Open Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1497,7 +1500,7 @@
     },
     {
       "id": "OSIFT-022",
-      "title": "Uncategorized: Shodan Exposure — Known CVE on Service",
+      "title": "Uncategorized: Shodan Exposure \u2014 Known CVE on Service",
       "aliases": [],
       "source_tools": [
         "osift"
@@ -1722,7 +1725,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2036,8 +2039,8 @@
         150100,
         150101
       ],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
-      "owasp_api": "API2:2023 – Broken Authentication",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
+      "owasp_api": "API2:2023 \u2013 Broken Authentication",
       "nist_csf2": [
         "PR.AA-01",
         "DE.CM-01"
@@ -2332,7 +2335,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         },
         {
           "name": "dnsx",
@@ -2431,7 +2434,7 @@
       "cvss_vector": "N/A",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A08:2021 – Software and Data Integrity Failures",
+      "owasp_web": "A08:2021 \u2013 Software and Data Integrity Failures",
       "owasp_api": "",
       "nist_csf2": [
         "ID.SC-01",
@@ -2505,7 +2508,7 @@
           "url": "https://github.com/owasp-amass/amass",
           "install": "go install github.com/owasp-amass/amass/v4/...@master",
           "command": "amass enum -passive -d TARGET -o amass.txt\namass enum -active -d TARGET -brute",
-          "description": "In-depth DNS enumeration and attack surface discovery — OWASP flagship project"
+          "description": "In-depth DNS enumeration and attack surface discovery \u2014 OWASP flagship project"
         }
       ],
       "description": "Enumeration revealed domains or subdomains associated with third-party services, SaaS providers, or supply chain vendors (identified via CNAME targets, MX records, or certificate SANs).",
@@ -2709,7 +2712,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A05:2021 – Security Misconfiguration",
+      "owasp_web": "A05:2021 \u2013 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-02",
@@ -2857,10 +2860,10 @@
     },
     {
       "id": "OSIFT-041",
-      "title": "Information Disclosure: Potential PII Pattern — Social Security Number Format Detected",
+      "title": "Information Disclosure: Potential PII Pattern \u2014 Social Security Number Format Detected",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern — Social Security Number Format Detected"
+        "Potential PII Pattern \u2014 Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -2984,7 +2987,7 @@
       "validation_tools": [
         "CWE-295"
       ],
-      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients — browsers, API consumers, mobile apps — cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
+      "description": "A self-signed TLS certificate was identified on a publicly reachable host associated with the target organisation. Self-signed certificates are not anchored to a trusted certificate authority (CA), meaning standard clients \u2014 browsers, API consumers, mobile apps \u2014 cannot cryptographically verify the server's identity. This condition enables trivial man-in-the-middle attacks: an attacker presenting their own self-signed certificate will produce an identical trust error to the legitimate server, making MITM transparent to users already conditioned to accept the warning.",
       "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_x_severity": "MEDIUM",
       "_x_category": "Cryptography",
@@ -3061,7 +3064,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles — only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
+      "remediation_brief": "Review publicly accessible pages, metadata, and contact forms for inadvertent phone number exposure. Apply data minimisation principles \u2014 only publish contact numbers that need to be public. Monitor external sources with OSINT tooling for leaked PII on a periodic basis.",
       "remediation_component": "People / Process",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Low",
@@ -3093,7 +3096,7 @@
       "title": "Information Disclosure: Social Security pattern detected:",
       "aliases": [
         "Social Security pattern detected:",
-        "Potential PII Pattern — Social Security Number Format Detected"
+        "Potential PII Pattern \u2014 Social Security Number Format Detected"
       ],
       "source_tools": [
         "osift"
@@ -3231,27 +3234,28 @@
     },
     {
       "id": "OSIFT-044",
-      "title": "DNS Information: DNS: Missing CAA Record",
+      "title": "DNS: Missing CAA Record",
       "aliases": [
         "Missing CAA Record",
         "No CAA Record",
-        "CAA Record Not Found"
+        "CAA Record Not Found",
+        "DNS Information: DNS: Missing CAA Record"
       ],
       "source_tools": [
         "osift"
       ],
       "risk": "LOW",
-      "description": "No Certificate Authority Authorization (CAA) DNS record was found for the domain. CAA records restrict which certificate authorities are permitted to issue certificates for the domain.",
-      "impact": "Without a CAA record, any certificate authority worldwide can issue certificates for this domain. An attacker who compromises or social-engineers a less-secure CA can obtain a trusted certificate, enabling undetectable man-in-the-middle attacks against the organization's users and services.",
+      "description": "No CAA record found. Without CAA, any public Certificate Authority can issue TLS certificates for this domain.",
+      "impact": "Any Certificate Authority can issue TLS certificates for this domain. An attacker who compromises a CA's validation process \u2014 or uses a permissive CA \u2014 can obtain a valid certificate and use it for man-in-the-middle attacks or impersonation.",
       "cwe": [
         "CWE-295"
       ],
       "cve_examples": [],
-      "cvss_v3_base": null,
-      "cvss_vector": "",
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "",
+      "owasp_web": "A05:2021 Security Misconfiguration",
       "owasp_api": "",
       "nist_csf2": [
         "PR.DS-2"
@@ -3260,19 +3264,28 @@
         "SC-17"
       ],
       "nist_800_171": [],
-      "pci_dss_4": [],
-      "iso_27001": [],
-      "iso_27002": [],
+      "pci_dss_4": [
+        "2.2.1"
+      ],
+      "iso_27001": [
+        "A.10.1.2",
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
       "soc2": [],
       "hitrust": [],
-      "gdpr": [],
+      "gdpr": [
+        "Art. 32"
+      ],
       "mitre_attack": [],
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Add a CAA DNS record specifying the authorized certificate authorities for the domain. Example: 'example.com. IN CAA 0 issue \"letsencrypt.org\"'. This prevents unauthorized CAs from issuing certificates.",
+      "remediation_brief": "Publish a CAA DNS record restricting certificate issuance to your authorized CA(s), e.g. 0 issue \"letsencrypt.org\".",
       "remediation_component": "Configuration",
-      "remediation_category": "Cryptography",
+      "remediation_category": "Certificate Management",
       "remediation_effort": "Easy",
       "validation_tools": [
         "dig",
@@ -4042,10 +4055,10 @@
     },
     {
       "id": "OSIFT-058",
-      "title": "CI/CD Security: Audit Complete — No Issues",
+      "title": "CI/CD Security: Audit Complete \u2014 No Issues",
       "aliases": [
         "GitHub Actions Security Audit Clean",
-        "CI/CD Security: GitHub Actions: Audit Complete — No Issues"
+        "CI/CD Security: GitHub Actions: Audit Complete \u2014 No Issues"
       ],
       "source_tools": [
         "osift"
@@ -4723,7 +4736,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Strip metadata from documents before publishing. This is informational — email addresses may already be publicly available through other channels.",
+      "remediation_brief": "Strip metadata from documents before publishing. This is informational \u2014 email addresses may already be publicly available through other channels.",
       "remediation_component": "Application",
       "remediation_category": "Information Disclosure",
       "remediation_effort": "Easy",
@@ -5755,6 +5768,1198 @@
         "gitleaks",
         "gitdorker"
       ]
+    },
+    {
+      "id": "OSIFT-093",
+      "title": "DNS: Permissive SPF Record (+all)",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "HIGH",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 7.4,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:N/I:H/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Replace '+all' with '-all' or '~all' in the SPF record. Enumerate all authorized senders with 'include:' and 'ip4:'/'ip6:' mechanisms.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "SPF record uses '+all', allowing any server to send mail as this domain.",
+      "impact": "This completely negates SPF protection. Any host on the internet can send email that passes SPF checks for this domain, enabling trivial phishing and business-email-compromise attacks with no detectable authentication failure."
+    },
+    {
+      "id": "OSIFT-094",
+      "title": "DNS: SPF Softfail Policy (~all)",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Upgrade the SPF record's '~all' to '-all' (hardfail) once all legitimate senders are enumerated.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "SPF record uses '~all' (softfail). Mail from unauthorised sources is flagged but not rejected.",
+      "impact": "Spoofed email from this domain may reach recipients' inboxes, albeit with a softfail indicator. Some mail servers ignore softfail, so phishing messages can still succeed, especially when DMARC is absent or set to p=none."
+    },
+    {
+      "id": "OSIFT-095",
+      "title": "DNS: SPF Neutral Policy (?all)",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Replace '?all' with '-all' and enumerate authorized senders.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "SPF record uses '?all' (neutral), providing no meaningful protection against spoofing.",
+      "impact": "A neutral SPF result tells receivers nothing about unauthorised senders. It is functionally equivalent to having no SPF record and provides zero protection against email spoofing."
+    },
+    {
+      "id": "OSIFT-096",
+      "title": "DNS: Missing SPF All Mechanism",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Add an explicit '-all' or '~all' mechanism at the end of the SPF record.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "SPF record has no 'all' mechanism. Receiving servers may treat unlisted senders inconsistently.",
+      "impact": "Without an explicit 'all' mechanism, different receiving servers apply different default policies to unlisted senders \u2014 some accept, some softfail, some reject. This inconsistency means spoofed mail delivery is unpredictable but not prevented."
+    },
+    {
+      "id": "OSIFT-097",
+      "title": "DNS: SPF Record Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 SPF is correctly configured. Periodically review the record to ensure new senders are included.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "SPF record present with a strict policy. Authorized senders are enumerated.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-098",
+      "title": "DNS: DMARC Policy: Monitor Only",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "After reviewing RUA aggregate reports and confirming all legitimate senders align with SPF/DKIM, escalate the DMARC policy to 'p=quarantine' and then 'p=reject'.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DMARC policy is 'p=none' (monitor only). Spoofed emails are reported but not blocked.",
+      "impact": "While DMARC aggregate reports (RUA) are collected, failing messages still reach recipients. An attacker can spoof email from this domain and the messages will be delivered, albeit with a DMARC fail indicator. The domain is in monitoring mode and not yet enforcing."
+    },
+    {
+      "id": "OSIFT-099",
+      "title": "DNS: DMARC Policy: Quarantine",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 2.0,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Upgrade DMARC policy from 'p=quarantine' to 'p=reject' for maximum spoofing protection.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DMARC policy is 'p=quarantine'. Spoofed messages are sent to spam/quarantine.",
+      "impact": "Spoofed messages are quarantined rather than rejected outright. An attacker's forged emails will land in recipients' spam folders, where they could still be read. Full protection requires p=reject."
+    },
+    {
+      "id": "OSIFT-100",
+      "title": "DNS: DMARC Policy: Reject",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 DMARC is at the strongest enforcement level. Continue monitoring RUA reports for legitimate senders that fail alignment.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DMARC policy is 'p=reject' \u2014 optimal configuration. Spoofed messages are rejected outright.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-101",
+      "title": "DNS: DMARC Record Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 DMARC record is published. Verify the policy level meets organizational requirements.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DMARC record present with a recognized policy.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-102",
+      "title": "DNS: DMARC Subdomain Policy: Monitor Only",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Set sp=quarantine or sp=reject in the DMARC record to extend enforcement to subdomains.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DMARC subdomain policy is 'sp=none' while the apex policy is stricter. Subdomains can still be spoofed.",
+      "impact": "An attacker can spoof email from any subdomain (e.g. hr.example.com, it.example.com) because the subdomain-specific policy overrides the apex domain's enforcement. This is a common oversight that leaves a wide spoofing surface."
+    },
+    {
+      "id": "OSIFT-103",
+      "title": "DNS: Missing CAA Issuewild",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-295"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 4.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-17",
+        "SC-12"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1"
+      ],
+      "iso_27001": [
+        "A.10.1.2",
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Add a CAA record with the 'issuewild' tag restricting wildcard certificate issuance to authorized CAs.",
+      "remediation_component": "Network",
+      "remediation_category": "Certificate Management",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "CAA record restricts apex certificate issuance but has no 'issuewild' tag. Wildcard certificates may be issued by any CA.",
+      "impact": "Although apex certificate issuance is restricted, a CA not in the permitted list can still issue wildcard certificates (*.example.com). An attacker who exploits a CA validation flaw can obtain a wildcard certificate covering all subdomains."
+    },
+    {
+      "id": "OSIFT-104",
+      "title": "DNS: CAA Record Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-17"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 CAA is correctly configured with both issue and issuewild restrictions.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "CAA record restricts certificate issuance to specified CAs, including wildcard coverage.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-105",
+      "title": "DNS: Missing DNSSEC",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "cwe": [
+        "CWE-350"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02",
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "SC-20",
+        "SC-21"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "6.2.4"
+      ],
+      "iso_27001": [
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "8.20"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1557",
+          "tactic": "Credential Access",
+          "name": "Adversary-in-the-Middle"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Enable DNSSEC at the domain registrar. Sign the zone and publish DS records in the parent zone.",
+      "remediation_component": "Network",
+      "remediation_category": "DNS Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DNSSEC is not enabled. DNS responses can be forged via cache poisoning or MITM.",
+      "impact": "Without DNSSEC, an attacker positioned on the network path can forge DNS responses, redirecting users to malicious servers. This enables credential theft, malware delivery, and man-in-the-middle attacks against any service that relies on DNS resolution for this domain."
+    },
+    {
+      "id": "OSIFT-106",
+      "title": "DNS: DNSSEC Enabled",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-20",
+        "SC-21"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 DNSSEC is active. Periodically verify key rotation and DS record alignment with the parent zone.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DNSSEC is enabled. DNS responses are cryptographically signed.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-107",
+      "title": "DNS: DKIM Record Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 DKIM is configured. Verify key strength (\u22652048-bit RSA or Ed25519) and monitor for selector rotation.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "DKIM public key(s) found on one or more selectors.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-108",
+      "title": "DNS: DKIM Revoked Key",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-346",
+        "CWE-940"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 4.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A05:2021 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "2.2.1",
+        "4.2.1"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Confirm the revocation is deliberate and that no active mail flows depend on the revoked selector. Update the signing configuration to use a current selector.",
+      "remediation_component": "Network",
+      "remediation_category": "Email Security",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "One or more DKIM selectors have an empty public key (p=), indicating intentional revocation.",
+      "impact": "A revoked DKIM key means messages signed with that selector will fail DKIM validation. If mail flows still depend on the revoked selector, legitimate email may be rejected or flagged, and DMARC alignment may fail."
+    },
+    {
+      "id": "OSIFT-109",
+      "title": "DNS: Weak DKIM Key",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "MEDIUM",
+      "cwe": [
+        "CWE-326"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A02:2021 Cryptographic Failures",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SC-12",
+        "SC-13"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "4.2.1",
+        "6.2.4"
+      ],
+      "iso_27001": [
+        "A.13.1.1",
+        "A.13.2.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1566",
+          "tactic": "Initial Access",
+          "name": "Phishing"
+        },
+        {
+          "technique": "T1036",
+          "tactic": "Defense Evasion",
+          "name": "Masquerading"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Rotate DKIM keys to at least 2048-bit RSA or Ed25519. Publish the new public key and update the signing configuration.",
+      "remediation_component": "Network",
+      "remediation_category": "Cryptography",
+      "remediation_effort": "Moderate",
+      "validation_tools": [],
+      "description": "One or more DKIM selectors use an RSA key shorter than 2048 bits.",
+      "impact": "RSA keys below 2048 bits can be factored with modern hardware. An attacker who recovers the private key can sign forged email that passes DKIM validation, enabling authenticated phishing from this domain."
+    },
+    {
+      "id": "OSIFT-110",
+      "title": "DNS: Missing MTA-STS Policy",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "cwe": [
+        "CWE-319"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 3.7,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A02:2021 Cryptographic Failures",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SC-23"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "4.2.1",
+        "4.2.2"
+      ],
+      "iso_27001": [
+        "A.10.1.1",
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1557",
+          "tactic": "Credential Access",
+          "name": "Adversary-in-the-Middle"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Publish an MTA-STS policy: create a well-known file at https://mta-sts.<domain>/.well-known/mta-sts.txt and a _mta-sts.<domain> TXT record.",
+      "remediation_component": "Network",
+      "remediation_category": "Cryptography",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "No MTA-STS policy found. MTA-STS forces SMTP connections to use TLS, preventing downgrade attacks on inbound mail.",
+      "impact": "Without MTA-STS, an attacker on the network path between sending and receiving mail servers can strip STARTTLS via a downgrade attack, intercepting email in cleartext. Sensitive communications (credentials, invoices, PII) are exposed."
+    },
+    {
+      "id": "OSIFT-111",
+      "title": "DNS: MTA-STS Policy Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 MTA-STS is configured. Periodically verify the policy file and max_age are current.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "MTA-STS policy record present. Inbound SMTP connections are required to use TLS.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-112",
+      "title": "DNS: Missing TLS-RPT Record",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "LOW",
+      "cwe": [
+        "CWE-319"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 2.0,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A02:2021 Cryptographic Failures",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "AU-6"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "4.2.1",
+        "4.2.2"
+      ],
+      "iso_27001": [
+        "A.10.1.1",
+        "A.13.1.1"
+      ],
+      "iso_27002": [
+        "8.24"
+      ],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Publish a _smtp._tls.<domain> TXT record specifying an rua= address to receive TLS failure reports (RFC 8460).",
+      "remediation_component": "Network",
+      "remediation_category": "Cryptography",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "No TLS-RPT reporting record found. TLS-RPT delivers aggregate reports about STARTTLS failures.",
+      "impact": "Without TLS-RPT, the domain owner has no visibility into STARTTLS failures on inbound mail. Downgrade attacks, certificate errors, and misconfigured sending servers go undetected, leaving mail delivery issues and potential interception invisible."
+    },
+    {
+      "id": "OSIFT-113",
+      "title": "DNS: TLS-RPT Record Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "AU-6"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 TLS-RPT is configured. Periodically review reports for STARTTLS failures.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "TLS-RPT reporting record present. Aggregate TLS failure reports are delivered.",
+      "impact": ""
+    },
+    {
+      "id": "OSIFT-114",
+      "title": "DNS: BIMI Record Present",
+      "aliases": [],
+      "source_tools": [
+        "osift"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-02"
+      ],
+      "nist_800_53": [
+        "SC-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Informational \u2014 BIMI is configured. Ensure the Verified Mark Certificate (VMC) is current and the SVG logo meets BIMI requirements.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Low",
+      "validation_tools": [],
+      "description": "BIMI (Brand Indicators for Message Identification) record found. The domain publishes a brand logo for authenticated email.",
+      "impact": ""
     }
   ]
 }

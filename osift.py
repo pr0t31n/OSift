@@ -8760,7 +8760,7 @@ class DNSEnumerator:
                         description="No DMARC record found. Without DMARC, spoofed emails are not rejected or quarantined.",
                         output_file=_rec_file)
         elif ss.get("dmarc_policy", "").lower() == "none":
-            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "LOW",
+            add_finding(self.data, "OSift-DNS", "email_security", CAT_DNS, "MEDIUM",
                         "DNS: DMARC Policy: Monitor Only",
                         domain=self.domain, affected=self.domain,
                         description="DMARC policy is 'p=none' (monitor only). Spoofed emails are reported but not blocked.",
@@ -20950,7 +20950,7 @@ class IntelAggregator:
                 "TLS certificates for this domain, enabling certificate mis-issuance attacks.",
                 domain=domain, affected=domain, timestamp=ts,
                 output_file=_dns_rec_file,
-                title="DNS Information: DNS: Missing CAA Record",
+                title="DNS: Missing CAA Record",
             )
         else:
             issuers    = ss.get("caa_issuers", [])

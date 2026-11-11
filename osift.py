@@ -18139,6 +18139,52 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         json.dumps(findings_report, indent=2, default=str), encoding="utf-8"
     )
 
+    # ── Intel emissions: subdomains, domains, whois, wayback ──────────────────
+    if _ie:
+        # osint_subdomain
+        try:
+            _sub_rows = [{"subdomain": fqdn, "source": rec.get("sources", [])}
+                         for fqdn, rec in data.subdomains.items()]
+            if _sub_rows:
+                _ie.emit_intel("osint_subdomain", _sub_rows, bulk=True)
+        except Exception:
+            pass
+        # osint_domain
+        try:
+            _dom_rows = []
+            for _ad in data.associated_domains:
+                _dom_rows.append({"domain": _ad if isinstance(_ad, str) else str(_ad),
+                                  "source": "osift"})
+            if data.domain:
+                _dom_rows.append({"domain": data.domain, "source": "osift-primary"})
+            if _dom_rows:
+                _ie.emit_intel("osint_domain", _dom_rows, bulk=True)
+        except Exception:
+            pass
+        # osint_whois
+        try:
+            for _wd, _wv in data.whois_data.items():
+                _ie.emit_intel("osint_whois", {
+                    "domain":      _wd,
+                    "registrar":   _wv.get("registrar") or (_wv.get("netlas", {}) or {}).get("registrar", ""),
+                    "created":     _wv.get("created") or (_wv.get("netlas", {}) or {}).get("created_date", ""),
+                    "expires":     _wv.get("expires") or (_wv.get("netlas", {}) or {}).get("expires_date", ""),
+                    "nameservers": _wv.get("nameservers") or (_wv.get("netlas", {}) or {}).get("nameservers", []),
+                    "source":      _wv.get("source", "osift"),
+                })
+        except Exception:
+            pass
+        # osint_wayback
+        try:
+            if data.crawled_urls:
+                _wb_rows = [{"url": u, "source": v.get("source", "waybackurls")}
+                            for u, v in data.crawled_urls.items()
+                            if v.get("source") == "waybackurls"]
+                if _wb_rows:
+                    _ie.emit_intel("osint_wayback", _wb_rows, bulk=True)
+        except Exception:
+            pass
+
     # ── Full data report ───────────────────────────────────────────────────────
     full_report = {
         "meta": {

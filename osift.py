@@ -31,6 +31,14 @@ IS_MACOS   = SYSTEM == "Darwin"
 IS_LINUX   = SYSTEM == "Linux"
 _CRUCIBLE_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 
+try:
+    import sys as _sys_ie
+    if "/opt/pr0t31n/shared" not in _sys_ie.path:
+        _sys_ie.path.insert(0, "/opt/pr0t31n/shared")
+    import pr0t31n_intel_emitter as _ie
+except ImportError:
+    _ie = None
+
 
 def _clients_base() -> Path:
     """Return the OS-appropriate default parent directory for client project folders."""
@@ -8780,6 +8788,22 @@ class DNSEnumerator:
             out.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
         except OSError as e:
             self.log.error(f"[DNS] Failed to write DNS records file: {e}", exc=e)
+        if _ie and _CRUCIBLE_MANAGED:
+            try:
+                _dns_rows = []
+                for _rtype, _rvals in records.items():
+                    if isinstance(_rvals, list):
+                        for _rv in _rvals:
+                            _dns_rows.append({
+                                "hostname": self.domain,
+                                "rtype": _rtype,
+                                "value": _rv if isinstance(_rv, str) else str(_rv),
+                                "source": "osift-dns",
+                            })
+                if _dns_rows:
+                    _ie.emit_intel("dns_record", _dns_rows, bulk=True)
+            except Exception:
+                pass
 
         # Log a concise summary of what was found
         found_types = [t for t in records if t not in ("DNSSEC", "security_summary")
@@ -9852,6 +9876,17 @@ class EmailAndPeopleOSINT:
         out = self.output_dir / "company" / "breach_data" / "hibp_results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(self.data.breach_data, indent=2), encoding="utf-8")
+        if _ie and _CRUCIBLE_MANAGED:
+            try:
+                _br_rows = [{"breach_name": b.get("breach_name", ""),
+                             "breach_date": b.get("breach_date", ""),
+                             "data_classes": b.get("data_classes", ""),
+                             "source": b.get("source", "hibp")}
+                            for b in self.data.breach_data]
+                if _br_rows:
+                    _ie.emit_intel("osint_breach", _br_rows, bulk=True)
+            except Exception:
+                pass
 
     def _check_dehashed(self):
         if not REQUESTS_AVAILABLE:
@@ -10285,6 +10320,23 @@ class EmailAndPeopleOSINT:
         emp_dir = self.output_dir / "company" / "employees"
         emp_dir.mkdir(parents=True, exist_ok=True)
         (emp_dir / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
+        if _ie and _CRUCIBLE_MANAGED:
+            try:
+                _email_rows = [{"email": e, "name": d.get("name", ""),
+                                "source": d.get("source", "")}
+                               for e, d in self.data.email_addresses.items()]
+                if _email_rows:
+                    _ie.emit_intel("osint_email", _email_rows, bulk=True)
+                _person_rows = [{"name": p.get("name", ""),
+                                 "title": p.get("title", ""),
+                                 "company": p.get("company", self.domain),
+                                 "email": p.get("email", ""),
+                                 "source": p.get("source", "")}
+                                for p in self.data.employees]
+                if _person_rows:
+                    _ie.emit_intel("osint_person", _person_rows, bulk=True)
+            except Exception:
+                pass
 
 
 # ─── Company Intelligence ─────────────────────────────────────────────────────

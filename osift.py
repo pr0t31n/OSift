@@ -2368,7 +2368,8 @@ class FindingStore:
         self._ordered: List[str]      = []   # insertion-order fingerprints
         self._findings_json_path: Optional[Path] = None
         self._fdb = None
-        _db_path = os.environ.get("PR0T31N_FINDINGS_DB")
+        _db_path = os.environ.get("PR0T31N_FINDINGS_DB") or (
+            str(_project_dir / "findings.db") if _project_dir else None)
         if _db_path:
             try:
                 import sys as _s
@@ -2378,6 +2379,8 @@ class FindingStore:
                 self._fdb = pr0t31n_findings_db.FindingsDB(_db_path)
             except Exception:
                 self._fdb = None
+        if self._fdb and _ie:
+            _ie.init_db(self._fdb)
 
     def _flush_json(self):
         p = self._findings_json_path
@@ -2557,6 +2560,11 @@ class FindingStore:
                         existing[_mk] = _sep.join(sorted(_s))
                     else:
                         existing[_mk] = _new
+                if self._fdb:
+                    try:
+                        self._fdb.insert_finding(existing)
+                    except Exception:
+                        pass
                 return fp
 
             finding: Dict[str, Any] = {
@@ -8782,13 +8790,7 @@ class DNSEnumerator:
                         output_file=_rec_file)
 
         self.data.dns_records[self.domain] = records
-        out = self.output_dir / "records" / f"{_safe_filename(self.domain)}_records.json"
-        try:
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
-        except OSError as e:
-            self.log.error(f"[DNS] Failed to write DNS records file: {e}", exc=e)
-        if _ie and _CRUCIBLE_MANAGED:
+        if _ie:
             try:
                 _dns_rows = []
                 for _rtype, _rvals in records.items():
@@ -8804,6 +8806,12 @@ class DNSEnumerator:
                     _ie.emit_intel("dns_record", _dns_rows, bulk=True)
             except Exception:
                 pass
+        out = self.output_dir / "records" / f"{_safe_filename(self.domain)}_records.json"
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(records, indent=2, default=str), encoding="utf-8")
+        except OSError as e:
+            self.log.error(f"[DNS] Failed to write DNS records file: {e}", exc=e)
 
         # Log a concise summary of what was found
         found_types = [t for t in records if t not in ("DNSSEC", "security_summary")
@@ -9873,10 +9881,7 @@ class EmailAndPeopleOSINT:
                 time.sleep(1.6)
             except Exception as e:
                 self.log.error(f"[HIBP] Per-email check error for {email}: {e}", exc=e)
-        out = self.output_dir / "company" / "breach_data" / "hibp_results.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(self.data.breach_data, indent=2), encoding="utf-8")
-        if _ie and _CRUCIBLE_MANAGED:
+        if _ie:
             try:
                 _br_rows = [{"breach_name": b.get("breach_name", ""),
                              "breach_date": b.get("breach_date", ""),
@@ -9887,6 +9892,9 @@ class EmailAndPeopleOSINT:
                     _ie.emit_intel("osint_breach", _br_rows, bulk=True)
             except Exception:
                 pass
+        out = self.output_dir / "company" / "breach_data" / "hibp_results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(self.data.breach_data, indent=2), encoding="utf-8")
 
     def _check_dehashed(self):
         if not REQUESTS_AVAILABLE:
@@ -10313,14 +10321,7 @@ class EmailAndPeopleOSINT:
             conf_file.write_text(json.dumps(speakers, indent=2), encoding="utf-8")
 
     def _save_emails(self):
-        emails_dir = self.output_dir / "company" / "emails"
-        emails_dir.mkdir(parents=True, exist_ok=True)
-        (emails_dir / "all_emails.json").write_text(json.dumps(self.data.email_addresses, indent=2), encoding="utf-8")
-        (emails_dir / "all_emails.txt").write_text("\n".join(sorted(self.data.email_addresses.keys())), encoding="utf-8")
-        emp_dir = self.output_dir / "company" / "employees"
-        emp_dir.mkdir(parents=True, exist_ok=True)
-        (emp_dir / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
-        if _ie and _CRUCIBLE_MANAGED:
+        if _ie:
             try:
                 _email_rows = [{"email": e, "name": d.get("name", ""),
                                 "source": d.get("source", "")}
@@ -10337,6 +10338,13 @@ class EmailAndPeopleOSINT:
                     _ie.emit_intel("osint_person", _person_rows, bulk=True)
             except Exception:
                 pass
+        emails_dir = self.output_dir / "company" / "emails"
+        emails_dir.mkdir(parents=True, exist_ok=True)
+        (emails_dir / "all_emails.json").write_text(json.dumps(self.data.email_addresses, indent=2), encoding="utf-8")
+        (emails_dir / "all_emails.txt").write_text("\n".join(sorted(self.data.email_addresses.keys())), encoding="utf-8")
+        emp_dir = self.output_dir / "company" / "employees"
+        emp_dir.mkdir(parents=True, exist_ok=True)
+        (emp_dir / "employees.json").write_text(json.dumps(self.data.employees, indent=2), encoding="utf-8")
 
 
 # ─── Company Intelligence ─────────────────────────────────────────────────────

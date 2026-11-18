@@ -796,6 +796,9 @@ def install_git_tools(args):
                 for py in dest.glob("*.py"):
                     py.chmod(py.stat().st_mode | 0o755)
                     info(f"  chmod +x {py}")
+                req = dest / "requirements.txt"
+                if req.exists():
+                    run(pip + ["install", "--break-system-packages", "-r", str(req)], cwd=dest)
 
             elif action == "go_build":
                 run([gb, "build", "./..."], cwd=dest, env=env)

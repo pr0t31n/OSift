@@ -2719,6 +2719,116 @@ class FindingStore:
 
 # ─── Data Structures ──────────────────────────────────────────────────────────
 
+
+class _EmitOnInsertDict(dict):
+    """Dict subclass that fires a callback on insert AND enrichment.
+
+    Emits when:
+      - A new key is added (immediate visibility)
+      - An existing key is replaced with a DIFFERENT value object
+        (enrichment — e.g. tool A wrote {source: "subfinder"}, tool B
+        replaces with {source: "subfinder,dnsx", ips: [...]})
+
+    Skips when:
+      - The common get-or-create pattern ``d[k] = d.get(k, {})`` sets
+        an existing key to the same dict object (identity check)
+    """
+
+    def __init__(self, emit_fn, *a, **kw):
+        super().__init__(*a, **kw)
+        object.__setattr__(self, "_emit_fn", emit_fn)
+
+    def __setitem__(self, key, value):
+        is_new = key not in self
+        old = None if is_new else super().__getitem__(key)
+        super().__setitem__(key, value)
+        if is_new or old is not value:
+            try:
+                self._emit_fn(key, value)
+            except Exception:
+                pass
+
+    def setdefault(self, key, default=None):
+        is_new = key not in self
+        result = super().setdefault(key, default)
+        if is_new:
+            try:
+                self._emit_fn(key, result)
+            except Exception:
+                pass
+        return result
+
+    def update_and_emit(self, key, **fields):
+        """Merge fields into an existing entry and re-emit."""
+        rec = super().setdefault(key, {})
+        changed = False
+        for k, v in fields.items():
+            if isinstance(rec.get(k), list) and isinstance(v, list):
+                before = len(rec[k])
+                for item in v:
+                    if item not in rec[k]:
+                        rec[k].append(item)
+                changed = changed or len(rec[k]) != before
+            elif rec.get(k) != v:
+                rec[k] = v
+                changed = True
+        if changed:
+            try:
+                self._emit_fn(key, rec)
+            except Exception:
+                pass
+
+
+def _make_subdomain_dict():
+    def _on_insert(fqdn, rec):
+        if not _ie:
+            return
+        src = rec.get("sources", []) if isinstance(rec, dict) else []
+        if isinstance(src, list):
+            src = ", ".join(src) if src else "osift"
+        _ie.emit_intel("osint_subdomain", {"subdomain": fqdn, "source": str(src or "osift")})
+    return _EmitOnInsertDict(_on_insert)
+
+
+def _make_domain_dict():
+    def _on_insert(domain, rec):
+        if not _ie:
+            return
+        src = rec.get("source", "osift") if isinstance(rec, dict) else "osift"
+        _ie.emit_intel("osint_domain", {"domain": str(domain), "source": str(src)})
+    return _EmitOnInsertDict(_on_insert)
+
+
+def _make_whois_dict():
+    def _on_insert(domain, wv):
+        if not _ie or not isinstance(wv, dict):
+            return
+        ns = wv.get("nameservers") or (wv.get("netlas", {}) or {}).get("nameservers", [])
+        _ie.emit_intel("osint_whois", {
+            "domain":      domain,
+            "registrar":   wv.get("registrar") or (wv.get("netlas", {}) or {}).get("registrar", ""),
+            "created":     wv.get("created") or (wv.get("netlas", {}) or {}).get("created_date", ""),
+            "expires":     wv.get("expires") or (wv.get("netlas", {}) or {}).get("expires_date", ""),
+            "nameservers": ", ".join(ns) if isinstance(ns, list) else str(ns or ""),
+            "source":      wv.get("source", "osift"),
+        })
+    return _EmitOnInsertDict(_on_insert)
+
+
+def _make_wayback_dict():
+    def _on_insert(url, rec):
+        if not _ie:
+            return
+        dom = ""
+        try:
+            from urllib.parse import urlparse as _up
+            dom = _up(url).hostname or ""
+        except Exception:
+            pass
+        _ie.emit_intel("osint_wayback", {"url": url, "domain": dom, "source": "waybackurls"})
+    return _EmitOnInsertDict(_on_insert)
+
+
 @dataclass
 class ReconData:
     company: str
@@ -2727,7 +2837,7 @@ class ReconData:
     start_time: str = field(default_factory=lambda: datetime.datetime.now(_UTC).isoformat())
     end_time: str = ""
 
-    subdomains: Dict[str, Dict] = field(default_factory=dict)
+    subdomains: Dict[str, Dict] = field(default_factory=_make_subdomain_dict)
     dns_records: Dict[str, List] = field(default_factory=dict)
 
     ip_addresses: Dict[str, Dict] = field(default_factory=dict)
@@ -2742,13 +2852,13 @@ class ReconData:
 
     physical_addresses: List[Dict] = field(default_factory=list)
     associated_companies: List[Dict] = field(default_factory=list)
-    associated_domains: Dict[str, Dict] = field(default_factory=dict)
+    associated_domains: Dict[str, Dict] = field(default_factory=_make_domain_dict)
 
-    crawled_urls: Dict[str, Dict] = field(default_factory=dict)
+    crawled_urls: Dict[str, Dict] = field(default_factory=_make_wayback_dict)
     technologies: Dict[str, List] = field(default_factory=dict)
     open_ports: Dict[str, List] = field(default_factory=dict)
 
-    whois_data: Dict[str, Dict] = field(default_factory=dict)
+    whois_data: Dict[str, Dict] = field(default_factory=_make_whois_dict)
     errors: List[Dict] = field(default_factory=list)
     commands_run: List[Dict] = field(default_factory=list)
 
@@ -18139,62 +18249,6 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         json.dumps(findings_report, indent=2, default=str), encoding="utf-8"
     )
 
-    # ── Intel emissions: subdomains, domains, whois, wayback ──────────────────
-    if _ie:
-        # osint_subdomain
-        try:
-            _sub_rows = [{"subdomain": fqdn,
-                          "source": ", ".join(rec.get("sources", [])) if isinstance(rec.get("sources"), list) else str(rec.get("sources", ""))}
-                         for fqdn, rec in data.subdomains.items()]
-            if _sub_rows:
-                _ie.emit_intel("osint_subdomain", _sub_rows, bulk=True)
-        except Exception:
-            pass
-        # osint_domain
-        try:
-            _dom_rows = []
-            for _ad in data.associated_domains:
-                _dom_rows.append({"domain": _ad if isinstance(_ad, str) else str(_ad),
-                                  "source": "osift"})
-            if data.domain:
-                _dom_rows.append({"domain": data.domain, "source": "osift-primary"})
-            if _dom_rows:
-                _ie.emit_intel("osint_domain", _dom_rows, bulk=True)
-        except Exception:
-            pass
-        # osint_whois
-        try:
-            for _wd, _wv in data.whois_data.items():
-                _ns = _wv.get("nameservers") or (_wv.get("netlas", {}) or {}).get("nameservers", [])
-                _ie.emit_intel("osint_whois", {
-                    "domain":      _wd,
-                    "registrar":   _wv.get("registrar") or (_wv.get("netlas", {}) or {}).get("registrar", ""),
-                    "created":     _wv.get("created") or (_wv.get("netlas", {}) or {}).get("created_date", ""),
-                    "expires":     _wv.get("expires") or (_wv.get("netlas", {}) or {}).get("expires_date", ""),
-                    "nameservers": ", ".join(_ns) if isinstance(_ns, list) else str(_ns or ""),
-                    "source":      _wv.get("source", "osift"),
-                })
-        except Exception:
-            pass
-        # osint_wayback
-        try:
-            if data.crawled_urls:
-                _wb_rows = []
-                for u, v in data.crawled_urls.items():
-                    if v.get("source") != "waybackurls":
-                        continue
-                    try:
-                        from urllib.parse import urlparse as _up
-                        _wb_dom = _up(u).hostname or data.domain or ""
-                    except Exception:
-                        _wb_dom = data.domain or ""
-                    _wb_rows.append({"url": u, "domain": _wb_dom,
-                                     "source": "waybackurls"})
-                if _wb_rows:
-                    _ie.emit_intel("osint_wayback", _wb_rows, bulk=True)
-        except Exception:
-            pass
-
     # ── Full data report ───────────────────────────────────────────────────────
     full_report = {
         "meta": {
@@ -24399,6 +24453,9 @@ API key sources (all free tiers available):
     data = ReconData(company=args.company, domain=args.domains[0], domains=list(args.domains))
     data.findings._findings_json_path = output_dir / "findings.json"
 
+    for _d in args.domains:
+        data.associated_domains[_d] = {"source": "osift-primary" if _d == args.domains[0] else "osift"}
+
     # Save sanitised config (no secrets)
     cfg = vars(args).copy()
     _secret_args = [
@@ -24809,7 +24866,7 @@ API key sources (all free tiers available):
                 ).run()
                 _pm.set_phase_status(_phase10_extra_key, "complete", label=f"Phase 10 API: {_extra_domain}")
                 _cc.status(_phase10_extra_key, label=f"Phase 10 API: {_extra_domain}", status="complete")
-
+        
     # ── PD summary (all waves complete) ───────────────────────────────────
     pd._write_summary()
 

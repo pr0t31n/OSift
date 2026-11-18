@@ -18143,7 +18143,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     if _ie:
         # osint_subdomain
         try:
-            _sub_rows = [{"subdomain": fqdn, "source": rec.get("sources", [])}
+            _sub_rows = [{"subdomain": fqdn,
+                          "source": ", ".join(rec.get("sources", [])) if isinstance(rec.get("sources"), list) else str(rec.get("sources", ""))}
                          for fqdn, rec in data.subdomains.items()]
             if _sub_rows:
                 _ie.emit_intel("osint_subdomain", _sub_rows, bulk=True)
@@ -18164,12 +18165,13 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         # osint_whois
         try:
             for _wd, _wv in data.whois_data.items():
+                _ns = _wv.get("nameservers") or (_wv.get("netlas", {}) or {}).get("nameservers", [])
                 _ie.emit_intel("osint_whois", {
                     "domain":      _wd,
                     "registrar":   _wv.get("registrar") or (_wv.get("netlas", {}) or {}).get("registrar", ""),
                     "created":     _wv.get("created") or (_wv.get("netlas", {}) or {}).get("created_date", ""),
                     "expires":     _wv.get("expires") or (_wv.get("netlas", {}) or {}).get("expires_date", ""),
-                    "nameservers": _wv.get("nameservers") or (_wv.get("netlas", {}) or {}).get("nameservers", []),
+                    "nameservers": ", ".join(_ns) if isinstance(_ns, list) else str(_ns or ""),
                     "source":      _wv.get("source", "osift"),
                 })
         except Exception:
@@ -18177,9 +18179,17 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         # osint_wayback
         try:
             if data.crawled_urls:
-                _wb_rows = [{"url": u, "source": v.get("source", "waybackurls")}
-                            for u, v in data.crawled_urls.items()
-                            if v.get("source") == "waybackurls"]
+                _wb_rows = []
+                for u, v in data.crawled_urls.items():
+                    if v.get("source") != "waybackurls":
+                        continue
+                    try:
+                        from urllib.parse import urlparse as _up
+                        _wb_dom = _up(u).hostname or data.domain or ""
+                    except Exception:
+                        _wb_dom = data.domain or ""
+                    _wb_rows.append({"url": u, "domain": _wb_dom,
+                                     "source": "waybackurls"})
                 if _wb_rows:
                     _ie.emit_intel("osint_wayback", _wb_rows, bulk=True)
         except Exception:

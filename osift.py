@@ -4007,6 +4007,26 @@ class CensysAPI:
                                "(Censys certificate search found no matching certificates)")
         else:
             _save_api_result(self.out, "certificate_search.json", {"certs": certs_found})
+            if _ie:
+                for cert in certs_found:
+                    try:
+                        _p = cert.get("parsed", {})
+                        _iss = _p.get("issuer", {}).get("common_name", "")
+                        _sub = _p.get("subject", {}).get("common_name", "")
+                        if isinstance(_iss, list): _iss = _iss[0] if _iss else ""
+                        if isinstance(_sub, list): _sub = _sub[0] if _sub else ""
+                        _ie.emit_intel("osint_certificate", {
+                            "domain":      self.domain,
+                            "issuer":      str(_iss),
+                            "subject":     str(_sub),
+                            "not_before":  str((_p.get("validity", {}) or {}).get("start", "")),
+                            "not_after":   str((_p.get("validity", {}) or {}).get("end", "")),
+                            "fingerprint": cert.get("fingerprint_sha256", ""),
+                            "san_json":    json.dumps(_p.get("names", [])),
+                            "source":      "censys",
+                        })
+                    except Exception:
+                        pass
         self.log.success(f"[Censys] Certificate search: {len(certs_found)} certificates found")
 
     # ── IP enrichment ─────────────────────────────────────────────────────────
@@ -6449,6 +6469,22 @@ class CrtShAPI:
         out_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
         out_subs = self.out / "subdomains.txt"
         out_subs.write_text("\n".join(sorted(seen)), encoding="utf-8")
+        if _ie:
+            for entry in data:
+                try:
+                    _names = (entry.get("name_value") or "").split("\n")
+                    _ie.emit_intel("osint_certificate", {
+                        "domain":        self.domain,
+                        "issuer":        entry.get("issuer_name", ""),
+                        "subject":       entry.get("common_name", ""),
+                        "serial_number": str(entry.get("serial_number", "")),
+                        "not_before":    entry.get("not_before", ""),
+                        "not_after":     entry.get("not_after", ""),
+                        "san_json":      json.dumps([n.strip() for n in _names if n.strip()]),
+                        "source":        "crt.sh",
+                    })
+                except Exception:
+                    pass
         # Emit one finding per unique subdomain that we hadn't seen before
         added = 0
         for sub in sorted(seen):
@@ -11676,7 +11712,13 @@ class TheHarvesterRunner:
                                cmd, f"(theHarvester exited with code {rc})")
 
         # Always attempt to parse even if rc != 0 (partial results)
-        ingested = self._ingest_json(Path(out_stem + ".json"), txt_path, cmd)
+        json_path = Path(out_stem + ".json")
+        if not json_path.exists():
+            _candidates = sorted(self.out.glob("theharvester_*.json"))
+            if _candidates:
+                json_path = _candidates[0]
+                self.log.info(f"[theHarvester] JSON at {json_path.name} (stem mismatch corrected)")
+        ingested = self._ingest_json(json_path, txt_path, cmd)
         ingested += self._ingest_stdout(stdout, txt_path, cmd)
 
         if not ingested:
@@ -12471,6 +12513,19 @@ class WaybackURLsRunner:
         self.log.info(f"[waybackurls] Mining Wayback Machine CDX for {self.domain}")
         stdout, stderr, rc = _shell_go(cmd)
         self.log.log_command(cmd, stdout, stderr, rc)
+
+        if not stdout.strip() and rc == 0:
+            self.log.warning(
+                "[waybackurls] Zero output with exit 0 — Wayback Machine CDX API may be offline. "
+                "Re-run waybackurls manually after confirming API availability."
+            )
+            _record_timeout_action_item(
+                "waybackurls", self.domain,
+                f"waybackurls returned zero output for {self.domain} — the Wayback Machine CDX "
+                f"API may have been offline. Re-run waybackurls manually.",
+                hostname=self.domain,
+                priority="MEDIUM",
+            )
 
         if stdout.strip():
             out_file.write_text(stdout, encoding="utf-8")

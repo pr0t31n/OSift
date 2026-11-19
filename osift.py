@@ -18804,10 +18804,9 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
     for fqdn, meta in sorted(data.subdomains.items()):
         if fqdn not in _confirmed_fqdns:
             continue
-        sources = ", ".join(meta.get("sources", [])) or "unknown"
         add_finding(
             data, "OSift", "primary_subdomain", "Subdomain", "info",
-            f"Confirmed in-scope subdomain: {fqdn} (sources: {sources})",
+            f"Confirmed in-scope subdomain: {fqdn}",
             host=fqdn, timestamp=_sub_ts,
             ips=meta.get("ips", []), discovery_sources=meta.get("sources", []),
             http_status=meta.get("http_status"),
@@ -21908,12 +21907,17 @@ class RawOutputParser:
         ".pdf", ".docx", ".xlsx", ".pptx",
         ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
         ".pcap", ".pcapng",
+        ".db", ".db-wal", ".db-shm",
     })
 
     # Directories we always skip entirely
     _SKIP_DIRS = frozenset({
-        "logs",        # log files — not structured output
-        "reports",     # our own output — would create a feedback loop
+        "logs",           # log files — not structured output
+        "reports",        # our own output — would create a feedback loop
+        "evidence",       # own evidence tree
+        "ip_addresses",   # own structured output
+        "domains",        # own structured output
+        "company",        # own structured output
     })
 
     # Individual files to skip — configuration / metadata that should never
@@ -21928,6 +21932,16 @@ class RawOutputParser:
         "meta.json",
         "checkpoint.json",
         "config.json",
+        "findings.json",
+        "findings.csv",
+        "summary.json",
+        "scan.log",
+        "scan.log.json",
+        "errors.log",
+        "falsePositives.json",
+        "falsePositives.csv",
+        "false_positives.json",
+        "false_positives.csv",
     })
 
     # ── Known-bad / noise FQDNs ──────────────────────────────────────────────
@@ -21984,8 +21998,11 @@ class RawOutputParser:
                 if d not in self._SKIP_DIRS
                 and not d.startswith(".")
             ]
+            is_root = (root_path == Path(self.output_dir))
             for fname in files:
                 if fname in self._SKIP_FILES:
+                    continue
+                if is_root and fname.endswith(".log"):
                     continue
                 path = root_path / fname
                 if path.suffix.lower() in self._BINARY_EXTS:
@@ -22323,9 +22340,11 @@ class RawOutputParser:
         """
         try:
             rel = path.relative_to(self.output_dir)
-            return rel.parts[0] if rel.parts else path.stem
+            if len(rel.parts) >= 2:
+                return rel.parts[0]
+            return path.stem.split("_")[0] if "_" in path.stem else path.stem
         except ValueError:
-            return path.stem
+            return path.stem.split("_")[0] if "_" in path.stem else path.stem
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

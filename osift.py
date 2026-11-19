@@ -2785,9 +2785,15 @@ def _make_subdomain_dict():
             return
         src = rec.get("sources", []) if isinstance(rec, dict) else []
         if isinstance(src, list):
-            src = ", ".join(src) if src else "osift"
-        _ie.emit_intel("osint_subdomain", {"subdomain": fqdn, "source": str(src or "osift")})
+            src = ", ".join(src) if src else None
+        if src:
+            _ie.emit_intel("osint_subdomain", {"subdomain": fqdn, "source": str(src)})
     return _EmitOnInsertDict(_on_insert)
+
+
+def _emit_subdomain_source(fqdn, source):
+    if _ie and source:
+        _ie.emit_intel("osint_subdomain", {"subdomain": fqdn, "source": source})
 
 
 def _make_domain_dict():
@@ -3058,6 +3064,7 @@ class ShodanAPI:
                     )
                     if "shodan" not in rec["sources"]:
                         rec["sources"].append("shodan")
+                        _emit_subdomain_source(fqdn, "shodan")
 
                 # Ingest DNS records with IP resolution + full record storage
                 for entry in payload.get("data", []):
@@ -3178,6 +3185,7 @@ class ShodanAPI:
                     sub_rec.setdefault("ips", [])
                     if "shodan_ssl" not in sub_rec["sources"]:
                         sub_rec["sources"].append("shodan_ssl")
+                        _emit_subdomain_source(hn_lower, "shodan_ssl")
                     if ip not in sub_rec["ips"]:
                         sub_rec["ips"].append(ip)
                     if _http_status and sub_rec.get("http_status") is None:
@@ -3925,6 +3933,7 @@ class CensysAPI:
                                     sub_rec.setdefault("ips", [])
                                     if "censys" not in sub_rec["sources"]:
                                         sub_rec["sources"].append("censys")
+                                        _emit_subdomain_source(name, "censys")
                                     if ip not in sub_rec["ips"]:
                                         sub_rec["ips"].append(ip)
 
@@ -3991,6 +4000,7 @@ class CensysAPI:
                             )
                             if "censys_cert" not in sub_rec["sources"]:
                                 sub_rec["sources"].append("censys_cert")
+                                _emit_subdomain_source(name, "censys_cert")
 
                 cursor = result.get("links", {}).get("next")
                 if not cursor:
@@ -4220,6 +4230,7 @@ class FullHuntAPI:
                     sub_rec.setdefault("ips", [])
                     if "fullhunt" not in sub_rec["sources"]:
                         sub_rec["sources"].append("fullhunt")
+                        _emit_subdomain_source(fqdn, "fullhunt")
                     if ip and ip not in sub_rec["ips"]:
                         sub_rec["ips"].append(ip)
 
@@ -4497,6 +4508,7 @@ class SecurityTrailsAPI:
                 )
                 if "securitytrails" not in rec["sources"]:
                     rec["sources"].append("securitytrails")
+                    _emit_subdomain_source(fqdn, "securitytrails")
                     new_count += 1
 
             self.log.success(
@@ -4821,6 +4833,7 @@ class NetlasAPI:
                     )
                     if "netlas" not in sub_rec["sources"]:
                         sub_rec["sources"].append("netlas")
+                        _emit_subdomain_source(rd, "netlas")
 
             # Ingest port data
             for port_obj in payload.get("ports", []):
@@ -4965,6 +4978,7 @@ class NetlasAPI:
                         )
                         if "netlas_cert" not in sub_rec["sources"]:
                             sub_rec["sources"].append("netlas_cert")
+                            _emit_subdomain_source(san, "netlas_cert")
                             new_count += 1
 
             self.log.success(f"[Netlas] Certificate search: {new_count} new subdomains from certs")
@@ -5272,6 +5286,7 @@ class VirusTotalAPI:
                         )
                         if "virustotal" not in sub_rec["sources"]:
                             sub_rec["sources"].append("virustotal")
+                            _emit_subdomain_source(sub_id, "virustotal")
                         # Check reputation
                         sub_stats = item.get("attributes", {}).get("last_analysis_stats", {})
                         if sub_stats.get("malicious", 0) > 0:
@@ -5560,6 +5575,7 @@ class URLScanAPI:
                             )
                             if "urlscan" not in sub_rec["sources"]:
                                 sub_rec["sources"].append("urlscan")
+                                _emit_subdomain_source(host, "urlscan")
                     except Exception:
                         pass
 
@@ -5855,6 +5871,7 @@ class AlienVaultOTXAPI:
                         )
                         if "otx_url" not in sub_rec["sources"]:
                             sub_rec["sources"].append("otx_url")
+                            _emit_subdomain_source(host, "otx_url")
                 except Exception:
                     pass
                 # Record in crawled URLs for sensitive data scanning
@@ -6491,7 +6508,10 @@ class CrtShAPI:
             if sub == self.domain or sub == f"www.{self.domain}":
                 continue   # not novel
             self.data.subdomains[sub] = self.data.subdomains.get(sub, {})
-            self.data.subdomains[sub].setdefault("sources", []).append("crt.sh")
+            _src = self.data.subdomains[sub].setdefault("sources", [])
+            if "crt.sh" not in _src:
+                _src.append("crt.sh")
+                _emit_subdomain_source(sub, "crt.sh")
             self.data.subdomains[sub].setdefault("ips", [])
             self.data.subdomains[sub].setdefault("ports", [])
             add_finding(
@@ -6636,7 +6656,10 @@ class FOFAAPI:
             ip, port, proto, sub_domain, title, server = (row + [""] * 6)[:6]
             if not sub_domain: continue
             self.data.subdomains[sub_domain] = self.data.subdomains.get(sub_domain, {})
-            self.data.subdomains[sub_domain].setdefault("sources", []).append("fofa")
+            _src = self.data.subdomains[sub_domain].setdefault("sources", [])
+            if "fofa" not in _src:
+                _src.append("fofa")
+                _emit_subdomain_source(sub_domain, "fofa")
             self.data.subdomains[sub_domain].setdefault("ips", [])
             self.data.subdomains[sub_domain].setdefault("ports", [])
             add_finding(
@@ -6697,7 +6720,10 @@ class ZoomEyeAPI:
             svc  = (m.get("portinfo") or {}).get("service", "")
             if host:
                 self.data.subdomains[host] = self.data.subdomains.get(host, {})
-                self.data.subdomains[host].setdefault("sources", []).append("zoomeye")
+                _src = self.data.subdomains[host].setdefault("sources", [])
+                if "zoomeye" not in _src:
+                    _src.append("zoomeye")
+                    _emit_subdomain_source(host, "zoomeye")
                 self.data.subdomains[host].setdefault("ips", [])
                 self.data.subdomains[host].setdefault("ports", [])
             add_finding(
@@ -9420,6 +9446,7 @@ class DNSEnumerator:
         rec = self.data.subdomains.setdefault(fqdn, {"sources": [], "ips": [], "ports": [], "http_status": None})
         if source not in rec["sources"]:
             rec["sources"].append(source)
+            _emit_subdomain_source(fqdn, source)
         # Normalise dynamic "SRV/..." sources to the static "SRV record" key so
         # _SOURCE_TO_TOOL resolves them to "OSift-DNS" for canonical pill display.
         _tool = source if not source.startswith("SRV/") else "SRV record"
@@ -9586,6 +9613,7 @@ class AmassEnumerator:
                     rec = self.data.subdomains.setdefault(sub, {"sources": [], "ips": [], "ports": [], "http_status": None})
                     if "amass" not in rec["sources"]:
                         rec["sources"].append("amass")
+                        _emit_subdomain_source(sub, "amass")
                     add_finding(
                         self.data, "amass", "subdomain_identified", "DNS", "INFO",
                         "Discovery: Subdomain",
@@ -11773,6 +11801,7 @@ class TheHarvesterRunner:
                 )
                 if "theHarvester" not in rec["sources"]:
                     rec["sources"].append("theHarvester")
+                    _emit_subdomain_source(host, "theHarvester")
                     count += 1
                 if host not in _new_hosts:
                     _new_hosts.append(host)
@@ -11895,6 +11924,7 @@ class TheHarvesterRunner:
                 )
                 if "theHarvester" not in rec["sources"]:
                     rec["sources"].append("theHarvester")
+                    _emit_subdomain_source(host, "theHarvester")
                     count += 1
                 if host not in _new_hosts:
                     _new_hosts.append(host)
@@ -12049,6 +12079,7 @@ class XurlFind3rRunner:
                         )
                         if "xurlfind3r" not in rec["sources"]:
                             rec["sources"].append("xurlfind3r")
+                            _emit_subdomain_source(host, "xurlfind3r")
                         add_finding(
                             self.data, "xurlfind3r", "subdomain_identified", "DNS", "INFO",
                             "Discovery: Subdomain",
@@ -12104,6 +12135,7 @@ class XurlFind3rRunner:
                     )
                     if "xurlfind3r" not in rec["sources"]:
                         rec["sources"].append("xurlfind3r")
+                        _emit_subdomain_source(_h, "xurlfind3r")
                     add_finding(
                         self.data, "xurlfind3r", "subdomain_identified", "DNS", "INFO",
                         "Discovery: Subdomain",
@@ -12423,6 +12455,7 @@ class PureDNSRunner:
                         rec = self.data.subdomains[host]
                         if "puredns_resolved" not in rec["sources"]:
                             rec["sources"].append("puredns_resolved")
+                            _emit_subdomain_source(host, "puredns_resolved")
 
         if total:
             add_finding(
@@ -12651,6 +12684,7 @@ class WaybackURLsRunner:
                     )
                     if "waybackurls" not in rec["sources"]:
                         rec["sources"].append("waybackurls")
+                        _emit_subdomain_source(host, "waybackurls")
                     add_finding(
                         self.data, "waybackurls", "subdomain_identified", "DNS", "INFO",
                         "Discovery: Subdomain",
@@ -14236,6 +14270,7 @@ class WaymoreRunner:
                     )
                     if "waymore" not in rec["sources"]:
                         rec["sources"].append("waymore")
+                        _emit_subdomain_source(host, "waymore")
 
                 # Sensitive path detection
                 if self._SENSITIVE_PATH_RE.search(path):
@@ -15149,6 +15184,7 @@ def _ingest_subdomain_list(
         )
         if source not in rec["sources"]:
             rec["sources"].append(source)
+            _emit_subdomain_source(host, source)
             new_count += 1
         add_finding(
             data, source, "subdomain_identified", "DNS", "INFO",
@@ -15513,6 +15549,7 @@ class PDDnsx:
                     rec.setdefault("sources", [])
                     if "dnsx_cname" not in rec["sources"]:
                         rec["sources"].append("dnsx_cname")
+                        _emit_subdomain_source(cname, "dnsx_cname")
                         new_sub_count += 1
                     add_finding(
                         self.data, "dnsx_cname", "subdomain_identified", "DNS", "INFO",
@@ -15526,6 +15563,7 @@ class PDDnsx:
                 self.data.subdomains[host].setdefault("sources", [])
                 if "dnsx" not in self.data.subdomains[host]["sources"]:
                     self.data.subdomains[host]["sources"].append("dnsx")
+                    _emit_subdomain_source(host, "dnsx")
             resolved_hosts.append(host)
 
         # Write plain-text resolved list for downstream tools
@@ -15667,6 +15705,7 @@ class DNSEnrichmentRunner:
                 sub_entry.setdefault("sources", [])
                 if "dig" not in sub_entry["sources"]:
                     sub_entry["sources"].append("dig")
+                    _emit_subdomain_source(fqdn, "dig")
                 # CNAME records — add in-domain targets as new subdomains
                 for cname_target in result["records"].get("CNAME", []):
                     cname_target = cname_target.lower().rstrip(".")
@@ -15853,6 +15892,7 @@ class DNSEnrichmentRunner:
             )
             if "dnsx_enrich" not in sub_entry["sources"]:
                 sub_entry["sources"].append("dnsx_enrich")
+                _emit_subdomain_source(host, "dnsx_enrich")
             resolved_hosts.append(host)
 
         out_txt.write_text("\n".join(resolved_hosts), encoding="utf-8")
@@ -16620,6 +16660,7 @@ class PDUncover:
                     )
                     if "uncover" not in sub_rec["sources"]:
                         sub_rec["sources"].append("uncover")
+                        _emit_subdomain_source(host, "uncover")
                     if ip and ip not in sub_rec.get("ips", []):
                         sub_rec.setdefault("ips", []).append(ip)
                     add_finding(
@@ -16736,6 +16777,7 @@ class PDCloudlist:
                 )
                 if "cloudlist" not in sub_rec["sources"]:
                     sub_rec["sources"].append("cloudlist")
+                    _emit_subdomain_source(dns_name, "cloudlist")
                 if public_ip and public_ip not in sub_rec.get("ips", []):
                     sub_rec.setdefault("ips", []).append(public_ip)
                 add_finding(
@@ -22269,6 +22311,7 @@ class RawOutputParser:
                 src_list = self.data.subdomains[fqdn].setdefault("sources", [])
                 if source not in src_list:
                     src_list.append(source)
+                    _emit_subdomain_source(fqdn, source)
         else:
             # It's some other FQDN — add to associated_domains if not already there
             root = DomainClassifier._registrable_root(fqdn)

@@ -18228,6 +18228,8 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         else:
             _unknown_emails[_ea_norm] = _ea_srcs
 
+    _ep_evidence = str(output_dir / "reports" / "emails_primary.txt")
+
     def _emit_email_group_ef(bucket: Dict[str, List[str]], title: str, type_: str) -> None:
         if not bucket:
             return
@@ -18240,10 +18242,11 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             _all_srcs = ["OSift"]
         _affected_str = "\n".join(sorted(bucket.keys()))
         add_finding(data, _all_srcs[0], type_, CAT_RECON, "INFO", title,
-                    host=data.domain, affected=_affected_str)
+                    host=data.domain, affected=_affected_str,
+                    output_file=_ep_evidence)
         for _src in _all_srcs[1:]:
             add_finding(data, _src, type_, CAT_RECON, "INFO", title,
-                        host=data.domain)
+                        host=data.domain, output_file=_ep_evidence)
 
     _emit_email_group_ef(_inscope_emails, "Discovery: Email Address",          "email_identified")
 
@@ -18801,6 +18804,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
         or r.get("https_status", "") not in _NO_RESP_SET
     }
     _sub_ts = datetime.datetime.now(_UTC).isoformat()
+    _sub_evidence = str(output_dir / "reports" / "subdomains_confirmed.csv")
     for fqdn, meta in sorted(data.subdomains.items()):
         if fqdn not in _confirmed_fqdns:
             continue
@@ -18810,6 +18814,7 @@ def generate_final_report(output_dir: Path, log: ReconLogger, data: ReconData,
             host=fqdn, timestamp=_sub_ts,
             ips=meta.get("ips", []), discovery_sources=meta.get("sources", []),
             http_status=meta.get("http_status"),
+            output_file=_sub_evidence,
         )
 
     # ── Subdomain probe count helpers ─────────────────────────────────────────
@@ -20831,6 +20836,7 @@ class IntelAggregator:
             if not any(_pe_dom == _d or _pe_dom.endswith("." + _d) for _d in _scope_domains_pe):
                 continue
             _pe_srcs = [_s for _s in (rec.get("sources") or []) if _s] or ["OSift"]
+            _pe_evidence = str(self.output_dir / "reports" / "emails_primary.txt")
             add_finding(data, _pe_srcs[0], "primary_email", self.CAT_EMAIL, "info",
                         "Discovery: Email Address",
                         host=data.domain,
@@ -20838,13 +20844,15 @@ class IntelAggregator:
                         affected=_pe_email,
                         timestamp=ts,
                         verified=rec.get("verified"),
-                        breach=rec.get("breach", False))
+                        breach=rec.get("breach", False),
+                        output_file=_pe_evidence)
             for _pe_src in _pe_srcs[1:]:
                 add_finding(data, _pe_src, "primary_email", self.CAT_EMAIL, "info",
                             "Discovery: Email Address",
                             host=data.domain,
                             email=_pe_email,
-                            timestamp=ts)
+                            timestamp=ts,
+                            output_file=_pe_evidence)
 
         # Phone numbers — intelligence only, not emitted as findings
 
